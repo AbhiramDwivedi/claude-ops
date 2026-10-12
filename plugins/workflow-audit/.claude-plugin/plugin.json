@@ -1,6 +1,6 @@
 {
   "name": "workflow-audit",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Audits how you use Claude Code from your own transcripts: cost lost to cache breaks and inherited models, rework, and dated advice, ranked into a few findings with one experiment each",
   "author": {
     "name": "Abhiram Dwivedi",

@@ -174,9 +174,9 @@ def _annotate_thread(t, ttl_min, prices):
     reqs = t["requests"]
     prev = None
     for i, r in enumerate(reqs):
-        rates = prices.rates(r["model"])
-        prices.count_unknown(r["model"] or "unknown")
         r["ctx"] = r["inp"] + r["cr"] + r["cc"]
+        rates = prices.rates(r["model"], r["ctx"])
+        prices.count_unknown(r["model"] or "unknown")
         r["cost"] = (r["inp"] * rates["input"] + r["cr"] * rates["cache_read"] + r["cc5"] * rates["cache_write_5m"]
                      + r["cc1"] * rates["cache_write_1h"] + r["out"] * rates["output"]) / 1e6
         # Price of a written token above the read price: what a rewrite costs extra.

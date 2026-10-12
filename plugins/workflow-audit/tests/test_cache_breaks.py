@@ -134,6 +134,17 @@ class Prices_(unittest.TestCase):
         self.assertAlmostEqual(r["cache_read"], r["input"] * 0.1)
         self.assertIn("claude-other-1", p.unknown)
 
+    def test_long_context_tier_applies_only_over_threshold(self):
+        base = {"input": 0.1, "output": 0.5, "cache_read": 0.01,
+                "cache_write_5m": 0.125, "cache_write_1h": 0.2}
+        high = {"input": 0.5, "output": 2.5, "cache_read": 0.05,
+                "cache_write_5m": 0.625, "cache_write_1h": 1.0}
+        p = Prices({"models": {"claude-haiku-5-5": {
+            **base, "over_100k": high,
+        }}})
+        self.assertEqual(p.rates("claude-haiku-5-5", 100000)["input"], 0.1)
+        self.assertEqual(p.rates("claude-haiku-5-5", 100001), high)
+
 
 if __name__ == "__main__":
     unittest.main()

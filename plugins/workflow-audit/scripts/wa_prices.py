@@ -28,11 +28,13 @@ class Prices:
         with open(path, encoding="utf8") as f:
             return cls(json.load(f), str(path))
 
-    def rates(self, model):
-        """USD per million tokens for a model id."""
+    def rates(self, model, prompt_tokens=0):
+        """USD per million tokens for a model id and request prompt size."""
         r = self._memo.get(model)
         if r is None:
             r = self._memo[model] = self._resolve(model or "unknown")
+        if prompt_tokens > 100000 and r.get("over_100k"):
+            return r["over_100k"]
         return r
 
     def _resolve(self, model):

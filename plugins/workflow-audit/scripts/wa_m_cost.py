@@ -80,7 +80,7 @@ def cost_cache(ctx):
             if kind == "subagent":
                 if r["first"]:
                     start += r["cc"] * r["extra_per_tok"]
-                rates = ctx.prices.rates(r["model"])
+                rates = ctx.prices.rates(r["model"], r["ctx"])
                 extra_1h += r["cc5"] * (rates["cache_write_1h"] - rates["cache_write_5m"]) / 1e6
             if not r["brk"]:
                 continue
@@ -99,7 +99,7 @@ def cost_cache(ctx):
                 resume[k][0] += 1
                 resume[k][1] += r["waste"]
                 if k == "message":
-                    fc = start_ctx * ctx.prices.rates(r["model"])["cache_write_5m"] / 1e6
+                    fc = start_ctx * ctx.prices.rates(r["model"], start_ctx)["cache_write_5m"] / 1e6
                     fresh["breaks"] += 1
                     fresh["waste"] += r["waste"]
                     fresh["fresh"] += fc

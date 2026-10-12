@@ -115,11 +115,13 @@ The skill always writes `proposed-experiments.json`, and writes `experiments.jso
 
 ```json
 {"source": "https://...", "checked": "2026-10-06", "unit": "USD per million tokens",
- "models": {"claude-opus-5-5": {"input": 0, "output": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}},
+ "models": {"claude-opus-5-5": {"input": 0, "output": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0},
+            "claude-haiku-5-5": {"input": 0, "output": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0,
+                                  "over_100k": {"input": 0, "output": 0, "cache_read": 0, "cache_write_5m": 0, "cache_write_1h": 0}}},
  "fallback": {"output": 5.0, "cache_read": 0.1, "cache_write_5m": 1.25, "cache_write_1h": 2.0, "note": "multiples of input, used for a model not listed"}}
 ```
 
-A model id resolves to the longest `models` key it starts with. An id with no match takes the input price of the listed id sharing the longest prefix, then the `fallback` multiples; it is listed in `meta.prices.unknown_models`.
+A model id resolves to the longest `models` key it starts with. A model entry may carry `over_100k`; those rates apply when that request's input plus cache-read and cache-write tokens exceed 100,000. An id with no match takes the input price of the listed id sharing the longest prefix, then the `fallback` multiples; it is listed in `meta.prices.unknown_models`.
 
 ## catalog/practices.json
 
