@@ -2,7 +2,7 @@
 
 Keeps agents from stepping on each other's files, and cleans up after them.
 
-- **Every agent that can edit gets a git worktree.** When an Agent call leaves `isolation` unset and the session is in a git repo, the mod sets `isolation: "worktree"`. Read-only agent types run in the session's checkout: `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer`, plus any you list in `readOnlyAgents`. A call that already chose `worktree` or `remote` is left alone.
+- **Every agent that can edit gets a git worktree.** When an Agent call leaves `isolation` unset and the session is in a git repo, the mod sets `isolation: "worktree"`. Read-only agent types run in the session's checkout: `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer` (also with a plugin prefix, such as `kit:scout`), plus any you list in `readOnlyAgents`. A call that already chose `worktree` or `remote` is left alone.
 - **The worktree starts from your current commit.** Claude Code's default worktree starts from `origin/HEAD`, so an agent never sees your unmerged branch. The mod creates every worktree itself, from the HEAD of the checkout the session works in (a detached HEAD too).
 - **A project can set each worktree up.** Gitignored files listed in `.worktreeinclude` are copied in from the main checkout. If the repo has `.claude/worktree-setup.ps1` (Windows) or `.claude/worktree-setup.sh` (elsewhere), the mod gives the worktree a port slot and runs the script in it. See the contract below.
 - **What an agent leaves running is stopped.** When an agent that ran in a worktree stops, and when a worktree is removed, the mod stops every process whose command line names that worktree, and anything listening on its slot's ports.

@@ -1,6 +1,6 @@
 # claude-ops
 
-Three [Claude Code](https://claude.com/claude-code) mods and an audit. Two mods tell you a session is eating your usage limits while you can still stop it, not after you hit the wall. The third keeps subagents from growing large enough to do that. The audit looks back over a month of your sessions and tells you, with numbers, what to change.
+[Claude Code](https://claude.com/claude-code) mods, an audit and a project kit. Two mods tell you a session is eating your usage limits while you can still stop it, not after you hit the wall. The third keeps subagents from growing large enough to do that. The audit looks back over a month of your sessions and tells you, with numbers, what to change. The last two keep parallel agents from stepping on each other and set each project up for them: see [parallel work](#parallel-work).
 
 The first two each add a dim line above the prompt, with only the warnings in color:
 
@@ -41,6 +41,14 @@ subagent-limits is the exception. The other two are the gauges and the road sign
 
 [`workflow-audit`](plugins/workflow-audit) is the post-race review. The mods watch one session at a time; the audit reads a month of your transcripts and runs as a command, `/workflow-audit`, in its own session. It finds where your spend and rework go, checks your habits against current advice from Anthropic's docs and staff (dated, graded by evidence, and marked when later advice reversed it), and gives you at most five findings, each with one experiment to try. The next run tells you whether the experiment worked. It needs Python 3.9 or newer; everything stays on your machine.
 
+## Parallel work
+
+Once several agents work at once, the trouble moves from cost to collisions. Two agents edit the same checkout. A dev server outlives the agent that started it. Merged branches pile up locally and on the remote. An agent hands back its report and stays open because a log tail it started never exits.
+
+[`worktrees`](plugins/worktrees) gives every agent that can edit its own git worktree, started from your current commit rather than `origin/main`, so an agent sees your unmerged branch. A project can ship a setup script that installs dependencies and gives each worktree its own block of ports. When an agent stops, the mod stops what it left running, and it refuses the stop while the agent still owns a background shell or monitor. At session start, and with `/tidy`, it removes merged worktrees and branches, local and remote, when nothing would be lost.
+
+[`kit`](plugins/kit) sets a project up from its actual code. `/kit:init` proposes a conventions section for `CLAUDE.md`, lint and test hooks that stop an agent reporting done with broken checks, a review checklist and, where needed, a worktree setup script; it writes only what you approve. `/kit:revise` reads the project's recent sessions and proposes what to add or drop. The plugin also ships four agents with their model fixed: `builder` (Sonnet), `reviewer` (Opus, read-only), `test-writer` (Sonnet) and `scout` (Haiku, read-only), so picking the agent picks the model.
+
 ## Install
 
 You need Claude Code 2.1.287 or newer, the first release with mods. The mod API is early access and can change between releases.
@@ -51,6 +59,8 @@ You need Claude Code 2.1.287 or newer, the first release with mods. The mod API 
 /plugin install session-models@claude-ops
 /plugin install subagent-limits@claude-ops
 /plugin install workflow-audit@claude-ops
+/plugin install worktrees@claude-ops
+/plugin install kit@claude-ops
 ```
 
 The mods load when your next session starts.
@@ -144,7 +154,7 @@ subagent-limits keeps its counts inside the mod, so a reload starts them over. A
 To run the mods from a clone instead of the marketplace, pass the folders for one session:
 
 ```
-claude --plugin-dir ./plugins/usage-limits --plugin-dir ./plugins/session-models --plugin-dir ./plugins/subagent-limits --plugin-dir ./plugins/workflow-audit
+claude --plugin-dir ./plugins/usage-limits --plugin-dir ./plugins/session-models --plugin-dir ./plugins/subagent-limits --plugin-dir ./plugins/workflow-audit --plugin-dir ./plugins/worktrees --plugin-dir ./plugins/kit
 ```
 
 Or list them in the `env` block of `~/.claude/settings.json`. Separate the paths with `;` on Windows and `:` elsewhere:
@@ -163,6 +173,7 @@ Before you commit:
 claude plugin validate plugins/usage-limits   # checks the manifest and module as the engine reads them
 claude plugin test plugins/usage-limits       # runs tests/*.test.ts
 python -m unittest discover -s plugins/workflow-audit/tests   # the audit's script
+python -m unittest discover -s plugins/kit/tests              # kit's transcript miner
 ```
 
 When a mod loads, Claude Code writes its API types into the mod's `.claude-plugin/types/` folder, along with a list of the MCP tools on your machine. Git ignores that folder. After the first load, `tsc -p plugins/<mod>` type-checks the mod.

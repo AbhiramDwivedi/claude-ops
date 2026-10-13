@@ -40,6 +40,10 @@ test('gives an editing agent a worktree, and a reading one none', async () => {
   for (const t of ['Explore', 'Plan', 'claude-code-guide', 'statusline-setup', 'scout', 'reviewer', 'explore']) {
     expect(needsWorktree({ subagent_type: t }, true, RO)).toBe(false)
   }
+  // a plugin's agent matches by its bare name
+  expect(needsWorktree({ subagent_type: 'kit:scout' }, true, RO)).toBe(false)
+  expect(needsWorktree({ subagent_type: 'kit:reviewer' }, true, RO)).toBe(false)
+  expect(needsWorktree({ subagent_type: 'kit:builder' }, true, RO)).toBe(true)
   // a choice already made stands, remote included; outside a repo nothing changes
   expect(needsWorktree({ isolation: 'remote' }, true, RO)).toBe(false)
   expect(needsWorktree({ isolation: 'worktree' }, true, RO)).toBe(false)

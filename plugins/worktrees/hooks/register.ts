@@ -21,8 +21,9 @@ export function readOnlyTypes(extra: unknown): Set<string> {
 export function needsWorktree(input: { isolation?: unknown; subagent_type?: unknown }, inRepo: boolean, readOnly: Set<string>): boolean {
   if (input.isolation !== undefined && input.isolation !== null) return false
   if (!inRepo) return false
-  const type = typeof input.subagent_type === 'string' && input.subagent_type !== '' ? input.subagent_type : 'general-purpose'
-  return !readOnly.has(type.toLowerCase())
+  const type = (typeof input.subagent_type === 'string' && input.subagent_type !== '' ? input.subagent_type : 'general-purpose').toLowerCase()
+  // a plugin's agent is `plugin:name`; listing the bare name covers it
+  return !readOnly.has(type) && !readOnly.has(type.slice(type.lastIndexOf(':') + 1))
 }
 
 // the Agent call's arguments with isolation set, and nothing else of the envelope

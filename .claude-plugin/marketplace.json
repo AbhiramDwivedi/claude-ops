@@ -27,6 +27,18 @@
       "description": "Audits how you use Claude Code from your own transcripts and writes a blunt report: where your spend and rework go, checked against dated advice, with one experiment per finding",
       "source": "./plugins/workflow-audit",
       "category": "productivity"
+    },
+    {
+      "name": "worktrees",
+      "description": "Gives every editing agent its own git worktree from your current commit, stops what agents leave running, and removes merged worktrees and branches",
+      "source": "./plugins/worktrees",
+      "category": "productivity"
+    },
+    {
+      "name": "kit",
+      "description": "Sets a project up from its actual code: conventions, lint and test hooks, a review checklist and agents with fixed models; revises it later from real sessions",
+      "source": "./plugins/kit",
+      "category": "productivity"
     }
   ]
 }
