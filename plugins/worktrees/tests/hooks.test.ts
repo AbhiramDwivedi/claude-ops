@@ -97,9 +97,72 @@ test('sends an agent back to stop its own background shell, and cleans up nothin
   const blocked = await $.classic.SubagentStop({ ...input, stop_hook_active: false } as never)
   expect(blocked.block).toContain('b1shell npm run dev')
   expect(blocked.block?.includes('b2other')).toBe(false)
-  // the transcript is searched where it lives; no repo lookup, so no slot release or process stop
-  expect(ran).toEqual(['git grep --no-index -h -o -F -e b1shell -e b2other -- agent-a1.jsonl'])
+  // the transcript is searched where it lives; outside a repo nothing else runs, so no slot release or process stop
+  expect(ran).toEqual(['git grep --no-index -h -o -F -e b1shell -e b2other -- agent-a1.jsonl', 'git rev-parse --show-toplevel'])
   // the stop after the refusal goes through
   const again = await $.classic.SubagentStop({ ...input, stop_hook_active: true } as never)
   expect(again.block).toBe(undefined)
+})
+
+// a repo at C:/r with agent a1's worktree, its git answers scripted; `status` is what `git status --porcelain` says
+function agentRepo(on: On, status: () => string) {
+  const ran: string[] = []
+  const toasts: string[] = []
+  const WT = 'C:/r/.claude/worktrees/agent-a1'
+  // the engine hands the hook a resolved path: backslashes on Windows
+  on('fs.exists', async (_, e) => ({ value: e.path.replace(/\\/g, '/') === WT }))
+  on('session.cwd', async () => ({ value: 'C:/r' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('env.get', async () => ({ value: 'Windows_NT' }))
+  on('ui.toast', async (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('process.run', async (_, e) => {
+    const argv = e.argv.join(' ')
+    ran.push(`${e.init?.cwd ?? ''}> ${argv}`)
+    const out =
+      argv === 'git rev-parse --show-toplevel'
+        ? e.init?.cwd === WT ? WT : 'C:/r'
+        : argv === 'git rev-parse --path-format=absolute --git-common-dir'
+          ? 'C:/r/.git'
+          : argv === 'git branch --show-current'
+            ? 'worktree-agent-a1'
+            : argv.startsWith('git status --porcelain')
+              ? status()
+              : ''
+    return { value: { exitCode: 0, stdout: out + '\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  return { ran, toasts }
+}
+
+test('tells an agent in a worktree to commit on its branch, found by its id when its cwd is the session', async ($, on) => {
+  agentRepo(on, () => '')
+  on('classic.SubagentStart', async () => ({}))
+  const started = await $.classic.SubagentStart({ cwd: 'C:/r', agent_id: 'a1', agent_type: 'general-purpose' } as never)
+  expect(started.additionalContext?.[0]).toContain('on branch `worktree-agent-a1`')
+  const other = await $.classic.SubagentStart({ cwd: 'C:/r', agent_id: 'zz', agent_type: 'Explore' } as never)
+  expect(other.additionalContext).toBe(undefined)
+})
+
+test('sends a dirty agent back once, then commits what it left, with --no-verify', async ($, on) => {
+  const { ran, toasts } = agentRepo(on, () => ' M a.ts\n?? b.ts')
+  on('classic.SubagentStop', async () => ({}))
+  const input = { cwd: 'C:/r/.claude/worktrees/agent-a1', agent_id: 'a1', agent_type: 'general-purpose', agent_transcript_path: 'C:/t/a.jsonl', background_tasks: [] }
+  const blocked = await $.classic.SubagentStop({ ...input, stop_hook_active: false } as never)
+  expect(blocked.block).toContain('has uncommitted changes (2 files)')
+  expect(ran.some(r => r.includes('git commit'))).toBe(false)
+  const again = await $.classic.SubagentStop({ ...input, stop_hook_active: true } as never)
+  expect(again.block).toBe(undefined)
+  const wt = 'C:/r/.claude/worktrees/agent-a1> '
+  expect(ran).toContain(`${wt}git add -A`)
+  expect(ran).toContain(`${wt}git commit --no-verify --quiet -m WIP: uncommitted changes left by general-purpose a1`)
+  expect(toasts[0]).toContain('committed them as WIP on worktree-agent-a1')
+})
+
+test('tells the main thread to merge agent branches, in a repo only', async ($, on) => {
+  world(on)
+  on('classic.SessionStart', async () => ({}))
+  const r = await $.classic.SessionStart({ cwd: 'C:/r', source: 'startup' } as never)
+  expect(r.additionalContext?.[0]).toContain('worktree-*')
 })

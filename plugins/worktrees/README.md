@@ -7,7 +7,9 @@ Keeps agents from stepping on each other's files, and cleans up after them.
 - **A project can set each worktree up.** Gitignored files listed in `.worktreeinclude` are copied in from the main checkout. If the repo has `.claude/worktree-setup.ps1` (Windows) or `.claude/worktree-setup.sh` (elsewhere), the mod gives the worktree a port slot and runs the script in it. See the contract below.
 - **What an agent leaves running is stopped.** When an agent that ran in a worktree stops, and when a worktree is removed, the mod stops every process whose command line names that worktree, and anything listening on its slot's ports.
 - **An agent can't finish while its background work runs.** When an agent stops with a background shell or Monitor it started still running, the mod refuses the stop and tells it to end each one with TaskStop, or to say why it should outlive the agent. The agent's report is already delivered by then. A task counts as the agent's when its id appears in the agent's transcript. The agent's second stop always goes through, and the mod cleans up only after a stop it allows.
-- **Merged work is removed.** In the background at session start, and on demand with `/tidy`, it removes the worktree, local branch and remote branch of every merged branch, when nothing would be lost. It fast-forwards a stale local default branch, and stops processes left in worktrees that no longer exist. The toast names every branch it deleted. `/tidy dry-run` shows what it would do and changes nothing.
+- **Agents commit their work.** Work moves between worktrees only once it is committed. An agent that starts in a worktree is told its branch and asked to commit on it before it finishes. An agent that stops with uncommitted changes (tracked edits, or untracked files `.gitignore` doesn't cover) is sent back once to commit them, in the same message as any background work. If its second stop still leaves changes, the mod commits them for it with `git add -A` and `git commit --no-verify -m "WIP: uncommitted changes left by <type> <id>"`, logs it and shows a toast. `--no-verify` is there so a failing pre-commit hook can't leave the work behind; review the WIP commit before merging it. The mod commits only in an agent's worktree, never in your checkout.
+- **The main session is told to merge.** At session start the main thread hears that agents work on `worktree-*` branches, and that it should review and merge one (`git merge --ff-only` for a relay leg) before relying on it.
+- **Merged work is removed.** In the background at session start, and on demand with `/tidy`, it removes the worktree, local branch and remote branch of every merged branch, when nothing would be lost. It fast-forwards a stale local default branch, and stops processes left in worktrees that no longer exist. The toast names every branch it deleted, and every agent branch nobody merged, as `unmerged agent work: <branch> (<n> commits)`; those are never deleted. `/tidy dry-run` shows what it would do and changes nothing.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -43,7 +45,7 @@ When one agent continues another's work, or needs your unmerged work:
 
 1. Work on a feature branch in the main session.
 2. Commit before starting agents that need your changes. Uncommitted changes never reach them.
-3. Each editing agent commits before it hands back, including a WIP commit when it stops with `CHECKPOINT:`.
+3. Each editing agent commits before it hands back, including a WIP commit when it stops with `CHECKPOINT:`. The mod sees to this; see above.
 4. Between legs, fast-forward your branch to the agent's: `git merge --ff-only worktree-<name>`. Then start the next leg, which branches from there.
 
 ## Safety rules
@@ -52,7 +54,10 @@ When one agent continues another's work, or needs your unmerged work:
 - It matches a worktree path with separators and, on Windows, case normalised, and only whole path names: `agent-a1` never matches `agent-a12`.
 - It never matches the main checkout. It stops processes only for a worktree being removed, an agent's worktree under `.claude/worktrees/`, or a worktree folder that no longer exists.
 - A branch is removed only when all of these hold:
-  - It is merged: `gh pr list --state merged --head <branch>` finds a merged PR (squash merges included). A `worktree-*` branch also counts as merged when its tip is already in `origin/<default>`. Other branches need the PR, since one you just made with `git branch foo` sits in `origin/<default>` too.
+  - It is merged: `gh pr list --state merged --head <branch>` finds a merged PR (squash merges included). Other branches need the PR, since one you just made with `git branch foo` sits in `origin/<default>` too. A `worktree-*` branch also counts as merged, checked in this order:
+    1. its tip is in `origin/<default>`;
+    2. merging it would change nothing: `git merge-tree --write-tree origin/<default> <branch>` gives `origin/<default>`'s own tree. This catches squash, cherry-pick and rebase. A conflict, or a different tree, means not merged;
+    3. only when check 2 can't run (git before 2.38): its tip is in the head commit of one of the last 100 merged PRs, as when its feature branch was squash-merged. Heads missing locally are skipped.
   - It is not the default branch, `main`, `master`, or checked out in the main checkout or this session.
   - Its worktree has no uncommitted or untracked changes, is not locked (Claude Code locks an agent's worktree while the agent runs), and its agent has stopped. A worktree the mod created counts as in use until its agent stops, or for 24 hours.
   - Every commit on it is on a remote branch, in the merged PR's head, or in `origin/<default>`.

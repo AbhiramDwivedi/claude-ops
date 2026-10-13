@@ -6,7 +6,13 @@ import {
   claimSlot,
   decideBranch,
   decideMainSync,
+  countChanges,
   decideStop,
+  findMergedPr,
+  SESSION_CONTEXT,
+  startContext,
+  unmergedAgentWork,
+  WIP_MESSAGE,
   includedFiles,
   isActive,
   lockStep,
@@ -263,11 +269,11 @@ test('refuses an agent stop while a shell or monitor it started still runs', asy
 
 test('lets an agent stop when it owns no running shell or monitor', async () => {
   // only someone else's task, a finished one and a subagent
-  expect(decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: new Set(['b4done', 'a5agent']) })).toEqual({ kind: 'allow', owned: [] })
+  expect(decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: new Set(['b4done', 'a5agent']) })).toEqual({ kind: 'allow', owned: [], commit: false })
   // no tasks at all
   expect(decideStop({ stopHookActive: false, tasks: undefined, inTranscript: new Set() }).kind).toBe('allow')
   // an unreadable transcript proves nothing: fail open
-  expect(decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: undefined })).toEqual({ kind: 'allow', owned: [] })
+  expect(decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: undefined })).toEqual({ kind: 'allow', owned: [], commit: false })
 })
 
 test('lets the stop after a refusal through, so it cannot loop', async () => {
@@ -275,4 +281,110 @@ test('lets the stop after a refusal through, so it cannot loop', async () => {
   expect(decision.kind).toBe('allow')
   // still reported, for the debug log
   expect(decision.owned.map(t => t.id)).toEqual(['b1shell'])
+})
+
+// --- uncommitted work in an agent's worktree ---
+
+const DIRTY = { path: 'C:/r/.claude/worktrees/agent-a1', branch: 'worktree-agent-a1', files: 3 }
+const SENT = "Your report was already delivered; don't send it again."
+
+test('counts the files git status lists', async () => {
+  expect(countChanges(' M a.ts\n?? b.ts\nA  c.ts\n')).toBe(3)
+  expect(countChanges('')).toBe(0)
+})
+
+test('sends an agent back to commit what it left uncommitted', async () => {
+  const decision = decideStop({ stopHookActive: false, tasks: [], inTranscript: new Set(), dirty: DIRTY })
+  expect(decision).toEqual({
+    kind: 'block',
+    owned: [],
+    reason:
+      'Your worktree `C:/r/.claude/worktrees/agent-a1` has uncommitted changes (3 files). ' +
+      `Commit them on \`worktree-agent-a1\` with a message that says what they are, then finish. ${SENT}`,
+  })
+})
+
+test('gives one reason for running background work and uncommitted changes', async () => {
+  const decision = decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: new Set(['b1shell']), dirty: { ...DIRTY, files: 1 } })
+  expect(decision.kind === 'block' && decision.reason).toBe(
+    'You still have background work running:\nb1shell npm run dev\n' +
+      'Stop each with TaskStop, unless it is meant to outlive you; then say so in one line.\n' +
+      'Your worktree `C:/r/.claude/worktrees/agent-a1` has uncommitted changes (1 file). ' +
+      `Commit them on \`worktree-agent-a1\` with a message that says what they are, then finish. ${SENT}`,
+  )
+})
+
+test('lets a clean agent stop, and commits for one that stops dirty a second time', async () => {
+  expect(decideStop({ stopHookActive: false, tasks: [], inTranscript: new Set() })).toEqual({ kind: 'allow', owned: [], commit: false })
+  expect(decideStop({ stopHookActive: false, tasks: [], inTranscript: new Set(), dirty: { ...DIRTY, files: 0 } }).kind).toBe('allow')
+  expect(decideStop({ stopHookActive: true, tasks: TASKS, inTranscript: new Set(['b1shell']), dirty: DIRTY })).toEqual({
+    kind: 'allow',
+    owned: [TASKS[0]!],
+    commit: true,
+  })
+})
+
+test('tells the agent and the main thread how work moves between worktrees', async () => {
+  expect(startContext('worktree-agent-a1')).toBe(
+    'You are working in a git worktree on branch `worktree-agent-a1`. Commit your changes on that branch before you finish, ' +
+      "with a message that says what they are; uncommitted work doesn't reach the main session. Don't push.",
+  )
+  expect(SESSION_CONTEXT).toContain('git merge --ff-only worktree-<name>')
+  expect(WIP_MESSAGE('general-purpose', 'a1')).toBe('WIP: uncommitted changes left by general-purpose a1')
+})
+
+// --- agent branches merged without a PR of their own ---
+
+const AGENT: BranchFacts = {
+  branch: 'worktree-agent-a1',
+  isProtected: false,
+  pr: { numbers: [] },
+  gitMerged: false,
+  unpushed: 2,
+  ahead: 2,
+  worktree: { path: 'C:/r/.claude/worktrees/agent-a1', exists: true, dirty: false, isMain: false, isSession: false },
+}
+
+test('finds the merged PR whose head holds a tip, only among heads present locally', async () => {
+  const heads = [
+    { number: 11, head: 'other' },
+    { number: 12, head: 'squashed-feature' },
+  ]
+  // squash case: the agent tip is an ancestor of PR 12's head
+  expect(findMergedPr('tip', heads, new Set(['other', 'squashed-feature']), new Set(['squashed-feature']))).toBe(12)
+  expect(findMergedPr('squashed-feature', heads, new Set(['squashed-feature']), new Set())).toBe(12)
+  // an unrelated commit
+  expect(findMergedPr('tip', heads, new Set(['other', 'squashed-feature']), new Set())).toBe(undefined)
+  // a head missing locally proves nothing
+  expect(findMergedPr('squashed-feature', heads, new Set(['other']), new Set(['squashed-feature']))).toBe(undefined)
+})
+
+test('counts an agent branch merged when merging it would change nothing', async () => {
+  const plan = decideBranch({ ...AGENT, contentMerged: true })
+  expect(plan.kind === 'delete' && plan.via).toBe('content in the default branch')
+  expect(unmergedAgentWork([{ ...AGENT, contentMerged: true }])).toEqual([])
+  // the same check never applies to a branch of your own
+  expect(decideBranch({ ...AGENT, branch: 'feature', contentMerged: true }).kind).toBe('skip')
+})
+
+test('reports an agent branch whose content main has changed since as unmerged, PR head or not', async () => {
+  const facts = { ...AGENT, contentMerged: false, inMergedPr: 12 }
+  expect(decideBranch(facts)).toEqual({ kind: 'skip', branch: 'worktree-agent-a1', reason: 'not merged: merging it into the default branch would change files' })
+  expect(unmergedAgentWork([facts])).toEqual(['unmerged agent work: worktree-agent-a1 (2 commits)'])
+})
+
+test('falls through to the merged-PR head when the content check cannot run', async () => {
+  const plan = decideBranch({ ...AGENT, unpushed: 0, inMergedPr: 12 })
+  expect(plan.kind === 'delete' && plan.via).toBe('in merged PR #12')
+  expect(decideBranch({ ...AGENT, unpushed: 0, inMergedPr: 12, worktree: { ...AGENT.worktree!, dirty: true } })).toEqual({
+    kind: 'skip',
+    branch: 'worktree-agent-a1',
+    reason: 'worktree has uncommitted changes (in merged PR #12)',
+  })
+  expect(unmergedAgentWork([{ ...AGENT, inMergedPr: 12 }])).toEqual([])
+  // no PR head holds it either: unmerged, and never deleted
+  expect(decideBranch(AGENT).kind).toBe('skip')
+  expect(unmergedAgentWork([AGENT, { ...AGENT, branch: 'feature' }, { ...AGENT, branch: 'worktree-b', ahead: 1, worktree: { ...AGENT.worktree!, isActive: true } }])).toEqual([
+    'unmerged agent work: worktree-agent-a1 (2 commits)',
+  ])
 })

@@ -1,6 +1,6 @@
 {
   "name": "worktrees",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Gives every agent that can edit a git worktree of its own, runs a project's setup script with its own port range, kills what an agent left running, and removes worktrees and branches once their PR has merged",
   "author": {
     "name": "Abhiram Dwivedi",

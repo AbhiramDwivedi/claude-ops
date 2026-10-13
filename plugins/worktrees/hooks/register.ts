@@ -322,6 +322,14 @@ export type BranchFacts = {
   gitMerged: boolean
   // commits on it that are neither on any remote branch nor in a merged PR's head
   unpushed: number
+  // worktree-* branches only: commits on it not in origin/<default>
+  ahead?: number
+  // worktree-* branches only: a merged PR whose head commit contains its tip, as when the feature branch an agent
+  // branch was merged into reached the default branch by a squash merge
+  inMergedPr?: number
+  // worktree-* branches only: merging it into origin/<default> (`git merge-tree --write-tree`) gives origin/<default>'s
+  // own tree. undefined when the check could not run (git before 2.38, or another error)
+  contentMerged?: boolean
   // isActive: this plugin created it for an agent that has not stopped yet
   worktree?: { path: string; exists: boolean; dirty: boolean; locked?: string; isMain: boolean; isSession: boolean; isActive?: boolean }
   // origin's branch of the same name; safe when every commit on it is in a merged PR's head or in origin/<default>
@@ -351,16 +359,30 @@ export function decideBranch(f: BranchFacts): BranchPlan {
   const prMerged = f.pr !== undefined && f.pr.numbers.length > 0
   // a tip in origin/<default> counts as merged without a PR only on the branches agent worktrees get:
   // a branch made by hand with `git branch foo` sits on the default branch too
-  const byAncestry = f.gitMerged && f.branch.startsWith('worktree-')
-  if (!prMerged && !byAncestry) {
+  const agent = f.branch.startsWith('worktree-')
+  const byAncestry = f.gitMerged && agent
+  // agent branches only, in this order: merging it into origin/<default> would change nothing (squash, cherry-pick,
+  // rebase); or, when that check could not run, its tip is in a merged PR's head
+  const byContent = !prMerged && !byAncestry && agent && f.contentMerged === true
+  const bySquash = !prMerged && !byAncestry && agent && f.contentMerged === undefined && f.inMergedPr !== undefined
+  if (!prMerged && !byAncestry && !byContent && !bySquash) {
+    if (agent && f.contentMerged === false) return skip('not merged: merging it into the default branch would change files')
     const gh = f.pr === undefined ? ' (gh unavailable)' : ''
     return skip(f.gitMerged ? `no merged PR${gh}; only worktree-* branches count as merged by being in the default branch` : f.pr !== undefined ? 'no merged PR, and not in the default branch' : 'not in the default branch (gh unavailable)')
   }
-  if (f.worktree?.locked !== undefined) return skip(`worktree is locked (${f.worktree.locked})`)
-  if (f.worktree?.isActive) return skip('its agent has not stopped yet')
-  if (f.worktree?.dirty) return skip('worktree has uncommitted changes')
-  if (f.unpushed > 0) return skip(`${f.unpushed} commit${f.unpushed === 1 ? '' : 's'} on no remote and in no merged PR`)
-  const via = prMerged ? `PR #${f.pr?.numbers[0]}` : 'in the default branch'
+  const via = prMerged
+    ? `PR #${f.pr?.numbers[0]}`
+    : byAncestry
+      ? 'in the default branch'
+      : byContent
+        ? 'content in the default branch'
+        : `in merged PR #${f.inMergedPr}`
+  const also = byContent || bySquash ? ` (${via})` : ''
+  if (f.worktree?.locked !== undefined) return skip(`worktree is locked (${f.worktree.locked})${also}`)
+  if (f.worktree?.isActive) return skip(`its agent has not stopped yet${also}`)
+  if (f.worktree?.dirty) return skip(`worktree has uncommitted changes${also}`)
+  // a squash leaves the branch's own commits on no remote; its content check already proved nothing would be lost
+  if (f.unpushed > 0 && !byContent) return skip(`${f.unpushed} commit${f.unpushed === 1 ? '' : 's'} on no remote and in no merged PR`)
   return {
     kind: 'delete',
     branch: f.branch,
@@ -371,6 +393,13 @@ export function decideBranch(f: BranchFacts): BranchPlan {
     deleteRemote: f.remote?.safe === true,
     remoteNote: f.remote !== undefined && !f.remote.safe ? 'remote branch has commits outside the merge; left it' : undefined,
   }
+}
+
+// The merged PR whose head commit is, or contains, `tip`. `present`: the heads that exist locally; `contains`: those
+// of them `tip` is an ancestor of. A head missing locally (its branch deleted, never fetched) proves nothing.
+export type MergedHead = { number: number; head: string }
+export function findMergedPr(tip: string, heads: readonly MergedHead[], present: ReadonlySet<string>, contains: ReadonlySet<string>): number | undefined {
+  return heads.find(h => present.has(h.head) && (h.head === tip || contains.has(h.head)))?.number
 }
 
 // Local default branch fast-forward: only when strictly behind origin's, and not checked out with changes.
@@ -431,23 +460,70 @@ export function liveWork(tasks: readonly BackgroundTask[] | undefined): Backgrou
   return (tasks ?? []).filter(t => (t.type === 'shell' || t.type === 'monitor') && !FINISHED.has(t.status))
 }
 
-export type StopDecision = { kind: 'allow'; owned: BackgroundTask[] } | { kind: 'block'; owned: BackgroundTask[]; reason: string }
+export type StopDecision =
+  | { kind: 'allow'; owned: BackgroundTask[]; commit: boolean }
+  | { kind: 'block'; owned: BackgroundTask[]; reason: string }
+
+// The agent's worktree with uncommitted changes: tracked edits or untracked files .gitignore does not cover.
+export type DirtyWorktree = { path: string; branch: string; files: number }
+
+const REPORT_SENT = "Your report was already delivered; don't send it again."
 
 // `inTranscript`: the task ids found in the agent's own transcript, undefined when it could not be read.
 // The task list may cover the whole session; an id in the agent's transcript is one its own tool started.
-export function decideStop(f: { stopHookActive: boolean; tasks: readonly BackgroundTask[] | undefined; inTranscript: ReadonlySet<string> | undefined }): StopDecision {
+// `dirty`: the agent's worktree when it has uncommitted changes. An allowed stop with a dirty worktree is
+// committed for the agent (`commit`).
+export function decideStop(f: {
+  stopHookActive: boolean
+  tasks: readonly BackgroundTask[] | undefined
+  inTranscript: ReadonlySet<string> | undefined
+  dirty?: DirtyWorktree
+}): StopDecision {
   const owned = f.inTranscript === undefined ? [] : liveWork(f.tasks).filter(t => f.inTranscript!.has(t.id))
+  const dirty = f.dirty !== undefined && f.dirty.files > 0 ? f.dirty : undefined
   // a stop that follows our own block goes through, so it cannot loop
-  if (owned.length === 0 || f.stopHookActive) return { kind: 'allow', owned }
-  const list = owned.map(t => `${t.id} ${(t.command ?? t.description).split('\n')[0]}`).join('\n')
-  return {
-    kind: 'block',
-    owned,
-    reason:
-      `You still have background work running:\n${list}\n` +
-      'Stop each with TaskStop, unless it is meant to outlive you; then say so in one line. ' +
-      "Your report was already delivered; don't send it again.",
+  if ((owned.length === 0 && dirty === undefined) || f.stopHookActive) return { kind: 'allow', owned, commit: dirty !== undefined }
+  const parts: string[] = []
+  if (owned.length > 0) {
+    const list = owned.map(t => `${t.id} ${(t.command ?? t.description).split('\n')[0]}`).join('\n')
+    parts.push(`You still have background work running:\n${list}\nStop each with TaskStop, unless it is meant to outlive you; then say so in one line.`)
   }
+  if (dirty !== undefined) {
+    parts.push(
+      `Your worktree \`${dirty.path}\` has uncommitted changes (${dirty.files} file${dirty.files === 1 ? '' : 's'}). ` +
+        `Commit them on \`${dirty.branch}\` with a message that says what they are, then finish.`,
+    )
+  }
+  return { kind: 'block', owned, reason: `${parts.join('\n')} ${REPORT_SENT}` }
+}
+
+// Lines of `git status --porcelain`: one per changed or untracked file.
+export function countChanges(porcelain: string): number {
+  return porcelain.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '').length
+}
+
+export const WIP_MESSAGE = (agentType: string, agentId: string) => `WIP: uncommitted changes left by ${agentType} ${agentId}`
+
+// Told to an editing agent when it starts in a worktree.
+export function startContext(branch: string): string {
+  return (
+    `You are working in a git worktree on branch \`${branch}\`. Commit your changes on that branch before you finish, ` +
+    "with a message that says what they are; uncommitted work doesn't reach the main session. Don't push."
+  )
+}
+
+// Told to the main thread at session start.
+export const SESSION_CONTEXT =
+  "Editing agents work in git worktrees on `worktree-*` branches. Before relying on an agent's work or starting an agent that " +
+  'depends on it, review and merge its branch: `git merge --ff-only worktree-<name>` for a relay leg, a normal merge otherwise.'
+
+// `worktree-*` branches with commits outside origin's default branch and no merged PR: agent work nobody merged yet.
+export function unmergedAgentWork(facts: readonly BranchFacts[]): string[] {
+  return facts
+    .filter(f => f.branch.startsWith('worktree-') && !f.isProtected && !f.gitMerged && (f.pr?.numbers.length ?? 0) === 0)
+    .filter(f => f.contentMerged === false || (f.contentMerged === undefined && f.inMergedPr === undefined))
+    .filter(f => !f.worktree?.isMain && !f.worktree?.isSession && !f.worktree?.isActive && (f.ahead ?? 0) > 0)
+    .map(f => `unmerged agent work: ${f.branch} (${f.ahead} commit${f.ahead === 1 ? '' : 's'})`)
 }
 
 async function isWindows($: $): Promise<boolean> {
@@ -530,6 +606,54 @@ async function repoAt($: $, cwd?: string): Promise<Repo | undefined> {
   const common = await git($, cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir')
   if (!common.ok || !/[\\/]\.git$/.test(common.out)) return undefined
   return { top: top.out, common: common.out, mainRoot: common.out.replace(/[\\/]\.git$/, '') }
+}
+
+type AgentWorktree = { repo: Repo; path: string; branch: string }
+
+// The worktree an agent runs in, when the plugin can identify it: the `.claude/worktrees/<name>` folder `cwd` lies
+// in, or `agent-<id>` there. Never the main checkout or the worktree the session itself works in, and only a folder
+// that is the top of its own checkout with a branch checked out.
+async function agentWorktree($: $, cwd: string, agentId: string): Promise<AgentWorktree | undefined> {
+  const repo = await repoAt($, cwd)
+  if (repo === undefined) return undefined
+  const windows = await isWindows($)
+  const prefix = normPath(`${repo.mainRoot}/.claude/worktrees`, windows) + '/'
+  const own = worktreeRootOf(await $.session.cwd())
+  for (const path of [worktreeRootOf(cwd), `${repo.mainRoot}/.claude/worktrees/agent-${agentId}`]) {
+    if (path === undefined) continue
+    const n = normPath(path, windows)
+    if (!n.startsWith(prefix) || n === normPath(repo.mainRoot, windows)) continue
+    if (own !== undefined && normPath(own, windows) === n) continue
+    if (!(await $.fs.exists(path))) continue
+    const top = await git($, path, 'rev-parse', '--show-toplevel')
+    if (!top.ok || normPath(top.out, windows) !== n) continue
+    const branch = await git($, path, 'branch', '--show-current')
+    if (!branch.ok || branch.out === '') continue
+    return { repo, path, branch: branch.out }
+  }
+  return undefined
+}
+
+// The worktree's uncommitted changes, undefined when it is clean or git cannot say.
+async function dirtyOf($: $, wt: AgentWorktree): Promise<DirtyWorktree | undefined> {
+  const status = await git($, wt.path, 'status', '--porcelain', '--untracked-files=all')
+  const files = status.ok ? countChanges(status.out) : 0
+  return files > 0 ? { path: wt.path, branch: wt.branch, files } : undefined
+}
+
+// Commits what an agent left uncommitted, so it reaches the main session. --no-verify: a failing pre-commit hook
+// must not leave the work behind.
+async function commitLeftovers($: $, wt: AgentWorktree, dirty: DirtyWorktree, agentType: string, agentId: string): Promise<void> {
+  const added = await git($, wt.path, 'add', '-A')
+  const done = added.ok ? await git($, wt.path, 'commit', '--no-verify', '--quiet', '-m', WIP_MESSAGE(agentType, agentId)) : added
+  const what = `${dirty.files} uncommitted file${dirty.files === 1 ? '' : 's'} left by ${agentType} ${agentId} in ${wt.path}`
+  if (done.ok) {
+    await $.ui.log(`worktrees: committed ${what} on ${wt.branch}`, { to: 'debug' })
+    await $.ui.toast(`worktrees: ${agentType} left changes uncommitted; committed them as WIP on ${wt.branch}`)
+  } else {
+    await $.ui.log(`worktrees: could not commit ${what}: ${done.err}`, { to: 'debug' })
+    await $.ui.toast(`worktrees: ${agentType} left uncommitted changes in ${wt.path}; committing them failed`)
+  }
 }
 
 const stateFile = (repo: Repo) => `${repo.common}/claude-worktrees/slots.json`
@@ -631,7 +755,7 @@ async function cleanWorktree($: $, repo: Repo, path: string, base: number, relea
 
 // --- tidy ---
 
-type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean; removed: string[] }
+type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean; removed: string[]; unmerged: string[] }
 
 type Facts = { facts: BranchFacts[]; worktrees: Worktree[]; sync: MainSync; defaultBranch: string }
 
@@ -657,6 +781,40 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
   const gitMerged = new Set((await git($, repo.top, 'branch', '--merged', mergedRef, '--format=%(refname:short)')).out.split('\n'))
   const hasGh = (await run($, ['gh', 'auth', 'status'], repo.top)).exitCode === 0
   const isAncestor = async (a: string, b: string) => (await git($, repo.top, 'merge-base', '--is-ancestor', a, b)).ok
+
+  // origin/<default>'s tree, for the content check of agent branches
+  const treeOf = await git($, repo.top, 'rev-parse', `${mergedRef}^{tree}`)
+  const mainTree = treeOf.ok && treeOf.out !== '' ? treeOf.out : undefined
+
+  // recently merged PRs' head commits, for agent branches merged into a branch whose PR was squash-merged:
+  // one gh call per run, the heads present locally in one cat-file, and the commits they hold outside the default branch
+  let mergedHeads: MergedHead[] = []
+  const present = new Set<string>()
+  let inHeads = new Set<string>()
+  if (hasGh && locals.some(([b]) => b.startsWith('worktree-'))) {
+    const r = await run($, ['gh', 'pr', 'list', '--state', 'merged', '--limit', '100', '--json', 'number,headRefOid,headRefName'], repo.top, 60_000)
+    try {
+      if (r.exitCode === 0) mergedHeads = (JSON.parse(r.stdout) as { number: number; headRefOid: string }[]).map(p => ({ number: p.number, head: p.headRefOid }))
+    } catch {
+      mergedHeads = []
+    }
+    if (mergedHeads.length > 0) {
+      const check = await $.process.run(['git', 'cat-file', '--batch-check=%(objectname) %(objecttype)'], {
+        cwd: repo.top,
+        stdin: mergedHeads.map(h => h.head).join('\n') + '\n',
+        timeoutMs: 60_000,
+      })
+      for (const line of check.stdout.replace(/\r/g, '').split('\n')) {
+        const [sha, type] = line.split(' ')
+        if (sha && type === 'commit') present.add(sha)
+      }
+      if (present.size > 0) {
+        const argv = ['git', 'rev-list', ...present, '--not', mergedRef]
+        const listed = await run($, argv, repo.top, 120_000)
+        if (listed.exitCode === 0) inHeads = new Set(listed.stdout.replace(/\r/g, '').split('\n').filter(Boolean))
+      }
+    }
+  }
 
   // the local default branch, fast-forwarded when strictly behind origin's
   const localMain = locals.find(([b]) => b === defaultBranch)?.[1]
@@ -690,11 +848,28 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
       }
     }
     let unpushed = 0
+    let inMergedPr: number | undefined
+    let contentMerged: boolean | undefined
+    if (branch.startsWith('worktree-') && !isProtected && !gitMerged.has(branch) && mainTree !== undefined) {
+      const m = await run($, ['git', 'merge-tree', '--write-tree', mergedRef, branch], repo.top, 60_000)
+      if (m.exitCode === 0) contentMerged = m.stdout.replace(/\r/g, '').split('\n')[0]?.trim() === mainTree
+      else if (m.exitCode === 1) contentMerged = false
+    }
     if (!isProtected) {
       let inMergedHead = false
+      if (contentMerged === undefined && branch.startsWith('worktree-') && !(pr?.numbers.length) && !gitMerged.has(branch) && (inHeads.has(tip) || present.has(tip))) {
+        const contains = new Set<string>()
+        for (const h of mergedHeads) if (present.has(h.head) && h.head !== tip && (await isAncestor(tip, h.head))) contains.add(h.head)
+        inMergedPr = findMergedPr(tip, mergedHeads, present, contains)
+        if (inMergedPr !== undefined) {
+          inMergedHead = true
+          heads = [...heads, mergedHeads.find(h => h.number === inMergedPr)!.head]
+        }
+      }
       for (const h of heads) if (h === tip || (await isAncestor(tip, h))) inMergedHead = true
       if (!inMergedHead) unpushed = Number((await git($, repo.top, 'rev-list', '--count', branch, '--not', '--remotes')).out) || 0
     }
+    const ahead = branch.startsWith('worktree-') && !isProtected ? Number((await git($, repo.top, 'rev-list', '--count', branch, '--not', mergedRef)).out) || 0 : undefined
     let worktree: BranchFacts['worktree']
     if (wt !== undefined) {
       const exists = !wt.prunable && (await $.fs.exists(wt.path))
@@ -713,11 +888,13 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
     const remoteTip = remotes.get(`origin/${branch}`)
     if (remoteTip !== undefined) {
       let safe = false
-      if (pr !== undefined) for (const h of heads) if (h === remoteTip || (await isAncestor(remoteTip, h))) safe = true
+      if (pr !== undefined || inMergedPr !== undefined) for (const h of heads) if (h === remoteTip || (await isAncestor(remoteTip, h))) safe = true
       if (!safe) safe = await isAncestor(remoteTip, mergedRef)
+      // content already in the default branch: the remote branch is safe when it holds nothing the local one lacks
+      if (!safe && contentMerged === true) safe = await isAncestor(remoteTip, tip)
       remote = { safe }
     }
-    facts.push({ branch, isProtected, pr, gitMerged: gitMerged.has(branch), unpushed, worktree, remote })
+    facts.push({ branch, isProtected, pr, gitMerged: gitMerged.has(branch), unpushed, ahead, inMergedPr, contentMerged, worktree, remote })
   }
   return { facts, worktrees, sync, defaultBranch }
 }
@@ -810,8 +987,11 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       lines.push(`released slot${deadSlots.length === 1 ? '' : 's'} ${deadSlots.map(([n]) => n).join(', ')} (worktree gone)`)
     }
   }
+  // agent branches never merged: reported, never deleted
+  const unmerged = unmergedAgentWork(facts)
+  lines.push(...unmerged)
   for (const plan of plans) if (plan.kind === 'skip') lines.push(describePlan(plan))
-  return { plans, lines, acted, removed }
+  return { plans, lines, acted, removed, unmerged }
 }
 
 // a SessionStart tidy at most every 10 minutes per repo, so resumes and parallel sessions do not repeat it
@@ -832,12 +1012,13 @@ async function tidyOnStart($: $, options: Record<string, unknown>): Promise<void
   await $.ui.log(`worktrees tidy:\n${report.lines.join('\n')}`, { to: 'debug' })
   const stopped = report.lines.filter(l => l.startsWith('orphan: stopped')).length
   const synced = report.lines.find(l => l.startsWith('fast-forward ') && l.endsWith(': done'))
-  if (report.removed.length + stopped > 0 || synced !== undefined) {
+  if (report.removed.length + stopped + report.unmerged.length > 0 || synced !== undefined) {
     const skipped = report.plans.filter(p => p.kind === 'skip').length
     const parts = [
       report.removed.length > 0 ? `deleted merged ${report.removed.join(', ')}` : '',
       stopped > 0 ? `stopped ${stopped} orphan process${stopped === 1 ? '' : 'es'}` : '',
       synced !== undefined ? synced.replace(/: done$/, '') : '',
+      ...report.unmerged,
       skipped > 0 ? `${skipped} skipped (/tidy dry-run says why)` : '',
     ]
     await $.ui.toast(`worktrees: ${parts.filter(Boolean).join('; ')}`)
@@ -941,23 +1122,23 @@ export const register: Register = (on, options) => {
   }).catch(passThrough)
 
   // ...and so does an agent that ran in one ending. Its slot stays while its folder does.
-  // An agent that still runs a background shell or monitor of its own is sent back to stop it first.
+  // An agent that still runs a background shell or monitor of its own, or leaves uncommitted changes in its worktree,
+  // is sent back once to deal with them. Changes still uncommitted when the stop goes through are committed for it.
   on('classic.SubagentStop', async ($, e, next) => {
     const result = await next(e)
-    // an agent may not finish while a shell or monitor it started still runs; nothing is cleaned up for a refused stop
     const live = liveWork(e.background_tasks)
-    if (live.length > 0) {
-      const decision = decideStop({
-        stopHookActive: e.stop_hook_active,
-        tasks: live,
-        inTranscript: await idsInTranscript($, e.agent_transcript_path, live.map(t => t.id)),
-      })
-      if (decision.kind === 'block') return { ...result, block: result.block ? `${result.block}\n\n${decision.reason}` : decision.reason }
-      if (decision.owned.length > 0) {
-        const left = decision.owned.map(t => `${t.id} ${t.command ?? t.description}`).join('; ')
-        await $.ui.log(`worktrees: ${e.agent_type} ${e.agent_id} stopped again with background work still running: ${left}`, { to: 'debug' })
-      }
+    const inTranscript = live.length > 0 ? await idsInTranscript($, e.agent_transcript_path, live.map(t => t.id)) : new Set<string>()
+    const wt = await agentWorktree($, e.cwd, e.agent_id)
+    const dirty = wt === undefined ? undefined : await dirtyOf($, wt)
+    // nothing is cleaned up for a refused stop
+    const decision = decideStop({ stopHookActive: e.stop_hook_active, tasks: live, inTranscript, dirty })
+    if (decision.kind === 'block') return { ...result, block: result.block ? `${result.block}\n\n${decision.reason}` : decision.reason }
+    if (decision.owned.length > 0) {
+      const left = decision.owned.map(t => `${t.id} ${t.command ?? t.description}`).join('; ')
+      await $.ui.log(`worktrees: ${e.agent_type} ${e.agent_id} stopped again with background work still running: ${left}`, { to: 'debug' })
     }
+    // before the processes are stopped and the slot released
+    if (decision.commit && wt !== undefined && dirty !== undefined) await commitLeftovers($, wt, dirty, e.agent_type, e.agent_id)
     const repo = await repoAt($, e.cwd)
     if (repo === undefined) return result
     const candidates = [worktreeRootOf(e.cwd), `${repo.mainRoot}/.claude/worktrees/agent-${e.agent_id}`]
@@ -985,7 +1166,23 @@ export const register: Register = (on, options) => {
     return result
   }).catch(passThrough)
 
-  // 4. Merged branches: tidied in the background at start, and on demand with /tidy.
+  // 4. An editing agent is told to commit on its branch; the main thread, to merge an agent's branch before using it.
+  // SubagentStart's cwd may be the session's, not the worktree's: agentWorktree also looks for agent-<id>.
+  on('classic.SubagentStart', async ($, e, next) => {
+    const result = await next(e)
+    const wt = await agentWorktree($, e.cwd, e.agent_id)
+    await $.ui.log(`worktrees: ${e.agent_type} ${e.agent_id} started; cwd ${e.cwd}; worktree ${wt?.path ?? 'none'}`, { to: 'debug' })
+    if (wt === undefined) return result
+    return { ...result, additionalContext: [...(result.additionalContext ?? []), startContext(wt.branch)] }
+  }).catch(passThrough)
+
+  on('classic.SessionStart', async ($, e, next) => {
+    const result = await next(e)
+    if ((await git($, e.cwd, 'rev-parse', '--is-inside-work-tree')).out !== 'true') return result
+    return { ...result, additionalContext: [...(result.additionalContext ?? []), SESSION_CONTEXT] }
+  }).catch(passThrough)
+
+  // 5. Merged branches: tidied in the background at start, and on demand with /tidy.
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({
