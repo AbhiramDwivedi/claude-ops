@@ -1,11 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { BranchFacts, Snapshot } from '../hooks/register'
+import type { BackgroundTask, BranchFacts, Snapshot } from '../hooks/register'
 import {
   ACTIVE_FOR_MS,
   claimSlot,
   decideBranch,
   decideMainSync,
+  decideStop,
   includedFiles,
   isActive,
   lockStep,
@@ -177,16 +178,19 @@ test('deletes a branch only when its PR merged and nothing would be lost', async
   }
   expect(reason({ isProtected: true })).toBe('default or checked-out branch')
   expect(reason({ pr: { numbers: [] }, gitMerged: false })).toBe('no merged PR, and not in the default branch')
-  // a tip already in origin/<default> counts as merged, PR or not
-  expect(reason({ pr: { numbers: [] }, gitMerged: true })).toBe('delete')
+  // a tip already in origin/<default> counts as merged without a PR only on an agent's worktree-* branch
+  expect(reason({ branch: 'worktree-agent-a1', pr: { numbers: [] }, gitMerged: true })).toBe('delete')
+  // a branch made by hand (`git branch foo`) sits on the default branch too: it needs a merged PR
+  expect(reason({ pr: { numbers: [] }, gitMerged: true })).toBe('no merged PR; only worktree-* branches count as merged by being in the default branch')
+  expect(reason({ pr: undefined, gitMerged: true })).toBe('no merged PR (gh unavailable); only worktree-* branches count as merged by being in the default branch')
   expect(reason({ worktree: { ...MERGED.worktree!, isActive: true } })).toBe('its agent has not stopped yet')
   expect(reason({ worktree: { ...MERGED.worktree!, dirty: true } })).toBe('worktree has uncommitted changes')
   expect(reason({ worktree: { ...MERGED.worktree!, locked: 'claude agent x' } })).toBe('worktree is locked (claude agent x)')
   expect(reason({ worktree: { ...MERGED.worktree!, isMain: true } })).toBe('checked out in the main checkout')
   expect(reason({ worktree: { ...MERGED.worktree!, isSession: true } })).toBe('this session works in its worktree')
   expect(reason({ unpushed: 2 })).toBe('2 commits on no remote and in no merged PR')
-  // without gh, git's own merged list decides
-  const noGh = decideBranch({ ...MERGED, pr: undefined, gitMerged: true })
+  // without gh, git's own merged list decides for a worktree-* branch
+  const noGh = decideBranch({ ...MERGED, branch: 'worktree-agent-a1', pr: undefined, gitMerged: true })
   expect(noGh.kind === 'delete' && noGh.via === 'in the default branch').toBe(true)
   expect(reason({ pr: undefined, gitMerged: false })).toBe('not in the default branch (gh unavailable)')
   // a remote branch with commits past the merge is left; a missing worktree folder is pruned
@@ -232,4 +236,39 @@ test('records active worktrees and takes over only a stale lock', async () => {
   expect(isActive(state, 'C:/r/.claude/worktrees/a', 2000, true)).toBe(false)
   expect(lockStep(500)).toBe('wait')
   expect(lockStep(60_000)).toBe('break')
+})
+
+const TASKS: BackgroundTask[] = [
+  { id: 'b1shell', type: 'shell', status: 'running', description: 'dev server', command: 'npm run dev' },
+  { id: 'm2watch', type: 'monitor', status: 'running', description: 'tail the deploy log' },
+  { id: 'b3other', type: 'shell', status: 'running', description: 'another agent', command: 'ssh host' },
+  { id: 'b4done', type: 'shell', status: 'completed', description: 'finished', command: 'npm test' },
+  { id: 'a5agent', type: 'subagent', status: 'running', description: 'a helper agent' },
+]
+
+test('refuses an agent stop while a shell or monitor it started still runs', async () => {
+  // its transcript names its own tasks; b3other belongs to someone else
+  const decision = decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: new Set(['b1shell', 'm2watch', 'b4done', 'a5agent']) })
+  expect(decision.kind).toBe('block')
+  expect(decision.owned.map(t => t.id)).toEqual(['b1shell', 'm2watch'])
+  expect(decision.kind === 'block' && decision.reason).toBe(
+    'You still have background work running:\nb1shell npm run dev\nm2watch tail the deploy log\n' +
+      "Stop each with TaskStop, unless it is meant to outlive you; then say so in one line. Your report was already delivered; don't send it again.",
+  )
+})
+
+test('lets an agent stop when it owns no running shell or monitor', async () => {
+  // only someone else's task, a finished one and a subagent
+  expect(decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: new Set(['b4done', 'a5agent']) })).toEqual({ kind: 'allow', owned: [] })
+  // no tasks at all
+  expect(decideStop({ stopHookActive: false, tasks: undefined, inTranscript: new Set() }).kind).toBe('allow')
+  // an unreadable transcript proves nothing: fail open
+  expect(decideStop({ stopHookActive: false, tasks: TASKS, inTranscript: undefined })).toEqual({ kind: 'allow', owned: [] })
+})
+
+test('lets the stop after a refusal through, so it cannot loop', async () => {
+  const decision = decideStop({ stopHookActive: true, tasks: TASKS, inTranscript: new Set(['b1shell']) })
+  expect(decision.kind).toBe('allow')
+  // still reported, for the debug log
+  expect(decision.owned.map(t => t.id)).toEqual(['b1shell'])
 })

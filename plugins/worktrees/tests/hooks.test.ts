@@ -74,3 +74,32 @@ test('takes more read-only types from its options', { options: { readOnlyAgents:
   await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: 'auditor' } as never)
   expect(seen[0]?.isolation).toBe(undefined)
 })
+
+test('sends an agent back to stop its own background shell, and cleans up nothing yet', async ($, on) => {
+  const ran: string[] = []
+  on('classic.SubagentStop', async () => ({}))
+  on('fs.exists', async () => ({ value: true }))
+  on('process.run', async (_, e) => {
+    ran.push(e.argv.join(' '))
+    const found = e.argv.includes('grep') ? 'b1shell\n' : ''
+    return { value: { exitCode: 0, stdout: found, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const input = {
+    cwd: 'C:/r/.claude/worktrees/agent-a1',
+    agent_id: 'a1',
+    agent_type: 'general-purpose',
+    agent_transcript_path: 'C:/t/agent-a1.jsonl',
+    background_tasks: [
+      { id: 'b1shell', type: 'shell', status: 'running', description: 'dev server', command: 'npm run dev' },
+      { id: 'b2other', type: 'shell', status: 'running', description: 'not mine', command: 'ssh host' },
+    ],
+  }
+  const blocked = await $.classic.SubagentStop({ ...input, stop_hook_active: false } as never)
+  expect(blocked.block).toContain('b1shell npm run dev')
+  expect(blocked.block?.includes('b2other')).toBe(false)
+  // the transcript is searched where it lives; no repo lookup, so no slot release or process stop
+  expect(ran).toEqual(['git grep --no-index -h -o -F -e b1shell -e b2other -- agent-a1.jsonl'])
+  // the stop after the refusal goes through
+  const again = await $.classic.SubagentStop({ ...input, stop_hook_active: true } as never)
+  expect(again.block).toBe(undefined)
+})

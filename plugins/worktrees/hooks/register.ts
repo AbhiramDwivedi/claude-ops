@@ -317,7 +317,7 @@ export type BranchFacts = {
   isProtected: boolean
   // gh's merged PRs for this head branch; undefined when gh could not answer
   pr?: { numbers: number[] }
-  // its tip is in origin/<default> (`git branch --merged`): nothing on it can be lost, PR or not
+  // its tip is in origin/<default> (`git branch --merged`); counts as merged without a PR only for worktree-* branches
   gitMerged: boolean
   // commits on it that are neither on any remote branch nor in a merged PR's head
   unpushed: number
@@ -348,7 +348,13 @@ export function decideBranch(f: BranchFacts): BranchPlan {
   if (f.worktree?.isMain) return skip('checked out in the main checkout')
   if (f.worktree?.isSession) return skip('this session works in its worktree')
   const prMerged = f.pr !== undefined && f.pr.numbers.length > 0
-  if (!prMerged && !f.gitMerged) return skip(f.pr !== undefined ? 'no merged PR, and not in the default branch' : 'not in the default branch (gh unavailable)')
+  // a tip in origin/<default> counts as merged without a PR only on the branches agent worktrees get:
+  // a branch made by hand with `git branch foo` sits on the default branch too
+  const byAncestry = f.gitMerged && f.branch.startsWith('worktree-')
+  if (!prMerged && !byAncestry) {
+    const gh = f.pr === undefined ? ' (gh unavailable)' : ''
+    return skip(f.gitMerged ? `no merged PR${gh}; only worktree-* branches count as merged by being in the default branch` : f.pr !== undefined ? 'no merged PR, and not in the default branch' : 'not in the default branch (gh unavailable)')
+  }
   if (f.worktree?.locked !== undefined) return skip(`worktree is locked (${f.worktree.locked})`)
   if (f.worktree?.isActive) return skip('its agent has not stopped yet')
   if (f.worktree?.dirty) return skip('worktree has uncommitted changes')
@@ -413,6 +419,36 @@ export function windowsProbe(withPorts: boolean): string {
 
 export const LINUX_PROBE = 'echo "SELF $$"; ps -eo pid=,ppid=,pgid=,args=; echo ---; ss -ltnpH 2>/dev/null || true'
 
+// --- background work an agent leaves running ---
+
+export type BackgroundTask = { id: string; type: string; status: string; description: string; command?: string }
+
+const FINISHED = new Set(['completed', 'failed', 'killed', 'stopped', 'cancelled', 'canceled', 'done', 'error'])
+
+// shells and monitors still going; subagents and other task types are not this agent's to stop
+export function liveWork(tasks: readonly BackgroundTask[] | undefined): BackgroundTask[] {
+  return (tasks ?? []).filter(t => (t.type === 'shell' || t.type === 'monitor') && !FINISHED.has(t.status))
+}
+
+export type StopDecision = { kind: 'allow'; owned: BackgroundTask[] } | { kind: 'block'; owned: BackgroundTask[]; reason: string }
+
+// `inTranscript`: the task ids found in the agent's own transcript, undefined when it could not be read.
+// The task list may cover the whole session; an id in the agent's transcript is one its own tool started.
+export function decideStop(f: { stopHookActive: boolean; tasks: readonly BackgroundTask[] | undefined; inTranscript: ReadonlySet<string> | undefined }): StopDecision {
+  const owned = f.inTranscript === undefined ? [] : liveWork(f.tasks).filter(t => f.inTranscript!.has(t.id))
+  // a stop that follows our own block goes through, so it cannot loop
+  if (owned.length === 0 || f.stopHookActive) return { kind: 'allow', owned }
+  const list = owned.map(t => `${t.id} ${(t.command ?? t.description).split('\n')[0]}`).join('\n')
+  return {
+    kind: 'block',
+    owned,
+    reason:
+      `You still have background work running:\n${list}\n` +
+      'Stop each with TaskStop, unless it is meant to outlive you; then say so in one line. ' +
+      "Your report was already delivered; don't send it again.",
+  }
+}
+
 async function isWindows($: $): Promise<boolean> {
   return (await $.env.get('OS')) === 'Windows_NT'
 }
@@ -428,6 +464,25 @@ async function run($: $, argv: string[], cwd?: string, timeoutMs?: number) {
 async function git($: $, cwd: string | undefined, ...args: string[]) {
   const r = await run($, ['git', ...args], cwd, 120_000)
   return { ok: r.exitCode === 0, out: r.stdout.replace(/\r/g, '').trim(), err: r.stderr.replace(/\r/g, '').trim() }
+}
+
+// Which of `ids` the transcript mentions, without reading it into memory: transcripts grow past what $.fs.read takes.
+// undefined when the file cannot be searched.
+async function idsInTranscript($: $, path: string, ids: readonly string[]): Promise<Set<string> | undefined> {
+  if (ids.length === 0) return new Set()
+  if (!path || !(await $.fs.exists(path).catch(() => false))) return undefined
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  const dir = cut > 0 ? path.slice(0, cut) : cut === 0 ? '/' : undefined
+  const r = await run($, ['git', 'grep', '--no-index', '-h', '-o', '-F', ...ids.flatMap(id => ['-e', id]), '--', path.slice(cut + 1)], dir, 30_000)
+  if (r.exitCode === 1) return new Set()
+  if (r.exitCode === 0) return new Set(r.stdout.replace(/\r/g, '').split('\n').filter(Boolean))
+  // git could not search it: a transcript small enough is read whole
+  try {
+    const text = await $.fs.read(path)
+    return new Set(ids.filter(id => text.includes(id)))
+  } catch {
+    return undefined
+  }
 }
 
 async function snapshot($: $, windows: boolean, withPorts: boolean): Promise<Snapshot | undefined> {
@@ -885,8 +940,23 @@ export const register: Register = (on, options) => {
   }).catch(passThrough)
 
   // ...and so does an agent that ran in one ending. Its slot stays while its folder does.
+  // An agent that still runs a background shell or monitor of its own is sent back to stop it first.
   on('classic.SubagentStop', async ($, e, next) => {
     const result = await next(e)
+    // an agent may not finish while a shell or monitor it started still runs; nothing is cleaned up for a refused stop
+    const live = liveWork(e.background_tasks)
+    if (live.length > 0) {
+      const decision = decideStop({
+        stopHookActive: e.stop_hook_active,
+        tasks: live,
+        inTranscript: await idsInTranscript($, e.agent_transcript_path, live.map(t => t.id)),
+      })
+      if (decision.kind === 'block') return { ...result, block: result.block ? `${result.block}\n\n${decision.reason}` : decision.reason }
+      if (decision.owned.length > 0) {
+        const left = decision.owned.map(t => `${t.id} ${t.command ?? t.description}`).join('; ')
+        await $.ui.log(`worktrees: ${e.agent_type} ${e.agent_id} stopped again with background work still running: ${left}`, { to: 'debug' })
+      }
+    }
     const repo = await repoAt($, e.cwd)
     if (repo === undefined) return result
     const candidates = [worktreeRootOf(e.cwd), `${repo.mainRoot}/.claude/worktrees/agent-${e.agent_id}`]
