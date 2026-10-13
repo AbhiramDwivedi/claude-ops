@@ -1,0 +1,11 @@
+{
+  "name": "kit",
+  "version": "0.1.0",
+  "description": "Sets a project up with the right agents, quality-gate hooks and review checklist from its actual code, and revises that setup later from how the project's sessions really went",
+  "author": {
+    "name": "Abhiram Dwivedi",
+    "url": "https://github.com/AbhiramDwivedi"
+  },
+  "homepage": "https://github.com/AbhiramDwivedi/claude-ops/tree/main/plugins/kit",
+  "license": "MIT"
+}
