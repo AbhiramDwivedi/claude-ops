@@ -1,0 +1,31 @@
+{
+  "name": "worktrees",
+  "version": "0.3.0",
+  "description": "Gives every agent that can edit a git worktree of its own, runs a project's setup script with its own port range, kills what an agent left running, and removes worktrees and branches once their PR has merged",
+  "author": {
+    "name": "Abhiram Dwivedi",
+    "url": "https://github.com/AbhiramDwivedi"
+  },
+  "homepage": "https://github.com/AbhiramDwivedi/claude-ops/tree/main/plugins/worktrees",
+  "license": "MIT",
+  "userConfig": {
+    "readOnlyAgents": {
+      "type": "string",
+      "title": "More read-only agent types",
+      "description": "Comma-separated agent types that never edit files and so run without a worktree, on top of Explore, Plan, claude-code-guide, statusline-setup, scout and reviewer.",
+      "default": ""
+    },
+    "portBase": {
+      "type": "number",
+      "title": "Port base",
+      "description": "Worktree slot N owns ports portBase + N*10 through portBase + N*10 + 9. Slots start at 1, so portBase..portBase+9 stay free for the main checkout.",
+      "default": 4000
+    },
+    "tidyOnStart": {
+      "type": "boolean",
+      "title": "Tidy merged branches at session start",
+      "description": "In the background at session start, remove worktrees and branches (local and remote) whose PR has merged, and stop processes left in deleted worktrees. /tidy does the same on demand.",
+      "default": true
+    }
+  }
+}
