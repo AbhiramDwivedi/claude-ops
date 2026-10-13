@@ -39,7 +39,7 @@ case "$file" in
   <*.ts|*.tsx>) ;;          # only the file types the linter covers
   *) exit 0 ;;
 esac
-cd "$CLAUDE_PROJECT_DIR" || exit 0
+cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0   # the agent's checkout: a worktree agent's own
 if ! out=$(<LINT_COMMAND> "$file" 2>&1); then
   printf 'Lint/typecheck failed after editing %s. Fix it:\n%s\n' "$file" "$(printf '%s\n' "$out" | tail -n 30)" >&2
   exit 2
@@ -56,12 +56,19 @@ case "$input" in *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) exit 
 # SubagentStop carries agent_type: read-only agents changed nothing, so skip them.
 agent=$(printf '%s' "$input" | sed -n 's/.*"agent_type" *: *"\([^"]*\)".*/\1/p')
 case "$agent" in kit:scout|kit:reviewer|Explore|Plan|claude-code-guide) exit 0 ;; esac
-cd "$CLAUDE_PROJECT_DIR" || exit 0
-[ -z "$(git status --porcelain 2>/dev/null)" ] && exit 0   # nothing changed: nothing to test
+# Test the agent's checkout: a worktree agent's own, not $CLAUDE_PROJECT_DIR (always the main checkout).
+cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+# Skip only a state that already passed: a clean tree at the last tested commit. Commits don't hide changes.
+stamp=$(git rev-parse --git-path kit-tested)   # per worktree
+head=$(git rev-parse --verify --quiet HEAD)
+clean=$([ -z "$(git status --porcelain)" ] && echo 1)
+[ -n "$clean" ] && [ -n "$head" ] && [ "$head" = "$(cat "$stamp" 2>/dev/null)" ] && exit 0
 if ! out=$(<TEST_COMMAND> 2>&1); then
   printf 'Tests fail. Fix them, or say why you cannot, before you finish:\n%s\n' "$(printf '%s\n' "$out" | tail -n 40)" >&2
   exit 2
 fi
+[ -n "$clean" ] && [ -n "$head" ] && echo "$head" > "$stamp"
+exit 0
 ```
 
 ## `.claude/kit/stop-gate.ps1` (Windows without bash)
@@ -70,22 +77,34 @@ fi
 $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
 if ($in.stop_hook_active) { exit 0 }
 if ($in.agent_type -in 'kit:scout','kit:reviewer','Explore','Plan','claude-code-guide') { exit 0 }
-Set-Location $env:CLAUDE_PROJECT_DIR
-if (-not (git status --porcelain)) { exit 0 }
+# Test the agent's checkout: a worktree agent's own, not $env:CLAUDE_PROJECT_DIR (always the main checkout).
+if ($in.cwd) { Set-Location $in.cwd }
+$top = git rev-parse --show-toplevel
+if (-not $top) { exit 0 }
+Set-Location $top
+# Skip only a state that already passed: a clean tree at the last tested commit. Commits don't hide changes.
+$stamp = git rev-parse --git-path kit-tested   # per worktree
+$head = git rev-parse --verify --quiet HEAD
+$clean = -not (git status --porcelain)
+if ($clean -and $head -and (Test-Path $stamp) -and ((Get-Content $stamp) -eq $head)) { exit 0 }
 $out = & <TEST_COMMAND> 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
   $tail = ($out -split "`n" | Select-Object -Last 40) -join "`n"
   [Console]::Error.WriteLine("Tests fail. Fix them, or say why you cannot, before you finish:`n$tail")
   exit 2
 }
+if ($clean -and $head) { Set-Content -Encoding ascii $stamp $head }
+exit 0
 ```
 
 ## Trying a gate by hand
 
 ```sh
-echo '{"tool_input":{"file_path":"src/app.ts"}}' | CLAUDE_PROJECT_DIR=$PWD bash .claude/kit/edit-gate.sh; echo "exit $?"
-echo '{"stop_hook_active":false}' | CLAUDE_PROJECT_DIR=$PWD bash .claude/kit/stop-gate.sh; echo "exit $?"
+echo '{"tool_input":{"file_path":"src/app.ts"}}' | bash .claude/kit/edit-gate.sh; echo "exit $?"
+echo '{"stop_hook_active":false}' | bash .claude/kit/stop-gate.sh; echo "exit $?"
 ```
+
+The gates work in the checkout they start in, as hooks do: a worktree agent's hooks start in its worktree. The stop gate records the last commit it passed on a clean tree in `.git/kit-tested` (per worktree); delete that file to force a run.
 
 ## `.claude/worktree-setup.sh` stub (multi-service repos only)
 
