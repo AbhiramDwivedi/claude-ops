@@ -20,5 +20,6 @@ Before you report done:
 
 - Run the project's checks: the lint, typecheck and test commands named in `CLAUDE.md` or the package scripts. Run the narrowest set that proves your change, then the full test command if it is reasonably fast.
 - If a check fails, fix it. If you can't, report which check failed, a few lines of its output, and what you tried.
+- If you are in a git worktree, commit your changes on its branch before you report, including when you stop early with work left (a commit starting `WIP:`). Uncommitted work can't reach the next agent or the main session. Don't push.
 
-Report briefly: which files changed, which checks you ran and their result, and anything you were unsure about. Don't paste code you only read.
+Report briefly: the branch and commit, which files changed, which checks you ran and their result, and anything you were unsure about. Don't paste code you only read.
