@@ -2,8 +2,18 @@ import { expect, test } from 'claude-code/testing'
 
 import type { BranchFacts, Snapshot } from '../hooks/register'
 import {
+  ACTIVE_FOR_MS,
   claimSlot,
   decideBranch,
+  decideMainSync,
+  includedFiles,
+  isActive,
+  lockStep,
+  markActive,
+  markDone,
+  parseState,
+  planCreate,
+  serializeState,
   mentions,
   needsWorktree,
   parseLinuxSnapshot,
@@ -166,17 +176,60 @@ test('deletes a branch only when its PR merged and nothing would be lost', async
     return plan.kind === 'skip' ? plan.reason : 'delete'
   }
   expect(reason({ isProtected: true })).toBe('default or checked-out branch')
-  expect(reason({ pr: { numbers: [] }, gitMerged: true })).toBe('no merged PR')
+  expect(reason({ pr: { numbers: [] }, gitMerged: false })).toBe('no merged PR, and not in the default branch')
+  // a tip already in origin/<default> counts as merged, PR or not
+  expect(reason({ pr: { numbers: [] }, gitMerged: true })).toBe('delete')
+  expect(reason({ worktree: { ...MERGED.worktree!, isActive: true } })).toBe('its agent has not stopped yet')
   expect(reason({ worktree: { ...MERGED.worktree!, dirty: true } })).toBe('worktree has uncommitted changes')
   expect(reason({ worktree: { ...MERGED.worktree!, locked: 'claude agent x' } })).toBe('worktree is locked (claude agent x)')
   expect(reason({ worktree: { ...MERGED.worktree!, isMain: true } })).toBe('checked out in the main checkout')
   expect(reason({ worktree: { ...MERGED.worktree!, isSession: true } })).toBe('this session works in its worktree')
   expect(reason({ unpushed: 2 })).toBe('2 commits on no remote and in no merged PR')
-  // without gh, git's own merged list decides, and -D is never allowed
+  // without gh, git's own merged list decides
   const noGh = decideBranch({ ...MERGED, pr: undefined, gitMerged: true })
-  expect(noGh.kind === 'delete' && !noGh.allowForce && noGh.via === 'git branch --merged').toBe(true)
-  expect(reason({ pr: undefined, gitMerged: false })).toBe('not merged into the default branch (gh unavailable)')
+  expect(noGh.kind === 'delete' && noGh.via === 'in the default branch').toBe(true)
+  expect(reason({ pr: undefined, gitMerged: false })).toBe('not in the default branch (gh unavailable)')
   // a remote branch with commits past the merge is left; a missing worktree folder is pruned
   const remoteAhead = decideBranch({ ...MERGED, remote: { safe: false }, worktree: { ...MERGED.worktree!, exists: false } })
   expect(remoteAhead.kind === 'delete' && !remoteAhead.deleteRemote && remoteAhead.prune && remoteAhead.worktreePath === undefined).toBe(true)
+})
+
+test('branches a new worktree from the session checkout HEAD, detached or not', async () => {
+  const sha = '4bada1f0123456789abcdef0123456789abcdef0'
+  expect(planCreate({ pathExists: false, branchExists: false, head: sha })).toEqual({ kind: 'add-new', base: sha })
+  // a detached HEAD is a commit like any other
+  expect(planCreate({ pathExists: false, branchExists: false, head: `${sha}\n` })).toEqual({ kind: 'add-new', base: sha })
+  expect(planCreate({ pathExists: false, branchExists: true, head: sha })).toEqual({ kind: 'add-branch' })
+  expect(planCreate({ pathExists: true, branchExists: true, head: sha })).toEqual({ kind: 'reuse' })
+  // no HEAD yet (an empty repo): Claude Code's default
+  expect(planCreate({ pathExists: false, branchExists: false })).toEqual({ kind: 'default' })
+  expect(planCreate({ pathExists: false, branchExists: false, head: 'origin/main' })).toEqual({ kind: 'default' })
+})
+
+test('fast-forwards the local default branch only when strictly behind and clean', async () => {
+  const base = { branch: 'main', local: 'aaa', remote: 'bbb', behind: true }
+  expect(decideMainSync(base)).toEqual({ kind: 'update-ref', from: 'aaa', to: 'bbb' })
+  expect(decideMainSync({ ...base, checkedOut: { path: 'C:/r', dirty: false } })).toEqual({ kind: 'merge-ff', worktree: 'C:/r', to: 'bbb' })
+  expect(decideMainSync({ ...base, checkedOut: { path: 'C:/r', dirty: true } }).kind).toBe('none')
+  expect(decideMainSync({ ...base, behind: false }).kind).toBe('none')
+  expect(decideMainSync({ ...base, remote: 'aaa' })).toEqual({ kind: 'none' })
+  expect(decideMainSync({ ...base, remote: undefined })).toEqual({ kind: 'none' })
+})
+
+test('copies only ignored .worktreeinclude files inside the checkout', async () => {
+  expect(includedFiles(['.env', 'notes.txt', '../x', 'C:/y', 'cfg/local.json'], '.env\r\ncfg/local.json\n../x\nC:/y\n')).toEqual(['.env', 'cfg/local.json'])
+})
+
+test('records active worktrees and takes over only a stale lock', async () => {
+  let state = parseState(undefined)
+  state = markActive(state, 'C:/r/.claude/worktrees/a', 1000, true)
+  expect(isActive(state, 'c:\\r\\.claude\\worktrees\\A', 2000, true)).toBe(true)
+  expect(isActive(state, 'C:/r/.claude/worktrees/a', 1000 + ACTIVE_FOR_MS + 1, true)).toBe(false)
+  expect(parseState(serializeState(state))).toEqual(state)
+  // the old slots.json shape still reads
+  expect(parseState('{"slots":{"1":{"path":"p","name":"n","at":1}}}').slots.slots['1']?.path).toBe('p')
+  state = markDone(state, 'C:/R/.claude/worktrees/a', true)
+  expect(isActive(state, 'C:/r/.claude/worktrees/a', 2000, true)).toBe(false)
+  expect(lockStep(500)).toBe('wait')
+  expect(lockStep(60_000)).toBe('break')
 })

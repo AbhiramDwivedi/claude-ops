@@ -228,6 +228,68 @@ export function parseSlots(text: string | undefined): SlotTable {
   }
 }
 
+// The `.worktreeinclude` files to copy: those the include patterns listed that `git check-ignore` also printed
+// (so .gitignore ignores them), relative, and never reaching outside the checkout.
+export function includedFiles(candidates: readonly string[], checkIgnoreOut: string): string[] {
+  const ignored = new Set(checkIgnoreOut.replace(/\r/g, '').split('\n').filter(Boolean))
+  return candidates.filter(f => ignored.has(f) && !/^([\\/]|[A-Za-z]:)/.test(f) && !f.split(/[\\/]/).includes('..'))
+}
+
+// How WorktreeCreate makes the worktree: reuse its folder, check out its existing branch, or branch from the
+// HEAD commit of the checkout the hook runs in, detached or not. No HEAD (an empty repo): Claude Code's default.
+export type CreatePlan = { kind: 'reuse' } | { kind: 'add-branch' } | { kind: 'add-new'; base: string } | { kind: 'default' }
+
+export function planCreate(f: { pathExists: boolean; branchExists: boolean; head?: string }): CreatePlan {
+  if (f.pathExists) return { kind: 'reuse' }
+  if (f.branchExists) return { kind: 'add-branch' }
+  if (f.head === undefined || !/^[0-9a-f]{7,64}$/i.test(f.head.trim())) return { kind: 'default' }
+  return { kind: 'add-new', base: f.head.trim() }
+}
+
+// What slots.json holds: the slots, and the worktrees this plugin created whose agent has not stopped yet.
+export type State = { slots: SlotTable; active: Record<string, { path: string; at: number }> }
+
+// a worktree created this long ago counts as idle even when no stop was seen (the session died)
+export const ACTIVE_FOR_MS = 24 * 60 * 60_000
+
+export function parseState(text: string | undefined): State {
+  let active: State['active'] = {}
+  try {
+    const raw = JSON.parse(text ?? '') as { active?: State['active'] }
+    if (raw && typeof raw.active === 'object' && raw.active !== null) active = raw.active
+  } catch {
+    // an unreadable file starts over
+  }
+  return { slots: parseSlots(text), active }
+}
+
+export function serializeState(state: State): string {
+  return JSON.stringify({ slots: state.slots.slots, active: state.active }, null, 2) + '\n'
+}
+
+export function markActive(state: State, path: string, at: number, windows: boolean): State {
+  return { ...state, active: { ...state.active, [normPath(path, windows)]: { path, at } } }
+}
+
+export function markDone(state: State, path: string, windows: boolean): State {
+  const active = { ...state.active }
+  delete active[normPath(path, windows)]
+  return { ...state, active }
+}
+
+export function isActive(state: State, path: string, now: number, windows: boolean): boolean {
+  const hit = state.active[normPath(path, windows)]
+  return hit !== undefined && now - hit.at < ACTIVE_FOR_MS
+}
+
+// the lock beside slots.json: a lock older than this was left by a process that died holding it
+export const LOCK_STALE_MS = 10_000
+
+// what a writer does when it finds the lock taken, by the lock's age
+export function lockStep(ageMs: number): 'break' | 'wait' {
+  return ageMs > LOCK_STALE_MS ? 'break' : 'wait'
+}
+
 // --- merged-branch tidy ---
 
 export type Worktree = { path: string; head?: string; branch?: string; locked?: string; prunable: boolean; bare: boolean }
@@ -255,12 +317,13 @@ export type BranchFacts = {
   isProtected: boolean
   // gh's merged PRs for this head branch; undefined when gh could not answer
   pr?: { numbers: number[] }
-  // `git branch --merged origin/<default>` lists it
+  // its tip is in origin/<default> (`git branch --merged`): nothing on it can be lost, PR or not
   gitMerged: boolean
   // commits on it that are neither on any remote branch nor in a merged PR's head
   unpushed: number
-  worktree?: { path: string; exists: boolean; dirty: boolean; locked?: string; isMain: boolean; isSession: boolean }
-  // origin's branch of the same name; safe when every commit on it is in the merged PR (or, without gh, in the default branch)
+  // isActive: this plugin created it for an agent that has not stopped yet
+  worktree?: { path: string; exists: boolean; dirty: boolean; locked?: string; isMain: boolean; isSession: boolean; isActive?: boolean }
+  // origin's branch of the same name; safe when every commit on it is in a merged PR's head or in origin/<default>
   remote?: { safe: boolean }
 }
 
@@ -273,7 +336,7 @@ export type BranchPlan =
       // the worktree folder to remove; `prune` when its folder is already gone
       worktreePath?: string
       prune: boolean
-      // `git branch -D` is allowed after `-d` refuses: only when gh confirmed the merged PR
+      // `git branch -D` is allowed after `-d` refuses: only when gh confirmed the merge or the tip is in origin/<default>
       allowForce: boolean
       deleteRemote: boolean
       remoteNote?: string
@@ -284,22 +347,44 @@ export function decideBranch(f: BranchFacts): BranchPlan {
   if (f.isProtected) return skip('default or checked-out branch')
   if (f.worktree?.isMain) return skip('checked out in the main checkout')
   if (f.worktree?.isSession) return skip('this session works in its worktree')
-  const merged = f.pr !== undefined ? f.pr.numbers.length > 0 : f.gitMerged
-  if (!merged) return skip(f.pr !== undefined ? 'no merged PR' : 'not merged into the default branch (gh unavailable)')
+  const prMerged = f.pr !== undefined && f.pr.numbers.length > 0
+  if (!prMerged && !f.gitMerged) return skip(f.pr !== undefined ? 'no merged PR, and not in the default branch' : 'not in the default branch (gh unavailable)')
   if (f.worktree?.locked !== undefined) return skip(`worktree is locked (${f.worktree.locked})`)
+  if (f.worktree?.isActive) return skip('its agent has not stopped yet')
   if (f.worktree?.dirty) return skip('worktree has uncommitted changes')
   if (f.unpushed > 0) return skip(`${f.unpushed} commit${f.unpushed === 1 ? '' : 's'} on no remote and in no merged PR`)
-  const via = f.pr !== undefined ? `PR #${f.pr.numbers[0]}` : 'git branch --merged'
+  const via = prMerged ? `PR #${f.pr?.numbers[0]}` : 'in the default branch'
   return {
     kind: 'delete',
     branch: f.branch,
     via,
     worktreePath: f.worktree?.exists ? f.worktree.path : undefined,
     prune: f.worktree !== undefined && !f.worktree.exists,
-    allowForce: f.pr !== undefined && f.pr.numbers.length > 0,
+    allowForce: true,
     deleteRemote: f.remote?.safe === true,
     remoteNote: f.remote !== undefined && !f.remote.safe ? 'remote branch has commits outside the merge; left it' : undefined,
   }
+}
+
+// Local default branch fast-forward: only when strictly behind origin's, and not checked out with changes.
+export type MainSync =
+  | { kind: 'none'; reason?: string }
+  | { kind: 'update-ref'; from: string; to: string }
+  | { kind: 'merge-ff'; worktree: string; to: string }
+
+export function decideMainSync(f: {
+  branch: string
+  local?: string
+  remote?: string
+  // local is an ancestor of remote
+  behind: boolean
+  checkedOut?: { path: string; dirty: boolean }
+}): MainSync {
+  if (f.local === undefined || f.remote === undefined || f.local === f.remote) return { kind: 'none' }
+  if (!f.behind) return { kind: 'none', reason: `${f.branch} has commits not on origin/${f.branch}; not fast-forwarded` }
+  if (f.checkedOut === undefined) return { kind: 'update-ref', from: f.local, to: f.remote }
+  if (f.checkedOut.dirty) return { kind: 'none', reason: `${f.branch} is behind origin but its checkout has uncommitted changes; not fast-forwarded` }
+  return { kind: 'merge-ff', worktree: f.checkedOut.path, to: f.remote }
 }
 
 export function describePlan(plan: BranchPlan): string {
@@ -391,19 +476,79 @@ async function repoAt($: $, cwd?: string): Promise<Repo | undefined> {
   return { top: top.out, common: common.out, mainRoot: common.out.replace(/[\\/]\.git$/, '') }
 }
 
-const slotFile = (repo: Repo) => `${repo.common}/claude-worktrees/slots.json`
+const stateFile = (repo: Repo) => `${repo.common}/claude-worktrees/slots.json`
+const lockDir = (repo: Repo) => `${repo.common}/claude-worktrees/slots.lock`
 
-// slot-table writes in this process run one at a time, so parallel agents never draw the same slot
-let slotChain: Promise<unknown> = Promise.resolve()
-function withSlots<T>($: $, repo: Repo, fn: (table: SlotTable) => Promise<{ table: SlotTable; value: T }>): Promise<T> {
-  const step = slotChain.then(async () => {
-    const text = (await $.fs.exists(slotFile(repo))) ? await $.fs.read(slotFile(repo)) : undefined
-    const { table, value } = await fn(parseSlots(text as string | undefined))
-    await $.fs.write(slotFile(repo), JSON.stringify(table, null, 2) + '\n')
-    return value
+async function readState($: $, repo: Repo): Promise<State> {
+  return parseState((await $.fs.exists(stateFile(repo))) ? ((await $.fs.read(stateFile(repo))) as string) : undefined)
+}
+
+// Creating a directory either succeeds or finds it there, atomically: the lock across sessions.
+async function takeLock($: $, repo: Repo, windows: boolean): Promise<boolean> {
+  const dir = lockDir(repo)
+  const r = windows
+    ? await run($, ['cmd.exe', '/d', '/c', 'mkdir', dir.replace(/\//g, '\\')])
+    : await run($, ['sh', '-c', 'mkdir -p "$(dirname "$1")" && mkdir "$1"', 'sh', dir])
+  return r.exitCode === 0
+}
+
+async function dropLock($: $, repo: Repo, windows: boolean): Promise<void> {
+  const dir = lockDir(repo)
+  await (windows ? run($, ['cmd.exe', '/d', '/c', 'rmdir', dir.replace(/\//g, '\\')]) : run($, ['rmdir', dir]))
+}
+
+// State writes run one at a time: in this process by a promise chain, across sessions by the lock directory,
+// with slots.json read again under the lock, so parallel agents never draw the same slot.
+let stateChain: Promise<unknown> = Promise.resolve()
+function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>): Promise<T> {
+  const step = stateChain.then(async () => {
+    const windows = await isWindows($)
+    for (let tries = 0; !(await takeLock($, repo, windows)); tries++) {
+      const stat = await $.fs.stat(lockDir(repo)).catch(() => undefined)
+      if (stat !== undefined && lockStep((await $.clock.now()) - stat.mtimeMs) === 'break') await dropLock($, repo, windows)
+      else if (tries > 200) throw new Error('slots.lock stayed taken')
+      else await $.clock.sleep(100)
+    }
+    try {
+      const { state, value } = await fn(await readState($, repo))
+      await $.fs.write(stateFile(repo), serializeState(state))
+      return value
+    } finally {
+      await dropLock($, repo, windows)
+    }
   })
-  slotChain = step.catch(() => undefined)
+  stateChain = step.catch(() => undefined)
   return step
+}
+
+// Copies the gitignored files `.worktreeinclude` names from the main checkout into a new worktree. Answers a
+// note for the debug log, or '' when the repo has no such file.
+async function copyIncluded($: $, repo: Repo, path: string, windows: boolean): Promise<string> {
+  const include = `${repo.mainRoot}/.worktreeinclude`
+  if (!(await $.fs.exists(include))) return ''
+  // untracked files the include patterns match, kept only where .gitignore ignores them too
+  const listed = await git($, repo.mainRoot, 'ls-files', '--others', '--ignored', `--exclude-from=${include}`)
+  const candidates = listed.out.split('\n').filter(Boolean)
+  if (candidates.length === 0) return '.worktreeinclude matched no files'
+  const checked = await $.process.run(['git', 'check-ignore', '--stdin'], { cwd: repo.mainRoot, stdin: candidates.join('\n') + '\n' })
+  const files = includedFiles(candidates, checked.stdout)
+  if (files.length === 0) return '.worktreeinclude matched no ignored files'
+  const r = windows
+    ? await $.process.run(
+        [
+          'powershell.exe',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '$src = $env:WT_SRC; $dst = $env:WT_DST; $input | ForEach-Object { if ($_) { $t = Join-Path $dst $_; New-Item -ItemType Directory -Force (Split-Path $t) | Out-Null; Copy-Item -LiteralPath (Join-Path $src $_) -Destination $t -Force } }',
+        ],
+        { env: { WT_SRC: repo.mainRoot, WT_DST: path }, stdin: files.join('\n') + '\n', timeoutMs: 600_000 },
+      )
+    : await $.process.run(
+        ['sh', '-c', 'while IFS= read -r f; do [ -n "$f" ] || continue; mkdir -p "$2/$(dirname "$f")" && cp -p "$1/$f" "$2/$f"; done', 'sh', repo.mainRoot, path],
+        { stdin: files.join('\n') + '\n', timeoutMs: 600_000 },
+      )
+  return r.exitCode === 0 ? `copied ${files.length} .worktreeinclude file(s)` : `.worktreeinclude copy failed: ${r.stderr.slice(0, 300)}`
 }
 
 function portBaseOf(options: Record<string, unknown>): number {
@@ -415,21 +560,30 @@ function portBaseOf(options: Record<string, unknown>): number {
 // or when the worktree folder is gone.
 async function cleanWorktree($: $, repo: Repo, path: string, base: number, release: boolean): Promise<string[]> {
   const windows = await isWindows($)
-  const slot = slotOf(parseSlots((await $.fs.exists(slotFile(repo))) ? ((await $.fs.read(slotFile(repo))) as string) : undefined), path, windows)
+  const state = await readState($, repo)
+  const slot = slotOf(state.slots, path, windows)
   const notes = await stopProcesses($, windows, [path], slot === undefined ? [] : ports(base, slot))
-  if (slot !== undefined && (release || !(await $.fs.exists(path)))) {
-    await withSlots($, repo, async table => ({ table: releaseSlot(table, path, windows), value: undefined }))
+  const freeSlot = slot !== undefined && (release || !(await $.fs.exists(path)))
+  if (freeSlot || state.active[normPath(path, windows)] !== undefined) {
+    await withState($, repo, async s => ({
+      state: markDone(freeSlot ? { ...s, slots: releaseSlot(s.slots, path, windows) } : s, path, windows),
+      value: undefined,
+    }))
   }
   return notes
 }
 
 // --- tidy ---
 
-type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean }
+type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean; removed: string[] }
 
-async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<{ facts: BranchFacts[]; worktrees: Worktree[] }> {
+type Facts = { facts: BranchFacts[]; worktrees: Worktree[]; sync: MainSync; defaultBranch: string }
+
+async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
   const head = await git($, repo.top, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
   const defaultBranch = head.ok ? head.out.replace(/^origin\//, '') : 'main'
+  const state = await readState($, repo)
+  const now = await $.clock.now()
   const current = (await git($, repo.top, 'branch', '--show-current')).out
   const worktrees = parseWorktrees((await git($, repo.top, 'worktree', 'list', '--porcelain')).out)
   const main = worktrees[0]
@@ -447,6 +601,19 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<{ facts:
   const gitMerged = new Set((await git($, repo.top, 'branch', '--merged', mergedRef, '--format=%(refname:short)')).out.split('\n'))
   const hasGh = (await run($, ['gh', 'auth', 'status'], repo.top)).exitCode === 0
   const isAncestor = async (a: string, b: string) => (await git($, repo.top, 'merge-base', '--is-ancestor', a, b)).ok
+
+  // the local default branch, fast-forwarded when strictly behind origin's
+  const localMain = locals.find(([b]) => b === defaultBranch)?.[1]
+  const remoteMain = remotes.get(`origin/${defaultBranch}`)
+  const mainWt = worktrees.find(w => w.branch === defaultBranch)
+  const mainStatus = mainWt !== undefined && (await $.fs.exists(mainWt.path)) ? await git($, mainWt.path, 'status', '--porcelain', '--untracked-files=no') : undefined
+  const sync = decideMainSync({
+    branch: defaultBranch,
+    local: localMain,
+    remote: remoteMain,
+    behind: localMain !== undefined && remoteMain !== undefined && (await isAncestor(localMain, remoteMain)),
+    checkedOut: mainWt === undefined ? undefined : { path: mainWt.path, dirty: mainStatus === undefined || !mainStatus.ok || mainStatus.out !== '' },
+  })
 
   const facts: BranchFacts[] = []
   for (const [branch, tip] of locals) {
@@ -483,6 +650,7 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<{ facts:
         locked: wt.locked,
         isMain: wt === main,
         isSession: normPath(wt.path, windows) === normPath(repo.top, windows),
+        isActive: isActive(state, wt.path, now, windows),
       }
     }
     let remote: BranchFacts['remote']
@@ -490,12 +658,12 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<{ facts:
     if (remoteTip !== undefined) {
       let safe = false
       if (pr !== undefined) for (const h of heads) if (h === remoteTip || (await isAncestor(remoteTip, h))) safe = true
-      if (pr === undefined) safe = await isAncestor(remoteTip, mergedRef)
+      if (!safe) safe = await isAncestor(remoteTip, mergedRef)
       remote = { safe }
     }
     facts.push({ branch, isProtected, pr, gitMerged: gitMerged.has(branch), unpushed, worktree, remote })
   }
-  return { facts, worktrees }
+  return { facts, worktrees, sync, defaultBranch }
 }
 
 export async function tidy($: $, options: Record<string, unknown>, dryRun: boolean): Promise<TidyReport | undefined> {
@@ -505,8 +673,23 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
   const lines: string[] = []
   let acted = false
   if (!(await git($, repo.top, 'fetch', '--prune', 'origin')).ok) lines.push('git fetch failed; using the remote branches as last fetched')
-  const { facts, worktrees } = await gatherFacts($, repo, windows)
+  const { facts, worktrees, sync, defaultBranch } = await gatherFacts($, repo, windows)
   const plans = facts.map(decideBranch)
+  const removed: string[] = []
+
+  if (sync.kind === 'none' && sync.reason) lines.push(sync.reason)
+  if (sync.kind !== 'none') {
+    const what = `fast-forward ${defaultBranch} to origin/${defaultBranch} (${sync.to.slice(0, 7)})`
+    if (dryRun) lines.push(`would: ${what}`)
+    else {
+      const done =
+        sync.kind === 'update-ref'
+          ? await git($, repo.top, 'update-ref', `refs/heads/${defaultBranch}`, sync.to, sync.from)
+          : await git($, sync.worktree, 'merge', '--ff-only', '--quiet', `origin/${defaultBranch}`)
+      lines.push(done.ok ? `${what}: done` : `${what} failed: ${done.err.split('\n')[0]}`)
+      if (done.ok) acted = true
+    }
+  }
 
   if (!dryRun && plans.some(p => p.kind === 'delete' && p.prune)) await git($, repo.top, 'worktree', 'prune')
   const base = portBaseOf(options)
@@ -525,7 +708,8 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
         lines.push(`${plan.branch}: worktree remove failed, left the branch: ${removed.err.split('\n')[0]}`)
         continue
       }
-      await withSlots($, repo, async table => ({ table: releaseSlot(table, plan.worktreePath as string, windows), value: undefined }))
+      const gone = plan.worktreePath
+      await withState($, repo, async s => ({ state: markDone({ ...s, slots: releaseSlot(s.slots, gone, windows) }, gone, windows), value: undefined }))
     }
     let deleted = await git($, repo.top, 'branch', '-d', plan.branch)
     if (!deleted.ok && plan.allowForce) deleted = await git($, repo.top, 'branch', '-D', plan.branch)
@@ -539,6 +723,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       if (!pushed.ok) line += ` (remote delete failed: ${pushed.err.split('\n')[0]})`
     }
     lines.push(line)
+    removed.push(plan.branch)
   }
   if (acted) await git($, repo.top, 'fetch', '--prune', 'origin')
 
@@ -552,7 +737,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       if (!live.has(path) && !dead.has(path) && !(await $.fs.exists(path))) dead.add(path)
     }
   }
-  const table = parseSlots((await $.fs.exists(slotFile(repo))) ? ((await $.fs.read(slotFile(repo))) as string) : undefined)
+  const table = (await readState($, repo)).slots
   const deadSlots: [number, Slot][] = []
   for (const [n, s] of Object.entries(table.slots)) if (!(await $.fs.exists(s.path))) deadSlots.push([Number(n), s])
   const orphanPorts = deadSlots.flatMap(([n]) => ports(base, n))
@@ -562,12 +747,15 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
     lines.push(...stopped.map(l => `orphan: ${l}`))
     if (!dryRun && stopped.some(l => l.startsWith('stopped'))) acted = true
     if (!dryRun && deadSlots.length > 0) {
-      await withSlots($, repo, async t => ({ table: deadSlots.reduce((acc, [, s]) => releaseSlot(acc, s.path, windows), t), value: undefined }))
+      await withState($, repo, async t => ({
+        state: deadSlots.reduce((acc, [, s]) => markDone({ ...acc, slots: releaseSlot(acc.slots, s.path, windows) }, s.path, windows), t),
+        value: undefined,
+      }))
       lines.push(`released slot${deadSlots.length === 1 ? '' : 's'} ${deadSlots.map(([n]) => n).join(', ')} (worktree gone)`)
     }
   }
   for (const plan of plans) if (plan.kind === 'skip') lines.push(describePlan(plan))
-  return { plans, lines, acted }
+  return { plans, lines, acted, removed }
 }
 
 // a SessionStart tidy at most every 10 minutes per repo, so resumes and parallel sessions do not repeat it
@@ -586,14 +774,17 @@ async function tidyOnStart($: $, options: Record<string, unknown>): Promise<void
   const report = await tidy($, options, false)
   if (report === undefined) return
   await $.ui.log(`worktrees tidy:\n${report.lines.join('\n')}`, { to: 'debug' })
-  const removed = report.lines.filter(l => l.startsWith('removed ')).length
   const stopped = report.lines.filter(l => l.startsWith('orphan: stopped')).length
-  if (removed + stopped > 0) {
+  const synced = report.lines.find(l => l.startsWith('fast-forward ') && l.endsWith(': done'))
+  if (report.removed.length + stopped > 0 || synced !== undefined) {
     const skipped = report.plans.filter(p => p.kind === 'skip').length
-    await $.ui.toast(
-      `worktrees: removed ${removed} merged branch${removed === 1 ? '' : 'es'}, stopped ${stopped} orphan process${stopped === 1 ? '' : 'es'}` +
-        (skipped > 0 ? `; ${skipped} skipped (/tidy dry-run says why)` : ''),
-    )
+    const parts = [
+      report.removed.length > 0 ? `deleted merged ${report.removed.join(', ')}` : '',
+      stopped > 0 ? `stopped ${stopped} orphan process${stopped === 1 ? '' : 'es'}` : '',
+      synced !== undefined ? synced.replace(/: done$/, '') : '',
+      skipped > 0 ? `${skipped} skipped (/tidy dry-run says why)` : '',
+    ]
+    await $.ui.toast(`worktrees: ${parts.filter(Boolean).join('; ')}`)
   }
 }
 
@@ -619,33 +810,43 @@ export const register: Register = (on, options) => {
     return { ...result, updatedInput: withWorktree(input) }
   }).catch(passThrough)
 
-  // 2. A repo with a setup script gets worktrees this plugin creates, each with a slot of ports.
+  // 2. The plugin creates every worktree itself, from the HEAD of the checkout the hook runs in: Claude Code's
+  // default starts from origin/HEAD and misses the session's unmerged work. Then `.worktreeinclude` files are
+  // copied, and the repo's setup script runs with a slot of ports.
   on('classic.WorktreeCreate', async ($, e, next) => {
     const windows = await isWindows($)
     const repo = await repoAt($, e.cwd)
     if (repo === undefined || !/^[A-Za-z0-9._-]+$/.test(e.name)) return next(e)
-    const script = `${repo.top}/.claude/worktree-setup.${windows ? 'ps1' : 'sh'}`
-    if (!(await $.fs.exists(script))) return next(e)
-
     const path = `${repo.mainRoot}/.claude/worktrees/${e.name}`
     const branch = `worktree-${e.name}`
-    if (!(await $.fs.exists(path))) {
-      const head = await git($, repo.top, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
-      const start = head.ok ? head.out : 'HEAD'
-      const exists = (await git($, repo.top, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`)).ok
-      const added = exists
-        ? await git($, repo.top, 'worktree', 'add', path, branch)
-        : await git($, repo.top, 'worktree', 'add', '-b', branch, path, start)
+    const head = await git($, e.cwd, 'rev-parse', '--verify', '--quiet', 'HEAD')
+    const plan = planCreate({
+      pathExists: await $.fs.exists(path),
+      branchExists: (await git($, repo.top, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`)).ok,
+      head: head.ok ? head.out : undefined,
+    })
+    if (plan.kind === 'default') return next(e)
+    if (plan.kind !== 'reuse') {
+      const added =
+        plan.kind === 'add-branch'
+          ? await git($, repo.top, 'worktree', 'add', path, branch)
+          : await git($, repo.top, 'worktree', 'add', '-b', branch, path, plan.base)
       if (!added.ok) {
         await $.ui.toast(`worktrees: git worktree add failed; using the default worktree`)
         await $.ui.log(`worktrees: git worktree add ${path}: ${added.err}`, { to: 'debug' })
         return next(e)
       }
+      const copied = await copyIncluded($, repo, path, windows)
+      if (copied !== '') await $.ui.log(`worktrees: ${copied}`, { to: 'debug' })
     }
     const now = await $.clock.now()
-    const slot = await withSlots($, repo, async table => {
-      const claimed = claimSlot(table, path, e.name, now, windows)
-      return { table: claimed.table, value: claimed.slot }
+    await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }))
+    const script = `${repo.top}/.claude/worktree-setup.${windows ? 'ps1' : 'sh'}`
+    if (!(await $.fs.exists(script))) return { worktreePath: path }
+
+    const slot = await withState($, repo, async state => {
+      const claimed = claimSlot(state.slots, path, e.name, now, windows)
+      return { state: { ...state, slots: claimed.table }, value: claimed.slot }
     })
     const [from, to] = portRange(base, slot)
     const env = { WORKTREE_PATH: path, WORKTREE_NAME: e.name, WORKTREE_SLOT: String(slot), PORT_BASE: String(from), REPO_ROOT: repo.mainRoot }
@@ -698,7 +899,7 @@ export const register: Register = (on, options) => {
       // a session that itself runs in a worktree keeps what it started there
       const own = worktreeRootOf(await $.session.cwd())
       if (own !== undefined && normPath(own, windows) === normPath(path, windows)) continue
-      const table = parseSlots((await $.fs.exists(slotFile(repo))) ? ((await $.fs.read(slotFile(repo))) as string) : undefined)
+      const table = (await readState($, repo)).slots
       if (!(await $.fs.exists(path)) && slotOf(table, path, windows) === undefined) continue
       // the process probe takes seconds on Windows: run it after the agent's stop, not inside it
       $.clock.after(0, () => {
