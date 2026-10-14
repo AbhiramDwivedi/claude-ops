@@ -820,18 +820,10 @@ async function removeWorktree($: $, cwd: string, path: string, windows: boolean)
 
 // --- self-cleanup ---
 
-// `stopProcesses` false skips the process probe (seconds on Windows), as at session end. `timeLeft`: the time left to
-// work in, when something bounds it; the sweep stops before it runs out.
-type SweepOptions = { stopProcesses: boolean; timeLeft?: () => number }
-
-// a path is started only with this much time left, and a removal only with REMOVE_MS
-const SWEEP_PATH_MS = 600
-const SWEEP_REMOVE_MS = 1000
-
 // Removes the worktrees in `tracked` (normalised path to path) whose agent is done, that are clean, and whose branch
 // is merged into the HEAD of the session's own checkout; then their branch with `git branch -d`. Answers what it
 // removed, for the toast. Removed paths, and paths that can never qualify, drop out of `tracked`.
-async function selfClean($: $, tracked: Map<string, string>, base: number, opts: SweepOptions): Promise<string[]> {
+async function selfClean($: $, tracked: Map<string, string>, base: number): Promise<string[]> {
   if (tracked.size === 0) return []
   const windows = await isWindows($)
   const cwd = await $.session.cwd()
@@ -844,10 +836,6 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, opts:
   const now = await $.clock.now()
   const removed: string[] = []
   for (const [key, path] of [...tracked]) {
-    if (opts.timeLeft !== undefined && opts.timeLeft() < SWEEP_PATH_MS) {
-      await log(`self-clean stopped: out of time with ${path} and after it unchecked`)
-      break
-    }
     const wt = worktrees.find(w => normPath(w.path, windows) === key)
     const branch = wt?.branch
     let dirty = false
@@ -875,22 +863,14 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, opts:
       if (plan.forget) tracked.delete(key)
       continue
     }
-    if (opts.timeLeft !== undefined && opts.timeLeft() < SWEEP_REMOVE_MS) {
-      await log(`self-clean skipped ${path}: not enough time left to remove it`)
-      continue
-    }
-    if (opts.stopProcesses) {
-      const notes = await cleanWorktree($, repo, path, base, true)
-      if (notes.length > 0) await log(notes.join('\n'))
-    }
+    const notes = await cleanWorktree($, repo, path, base, true)
+    if (notes.length > 0) await log(notes.join('\n'))
     const done = await removeWorktree($, cwd, path, windows)
     if (!done.ok) {
       await log(`self-clean could not remove ${path}: ${done.err}`)
       continue
     }
     tracked.delete(key)
-    // cleanWorktree already freed the slot when it ran
-    if (!opts.stopProcesses) await withState($, repo, async s => ({ state: markDone({ ...s, slots: releaseSlot(s.slots, path, windows) }, path, windows), value: undefined }))
     const deleted = await git($, cwd, 'branch', '-d', plan.branch)
     if (deleted.ok) removed.push(plan.branch)
     else {
@@ -902,18 +882,13 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, opts:
 }
 
 // a session's tracked worktrees (normalised path to path) and its sweeps, which run one at a time
-type Sweeps = { tracked: Map<string, string>; chain: Promise<void>; busy: boolean }
+type Sweeps = { tracked: Map<string, string>; chain: Promise<void> }
 
-function sweep($: $, s: Sweeps, base: number, opts: SweepOptions, toast: boolean): Promise<void> {
+function sweep($: $, s: Sweeps, base: number): Promise<void> {
   s.chain = s.chain
     .then(async () => {
-      s.busy = true
-      try {
-        const removed = await selfClean($, s.tracked, base, opts)
-        if (removed.length > 0 && toast) await $.ui.toast(`worktrees: removed merged ${removed.join(', ')}`)
-      } finally {
-        s.busy = false
-      }
+      const removed = await selfClean($, s.tracked, base)
+      if (removed.length > 0) await $.ui.toast(`worktrees: removed merged ${removed.join(', ')}`)
     })
     .catch(error => $.ui.log(`worktrees: self-clean failed: ${String(error)}`, { to: 'debug' }))
   return s.chain
@@ -1171,7 +1146,7 @@ export const register: Register = (on, options) => {
   let inRepo: boolean | undefined
   // the worktrees this session's WorktreeCreate made or reused; in memory on purpose: what a resumed or crashed
   // session left is for /tidy
-  const own: Sweeps = { tracked: new Map(), chain: Promise.resolve(), busy: false }
+  const own: Sweeps = { tracked: new Map(), chain: Promise.resolve() }
   const tracked = own.tracked
 
   // 1. Every Agent call that can edit gets a worktree.
@@ -1328,15 +1303,8 @@ export const register: Register = (on, options) => {
     if (tracked.size === 0 || (e.tool_name !== 'Bash' && e.tool_name !== 'PowerShell')) return result
     const command = (e.tool_input as { command?: unknown } | null)?.command
     if (typeof command !== 'string' || !/\bmerge\b/.test(command)) return result
-    $.clock.after(0, () => void sweep($, own, base, { stopProcesses: true }, true))
+    $.clock.after(0, () => void sweep($, own, base))
     return result
-  }).catch(passThrough)
-
-  // At exit the whole chain shares one short bound (1.5 s by default), which a Windows process probe alone outruns:
-  // this sweep stops no processes, starts nothing it lacks the time for, and leaves to /tidy what it cannot finish.
-  on('session.end', async ($, e, next) => {
-    if (tracked.size > 0 && !own.busy) await sweep($, own, base, { stopProcesses: false, timeLeft: () => next.budget.remainingMs }, false)
-    return next(e)
   }).catch(passThrough)
 
   on('session.start', async ($, e, next) => {

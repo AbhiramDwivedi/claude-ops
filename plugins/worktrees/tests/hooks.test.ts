@@ -282,18 +282,6 @@ test('no longer tidies at session start', async ($, on) => {
   expect(ran).toEqual([])
 })
 
-test('sweeps what is still tracked at session end, without the process probe', async ($, on) => {
-  const { ran, files } = sessionRepo(on)
-  on('session.end', async (_, e) => ({ sessionId: e.sessionId }))
-  await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
-  files.set(STATE, JSON.stringify({ slots: {}, active: {} }))
-  ran.length = 0
-  await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: { id: 's1' } } as never)
-  expect(ran).toContain(`git -c core.longpaths=true worktree remove ${X1}`)
-  expect(ran).toContain('git branch -d worktree-agent-x1')
-  expect(ran.some(r => r.startsWith('powershell.exe'))).toBe(false)
-})
-
 test('finishes a remove git failed after unregistering the worktree, and reports one still registered', async ($, on) => {
   // git fails the remove; `unregisters` says whether it had already dropped the worktree from its list
   let unregisters = false
