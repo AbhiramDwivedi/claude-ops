@@ -103,7 +103,7 @@ Claude Code also has a built-in mod worth turning on alongside these. "You shoul
 
 ## Reading the agents line
 
-`model: Opus` is the main thread's model. Until a subagent is running, that and its effort are all the line shows.
+`model: Opus` is the main thread's model. Until a subagent is running, that, its effort and the directory are all the line shows.
 
 `effort: high` is the effort the main thread's latest request asked for: a level, or a token budget such as `32K`. It appears after the first request, follows `/effort` at the next one, and is absent for a model that takes no effort.
 
@@ -112,6 +112,8 @@ Claude Code also has a built-in mod worth turning on alongside these. "You shoul
 `⚠ 14 live` appears while at least `liveAgentsWarn` agents are running. The toast fires once. It fires again only after the count drops 2 below the threshold, and never twice within 10 minutes.
 
 `⚠ ctx 910K` is the largest context any running agent sent with its last request. The agent pays for that context again on every request, so a handful at this size will drain a window fast. Each agent gets one toast when it first crosses `contextWarnK`.
+
+`cwd: ~/src/app` is the session's working directory, with your home folder as `~`. It follows a shell `cd`, `/cd` and worktree moves. A path too long for the band is cut from its start, as `…/plugins/session-models`; the status-line fallback shows it whole.
 
 ## What subagent-limits does
 
