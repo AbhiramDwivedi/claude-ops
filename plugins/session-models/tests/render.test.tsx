@@ -18,10 +18,13 @@ const BAND: RenderPropsOf['AbovePrompt'] = {
 // and toasts kept in memory, a band line beneath as another plugin's would be, and every
 // request answered with `context` tokens, all of them read from the cache
 function world(on: On, surfaces: readonly ('terminal' | 'desktop' | 'vscode' | 'mobile')[], context: number) {
-  const seen = { status: undefined as string | undefined, toasts: [] as string[] }
+  const seen = { status: undefined as string | undefined, toasts: [] as string[], cwd: '/home/me/app' }
   mock.clock(on, { now: NOW })
   on('session.surfaces', () => ({ value: surfaces }))
   on('session.model', () => ({ value: opus }))
+  on('session.cwd', () => ({ value: seen.cwd }))
+  on('env.get', (_$, e) => ({ value: e.name === 'HOME' ? '/home/me' : undefined }))
+  on('classic.CwdChanged', async () => ({}))
   on('agent.list', () => ({
     value: [{ id: 'a1', description: 'Builder A', type: 'general-purpose', status: 'running' as const }],
   }))
@@ -86,6 +89,7 @@ test('draws the line dim in the band, the crowd and big-context warnings in the 
     expect(texts.filter(t => t.props.dimColor === true).map(t => t.text)).toEqual([
       'model: Opus · agents: Opus (2) · ',
       ' · ',
+      ' · cwd: ~/app',
     ])
     // what was drawn beneath stays, above this plugin's line
     expect(texts[0]!.text).toBe('beneath')
@@ -101,18 +105,43 @@ test('draws a calm session all dim', async ($, on) => {
   const ui = await $.ui.mount({ plugin: 'session-models', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   const texts = await ui.findAll({ type: 'Text' })
   expect(texts.filter(t => t.props.color === 'warning')).toEqual([])
-  expect(texts.filter(t => t.props.dimColor === true).map(t => t.text)).toEqual(['model: Opus'])
+  expect(texts.filter(t => t.props.dimColor === true).map(t => t.text)).toEqual(['model: Opus · cwd: ~/app'])
 })
 
 test("shows the main thread's effort, and follows a change at its next request", async ($, on) => {
   const seen = world(on, ['mobile'], 50_000)
   await step($, undefined, 'high')
-  expect(seen.status).toBe('model: Opus · effort: high')
+  expect(seen.status).toBe('model: Opus · effort: high · cwd: ~/app')
   // a subagent's effort is its own, not the session's
   await step($, 'a1', 'low')
-  expect(seen.status).toBe('model: Opus · effort: high · agents: Opus (1 high, 1 low)')
+  expect(seen.status).toBe('model: Opus · effort: high · agents: Opus (1 high, 1 low) · cwd: ~/app')
   await step($, undefined, 'max')
-  expect(seen.status).toBe('model: Opus · effort: max · agents: Opus (1 max, 1 low)')
+  expect(seen.status).toBe('model: Opus · effort: max · agents: Opus (1 max, 1 low) · cwd: ~/app')
+})
+
+test('follows a directory change, and cuts a long one from its head in a narrow band', async ($, on) => {
+  const seen = world(on, ['terminal'], 50_000)
+  await step($)
+  seen.cwd = '/srv/projects/claude-mods/plugins/session-models'
+  await $.classic.CwdChanged({ old_cwd: '/home/me/app', new_cwd: seen.cwd } as never)
+  const ui = await $.ui.mount({
+    plugin: 'session-models',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: { ...BAND, bodyColumns: 45 },
+  })
+  const texts = await ui.findAll({ type: 'Text' })
+  expect(texts.filter(t => t.props.dimColor === true).map(t => t.text)).toEqual([
+    'model: Opus · cwd: …/plugins/session-models',
+  ])
+  await ui.unmount()
+})
+
+test('gives the status the whole directory', async ($, on) => {
+  const seen = world(on, ['vscode'], 50_000)
+  seen.cwd = '/srv/projects/claude-mods/plugins/session-models'
+  await step($)
+  expect(seen.status).toBe('model: Opus · cwd: /srv/projects/claude-mods/plugins/session-models')
 })
 
 test("keeps another plugin's band line beside its own", {
@@ -137,7 +166,7 @@ test("keeps another plugin's band line beside its own", {
   await step($)
   const ui = await $.ui.mount({ plugin: 'session-models', surface: 'terminal', component: 'AbovePrompt', props: BAND })
   expect(await ui.find({ type: 'Text', text: 'other line' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'model: Opus' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'model: Opus · cwd: ~/app' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'beneath' })).toBeDefined()
 })
 
@@ -145,7 +174,7 @@ test('falls back to the status line only where no surface has a band', CROWD, as
   const seen = world(on, ['mobile'], 350_000)
   await step($)
   await step($, 'a1')
-  expect(seen.status).toBe('model: Opus · agents: Opus (2) · ⚠ 2 live · ⚠ ctx 350K')
+  expect(seen.status).toBe('model: Opus · agents: Opus (2) · ⚠ 2 live · ⚠ ctx 350K · cwd: ~/app')
 })
 
 test('keeps the terminal quiet when a phone is attached beside it', CROWD, async ($, on) => {

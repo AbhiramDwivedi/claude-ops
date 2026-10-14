@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { AgentStatus, EngineInterface, Register } from 'claude-code'
 
 import type { AgentsSeen } from '../types'
 
@@ -29,7 +29,13 @@ export function tokens(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`
 }
 
-// the agents running now: the main thread always, plus every running subagent or teammate
+// an agent at work: taking a turn, or held on background work it owns (a long shell,
+// an Agent call it waits on); an idle teammate waits for a message and is not
+export function isLive(status: AgentStatus): boolean {
+  return status === 'running' || status === 'waiting'
+}
+
+// the agents running now: the main thread always, plus every live subagent or teammate
 export function liveAgents(agents: AgentsSeen, running: ReadonlySet<string>): string[] {
   return Object.keys(agents).filter(id => id === 'main' || running.has(id))
 }
@@ -49,16 +55,32 @@ export function effortLabel(effort: string | number): string {
   return typeof effort === 'number' ? tokens(effort) : effort
 }
 
-// "model: Opus · effort: high · agents: Opus (12 medium, 1 high), Sonnet (2 low) · ⚠ 15 live · ⚠ ctx 955K"
+// /home/me/src/app -> ~/src/app; a path outside home, or no home known, as-is
+export function shortPath(path: string, home: string | undefined): string {
+  if (home === undefined || home === '') return path
+  const h = home.replace(/[\\/]+$/, '')
+  // a Windows path matches without case
+  const isUnder = /^[a-z]:/i.test(h) ? path.toLowerCase().startsWith(h.toLowerCase()) : path.startsWith(h)
+  if (!isUnder) return path
+  const rest = path.slice(h.length)
+  if (rest === '') return '~'
+  // /home/meg is not under /home/me
+  return /^[\\/]/.test(rest) ? `~${rest}` : path
+}
+
+// "model: Opus · effort: high · agents: Opus (12 medium, 1 high), Sonnet (2 low) · ⚠ 15 live · ⚠ ctx 955K · cwd: ~/src/app"
 // the agents part counts the live ones, main included, by the model and effort of each
-// one's latest request; it appears while anything beyond the main thread is running
+// one's latest request; it appears while anything beyond the main thread is running.
+// The directory goes last, so a long path is cut (from its head, by fitLine) rather
+// than pushing the warnings out of sight
 export function formatModels(
   current: string,
   agents: AgentsSeen,
   running: ReadonlySet<string>,
   limits: Thresholds,
+  cwd?: string,
 ): string {
-  return modelParts(current, agents, running, limits).join(' · ')
+  return modelParts(current, agents, running, limits, cwd).join(' · ')
 }
 
 // the line's parts, as formatModels joins them
@@ -67,6 +89,7 @@ export function modelParts(
   agents: AgentsSeen,
   running: ReadonlySet<string>,
   limits: Thresholds,
+  cwd?: string,
 ): string[] {
   const parts = [`model: ${family(current)}`]
   // the main thread's latest request; unknown until it has made one
@@ -101,7 +124,24 @@ export function modelParts(
   if (live.size >= limits.liveAgents) parts.push(`⚠ ${live.size} live`)
   const top = biggestContext(agents, [...live], limits.context)
   if (top !== undefined) parts.push(`⚠ ctx ${tokens(top.context)}`)
+  if (cwd !== undefined) parts.push(`cwd: ${cwd}`)
   return parts
+}
+
+// the line within `columns`: a directory too long loses its head, cut back to a path
+// separator where one falls in the kept tail, so the folders nearest it stay readable
+export function fitLine(parts: readonly string[], columns: number): string[] {
+  const last = parts[parts.length - 1]
+  if (last === undefined || !last.startsWith('cwd: ')) return [...parts]
+  const width = (s: string) => Array.from(s).length
+  const path = Array.from(last.slice('cwd: '.length))
+  const over = width(parts.join(' · ')) - columns
+  if (over <= 0) return [...parts]
+  const room = path.length - over - 1
+  let tail = room > 0 ? path.slice(path.length - room).join('') : ''
+  const cut = tail.search(/[\\/]/)
+  if (cut > 0) tail = tail.slice(cut)
+  return [...parts.slice(0, -1), `cwd: …${tail}`]
 }
 
 // the line as runs of text: each part marked ⚠ a warning run of its own, the other
@@ -172,9 +212,11 @@ async function refresh($: EngineInterface, limits: Thresholds) {
   lastRefreshAt = now
   const agents = await read($, agentsSeen)
   const listed = await $.agent.list()
-  const running = new Set(listed.filter(a => a.status === 'running').map(a => a.id))
+  const running = new Set(listed.filter(a => isLive(a.status)).map(a => a.id))
   const descriptions = new Map(listed.map(a => [a.id, a.description]))
-  await show($, modelParts(await $.session.model(), agents, running, limits))
+  const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
+  const cwd = shortPath(await $.session.cwd(), home)
+  await show($, modelParts(await $.session.model(), agents, running, limits, cwd))
 
   const live = liveAgents(agents, running)
   const alarm = crowdAlarm(crowd, live.length, now, limits.liveAgents)
@@ -232,9 +274,17 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // these two gate the engine: a failed redraw must not fail the switch or the move
   on('classic.PostModelSwitch', async ($, e, next) => {
     const result = await next(e)
-    await refresh($, limits)
+    await refresh($, limits).catch(() => undefined)
+    return result
+  })
+
+  // a shell `cd`, `/cd` or a worktree move
+  on('classic.CwdChanged', async ($, e, next) => {
+    const result = await next(e)
+    await refresh($, limits).catch(() => undefined)
     return result
   })
 
@@ -260,7 +310,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {below}
         <Text wrap="truncate-end">
-          {runs(line).map(r => (r.isWarning ? <Text color="warning">{r.text}</Text> : <Text dimColor>{r.text}</Text>))}
+          {runs(fitLine(line, e.props.bodyColumns)).map(r => (r.isWarning ? <Text color="warning">{r.text}</Text> : <Text dimColor>{r.text}</Text>))}
         </Text>
       </Box>
     )

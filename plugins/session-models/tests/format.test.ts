@@ -1,6 +1,19 @@
 import { expect, test } from 'claude-code/testing'
 
-import { agentLabel, biggestContext, crowdAlarm, effortLabel, family, formatModels, liveAgents, setting, tokens } from '../hooks/register'
+import {
+  agentLabel,
+  biggestContext,
+  crowdAlarm,
+  effortLabel,
+  family,
+  fitLine,
+  formatModels,
+  isLive,
+  liveAgents,
+  setting,
+  shortPath,
+  tokens,
+} from '../hooks/register'
 
 const LIMITS = { liveAgents: 6, context: 300_000 }
 const MIN = 60_000
@@ -16,6 +29,12 @@ test('names model families', async () => {
 test('formats token counts', async () => {
   expect(tokens(955_492)).toBe('955K')
   expect(tokens(1_200_000)).toBe('1.2M')
+})
+
+test('counts an agent held on its own background work as live', async () => {
+  expect(isLive('running')).toBe(true)
+  expect(isLive('waiting')).toBe(true)
+  for (const status of ['pending', 'idle', 'completed', 'failed', 'killed'] as const) expect(isLive(status)).toBe(false)
 })
 
 test('shows the model alone until an agent beyond the main thread is running', async () => {
@@ -107,6 +126,30 @@ test('holds settings within bounds', async () => {
   expect(setting(undefined, 6, 2, 100)).toBe(6)
   expect(setting(0, 6, 2, 100)).toBe(2)
   expect(setting('lots', 6, 2, 100)).toBe(6)
+})
+
+test('shows the directory last, home as ~', async () => {
+  expect(formatModels(opus, {}, new Set(), LIMITS, '~/src/app')).toBe('model: Opus · cwd: ~/src/app')
+  expect(shortPath('/home/me/src/app', '/home/me')).toBe('~/src/app')
+  expect(shortPath('/home/me', '/home/me/')).toBe('~')
+  expect(shortPath('/home/meg/src', '/home/me')).toBe('/home/meg/src')
+  expect(shortPath('c:\\users\\me\\src', 'C:\\Users\\me')).toBe('~\\src')
+  expect(shortPath('C:\\sw\\claude-mods', 'C:\\Users\\me')).toBe('C:\\sw\\claude-mods')
+  expect(shortPath('/srv/app', undefined)).toBe('/srv/app')
+})
+
+test('cuts a long directory from its head, at a separator, to fit the band', async () => {
+  const parts = ['model: Opus', '⚠ 7 live', 'cwd: C:\\sw\\claude-mods\\plugins\\session-models']
+  // it fits: untouched
+  expect(fitLine(parts, 200)).toEqual(parts)
+  // 'model: Opus · ⚠ 7 live · cwd: ' is 30 columns, leaving 26 for the path
+  expect(fitLine(parts, 56)).toEqual(['model: Opus', '⚠ 7 live', 'cwd: …\\plugins\\session-models'])
+  // no separator in the kept tail: a raw cut
+  expect(fitLine(parts, 40)).toEqual(['model: Opus', '⚠ 7 live', 'cwd: …on-models'])
+  // the warnings are never cut for it
+  expect(fitLine(parts, 20)).toEqual(['model: Opus', '⚠ 7 live', 'cwd: …'])
+  // a line without a directory is left alone
+  expect(fitLine(['model: Opus'], 5)).toEqual(['model: Opus'])
 })
 
 test('names an agent by its task in the context toast', async () => {
