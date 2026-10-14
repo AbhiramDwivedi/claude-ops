@@ -1,7 +1,7 @@
 {
   "name": "worktrees",
-  "version": "0.3.0",
-  "description": "Gives every agent that can edit a git worktree of its own, runs a project's setup script with its own port range, kills what an agent left running, and removes worktrees and branches once their PR has merged",
+  "version": "0.4.0",
+  "description": "Gives every agent that can edit a git worktree of its own, runs a project's setup script with its own port range, kills what an agent left running, removes an agent's worktree and branch once the session merges it, and tidies other merged branches on demand with /tidy",
   "author": {
     "name": "Abhiram Dwivedi",
     "url": "https://github.com/AbhiramDwivedi"
@@ -20,12 +20,6 @@
       "title": "Port base",
       "description": "Worktree slot N owns ports portBase + N*10 through portBase + N*10 + 9. Slots start at 1, so portBase..portBase+9 stay free for the main checkout.",
       "default": 4000
-    },
-    "tidyOnStart": {
-      "type": "boolean",
-      "title": "Tidy merged branches at session start",
-      "description": "In the background at session start, remove worktrees and branches (local and remote) whose PR has merged, and stop processes left in deleted worktrees. /tidy does the same on demand.",
-      "default": true
     }
   }
 }

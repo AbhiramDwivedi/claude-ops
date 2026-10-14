@@ -166,3 +166,162 @@ test('tells the main thread to merge agent branches, in a repo only', async ($, 
   const r = await $.classic.SessionStart({ cwd: 'C:/r', source: 'startup' } as never)
   expect(r.additionalContext?.[0]).toContain('worktree-*')
 })
+
+// --- self-cleanup after a merge ---
+
+const X1 = 'C:/r/.claude/worktrees/agent-x1'
+const ZZ = 'C:/r/.claude/worktrees/agent-zz'
+const HEAD_SHA = '4bada1f0123456789abcdef0123456789abcdef0'
+const STATE = 'C:/r/.git/claude-worktrees/slots.json'
+
+// a session in the main checkout C:/r on Windows, with agent-zz's worktree left by another session; `answer`
+// overrides what git says to one command line
+function sessionRepo(on: On, answer: (args: string) => { stdout?: string; exitCode?: number } | undefined = () => undefined) {
+  const ran: string[] = []
+  const toasts: string[] = []
+  const files = new Map<string, string>()
+  const key = (path: string) => path.replace(/\\/g, '/')
+  const clock = mock.clock(on, { now: 1_000_000 })
+  on('classic.WorktreeCreate', async () => ({}))
+  on('classic.PostToolUse', async () => ({}))
+  on('env.get', async () => ({ value: 'Windows_NT' }))
+  on('session.cwd', async () => ({ value: 'C:/r' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('ui.toast', async (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('fs.exists', async (_, e) => ({ value: files.has(key(e.path)) }))
+  on('fs.read', async (_, e) => ({ value: files.get(key(e.path)) ?? '' }))
+  on('fs.write', async (_, e) => {
+    files.set(key(e.path), e.text)
+    return { value: undefined }
+  })
+  on('process.run', async (_, e) => {
+    const args = e.argv.join(' ')
+    ran.push(args)
+    const out = (stdout: string, exitCode = 0) => ({
+      value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'error: boom', isStdoutTruncated: false, isStderrTruncated: false },
+    })
+    const custom = answer(args)
+    if (custom !== undefined) return out(custom.stdout ?? '', custom.exitCode ?? 0)
+    if (args.includes('--show-toplevel')) return out('C:/r\n')
+    if (args.includes('--git-common-dir')) return out('C:/r/.git\n')
+    if (args.endsWith('--verify --quiet HEAD')) return out(`${HEAD_SHA}\n`)
+    if (args.includes('refs/heads/worktree-')) return out('', 1)
+    if (args === 'git worktree list --porcelain') {
+      const wt = (path: string, branch: string) => `worktree ${path}\nHEAD ${HEAD_SHA}\nbranch refs/heads/${branch}\n`
+      return out([wt('C:/r', 'main'), wt(X1, 'worktree-agent-x1'), wt(ZZ, 'worktree-agent-zz')].join('\n'))
+    }
+    return out('')
+  })
+  return { ran, toasts, files, clock }
+}
+
+const bash = (command: string, tool_name = 'Bash') => ({ tool_name, tool_input: { command }, tool_response: '', tool_use_id: 't1', cwd: 'C:/r' }) as never
+
+test('sweeps nothing on a command without merge, another tool, or before the session made a worktree', async ($, on) => {
+  const { ran, clock } = sessionRepo(on)
+  await $.classic.PostToolUse(bash('git merge --ff-only worktree-agent-zz'))
+  await clock.settle()
+  expect(ran).toEqual([])
+  await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
+  ran.length = 0
+  await $.classic.PostToolUse(bash('git status'))
+  await $.classic.PostToolUse(bash('git merge worktree-agent-x1', 'Read'))
+  await clock.settle()
+  expect(ran).toEqual([])
+})
+
+test("removes the session's own merged agent worktree and branch after a merge, and leaves another session's alone", async ($, on) => {
+  const { ran, toasts, files, clock } = sessionRepo(on)
+  await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
+  // a merge while the agent still runs removes nothing
+  await $.classic.PostToolUse(bash('git merge --ff-only worktree-agent-x1'))
+  await clock.settle()
+  expect(ran.some(r => r.includes('worktree remove'))).toBe(false)
+  // its agent stopped: SubagentStop's cleanup marked it done
+  files.set(STATE, JSON.stringify({ slots: {}, active: {} }))
+  ran.length = 0
+  await $.classic.PostToolUse(bash('gh pr merge 12 --squash', 'PowerShell'))
+  await clock.settle()
+  expect(ran).toContain(`git -c core.longpaths=true worktree remove ${X1}`)
+  expect(ran).toContain('git branch -d worktree-agent-x1')
+  expect(ran.some(r => r.includes('agent-zz') && !r.startsWith('git worktree list'))).toBe(false)
+  expect(ran.some(r => r.includes('--force') || r.includes('branch -D') || r.includes('push'))).toBe(false)
+  expect(toasts).toEqual(['worktrees: removed merged worktree-agent-x1'])
+  // removed once: a later merge finds nothing tracked
+  ran.length = 0
+  await $.classic.PostToolUse(bash('git merge other'))
+  await clock.settle()
+  expect(ran).toEqual([])
+})
+
+test('keeps an unmerged or dirty agent worktree, and toasts nothing', async ($, on) => {
+  let status = ''
+  const { ran, toasts, files, clock } = sessionRepo(on, args =>
+    args.startsWith('git merge-base --is-ancestor') ? { exitCode: 1 } : args === 'git rev-parse HEAD^{tree}' ? { stdout: 'headtree\n' } : args.startsWith('git merge-tree') ? { stdout: 'differenttree\n' } : args.startsWith('git status') ? { stdout: status } : undefined,
+  )
+  await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
+  files.set(STATE, JSON.stringify({ slots: {}, active: {} }))
+  await $.classic.PostToolUse(bash('git merge feature'))
+  await clock.settle()
+  expect(ran).toContain('git merge-tree --write-tree HEAD worktree-agent-x1')
+  status = ' M a.ts\n'
+  await $.classic.PostToolUse(bash('git merge feature'))
+  await clock.settle()
+  expect(ran.some(r => r.includes('worktree remove'))).toBe(false)
+  expect(toasts).toEqual([])
+})
+
+test('no longer tidies at session start', async ($, on) => {
+  const { ran, clock } = sessionRepo(on)
+  on('session.start', async (_, e) => e as never)
+  await $.session.start({ cwd: 'C:/r', surface: null } as never)
+  await clock.advance(60_000)
+  expect(ran).toEqual([])
+})
+
+test('sweeps what is still tracked at session end, without the process probe', async ($, on) => {
+  const { ran, files } = sessionRepo(on)
+  on('session.end', async (_, e) => ({ sessionId: e.sessionId }))
+  await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
+  files.set(STATE, JSON.stringify({ slots: {}, active: {} }))
+  ran.length = 0
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: { id: 's1' } } as never)
+  expect(ran).toContain(`git -c core.longpaths=true worktree remove ${X1}`)
+  expect(ran).toContain('git branch -d worktree-agent-x1')
+  expect(ran.some(r => r.startsWith('powershell.exe'))).toBe(false)
+})
+
+test('finishes a remove git failed after unregistering the worktree, and reports one still registered', async ($, on) => {
+  // git fails the remove; `unregisters` says whether it had already dropped the worktree from its list
+  let unregisters = false
+  let tried = false
+  const listing = (withX1: boolean) =>
+    [`worktree C:/r\nHEAD ${HEAD_SHA}\nbranch refs/heads/main\n`, withX1 ? `worktree ${X1}\nHEAD ${HEAD_SHA}\nbranch refs/heads/worktree-agent-x1\n` : ''].join('\n')
+  const { ran, toasts, files, clock } = sessionRepo(on, args => {
+    if (args.includes('worktree remove')) {
+      tried = true
+      return { exitCode: 1 }
+    }
+    return args === 'git worktree list --porcelain' ? { stdout: listing(!(tried && unregisters)) } : undefined
+  })
+  await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
+  files.set(STATE, JSON.stringify({ slots: {}, active: {} }))
+  // still registered after the failure: reported, nothing deleted by hand, the branch kept
+  await $.classic.PostToolUse(bash('git merge feature'))
+  await clock.settle()
+  expect(ran).toContain(`git -c core.longpaths=true worktree remove ${X1}`)
+  expect(ran.some(r => r.startsWith('cmd.exe /d /c rd') || r.includes('worktree prune') || r.includes('branch -d'))).toBe(false)
+  expect(toasts).toEqual([])
+  // unregistered: the ignored files left are deleted with a long-path-safe rd, then pruned, and it counts as removed
+  unregisters = true
+  tried = false
+  await $.classic.PostToolUse(bash('git merge feature'))
+  await clock.settle()
+  expect(ran).toContain('cmd.exe /d /c rd /s /q \\\\?\\C:\\r\\.claude\\worktrees\\agent-x1')
+  expect(ran).toContain('git worktree prune')
+  expect(ran).toContain('git branch -d worktree-agent-x1')
+  expect(toasts).toEqual(['worktrees: removed merged worktree-agent-x1'])
+})

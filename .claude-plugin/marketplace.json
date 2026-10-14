@@ -30,7 +30,7 @@
     },
     {
       "name": "worktrees",
-      "description": "Gives every editing agent its own git worktree from your current commit, stops what agents leave running, and removes merged worktrees and branches",
+      "description": "Gives every editing agent its own git worktree from your current commit, stops what agents leave running, removes each agent's worktree once you merge it, and tidies the rest with /tidy",
       "source": "./plugins/worktrees",
       "category": "productivity"
     },
