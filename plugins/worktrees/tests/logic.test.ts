@@ -1,11 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { BackgroundTask, BranchFacts, Snapshot } from '../hooks/register'
+import type { BackgroundTask, BranchFacts, SelfCleanFacts, Snapshot } from '../hooks/register'
 import {
   ACTIVE_FOR_MS,
   claimSlot,
   decideBranch,
   decideMainSync,
+  decideSelfClean,
   countChanges,
   decideStop,
   findMergedPr,
@@ -330,6 +331,7 @@ test('tells the agent and the main thread how work moves between worktrees', asy
       "with a message that says what they are; uncommitted work doesn't reach the main session. Don't push.",
   )
   expect(SESSION_CONTEXT).toContain('git merge --ff-only worktree-<name>')
+  expect(SESSION_CONTEXT).toContain('`/tidy` is for those')
   expect(WIP_MESSAGE('general-purpose', 'a1')).toBe('WIP: uncommitted changes left by general-purpose a1')
 })
 
@@ -387,4 +389,35 @@ test('falls through to the merged-PR head when the content check cannot run', as
   expect(unmergedAgentWork([AGENT, { ...AGENT, branch: 'feature' }, { ...AGENT, branch: 'worktree-b', ahead: 1, worktree: { ...AGENT.worktree!, isActive: true } }])).toEqual([
     'unmerged agent work: worktree-agent-a1 (2 commits)',
   ])
+})
+
+// --- self-cleanup after a merge ---
+
+const OWN: SelfCleanFacts = {
+  path: 'C:/r/.claude/worktrees/agent-a1',
+  registered: true,
+  branch: 'worktree-agent-a1',
+  isSession: false,
+  active: false,
+  dirty: false,
+  merged: true,
+}
+
+test("removes this session's agent worktree once it is done, clean and merged into HEAD", async () => {
+  expect(decideSelfClean(OWN)).toEqual({ kind: 'remove', path: OWN.path, branch: 'worktree-agent-a1' })
+})
+
+test('skips a worktree for each condition it fails, forgetting only those that can never qualify', async () => {
+  const skip = (f: Partial<SelfCleanFacts>) => {
+    const plan = decideSelfClean({ ...OWN, ...f })
+    return plan.kind === 'skip' ? [plan.reason, plan.forget] : plan.kind
+  }
+  expect(skip({ isSession: true })).toEqual(['the session works in it', true])
+  expect(skip({ registered: false })).toEqual(['no longer a registered worktree', true])
+  expect(skip({ branch: 'feature' })).toEqual(['not on a worktree-* branch (feature)', false])
+  expect(skip({ branch: undefined })).toEqual(['not on a worktree-* branch (detached)', false])
+  expect(skip({ locked: 'in use' })).toEqual(['locked (in use)', false])
+  expect(skip({ active: true })).toEqual(['its agent has not stopped yet', false])
+  expect(skip({ dirty: true })).toEqual(['uncommitted changes', false])
+  expect(skip({ merged: false })).toEqual(["worktree-agent-a1 is not merged into the session's HEAD", false])
 })

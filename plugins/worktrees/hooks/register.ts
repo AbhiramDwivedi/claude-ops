@@ -431,6 +431,40 @@ export function describePlan(plan: BranchPlan): string {
   return `${plan.branch} (${plan.via}): ${parts.filter(Boolean).join('; ')}`
 }
 
+// --- self-cleanup after a merge ---
+
+// What the sweep knows of a worktree this session's WorktreeCreate made or reused. `branch` and `locked` come
+// from `git worktree list`; `dirty` and `merged` are only gathered for a registered worktree-* branch.
+export type SelfCleanFacts = {
+  path: string
+  registered: boolean
+  branch?: string
+  locked?: string
+  // the session's own checkout
+  isSession: boolean
+  // its agent has not stopped yet
+  active: boolean
+  // `git status --porcelain` printed something, or failed
+  dirty: boolean
+  // its branch is in the session checkout's HEAD: an ancestor, or merging it gives HEAD's own tree
+  merged: boolean
+}
+
+// `forget`: the path drops out of the session's tracking, as it can never qualify again
+export type SelfCleanPlan = { kind: 'remove'; path: string; branch: string } | { kind: 'skip'; path: string; reason: string; forget: boolean }
+
+export function decideSelfClean(f: SelfCleanFacts): SelfCleanPlan {
+  const skip = (reason: string, forget = false): SelfCleanPlan => ({ kind: 'skip', path: f.path, reason, forget })
+  if (f.isSession) return skip('the session works in it', true)
+  if (!f.registered) return skip('no longer a registered worktree', true)
+  if (f.branch === undefined || !f.branch.startsWith('worktree-')) return skip(`not on a worktree-* branch (${f.branch ?? 'detached'})`)
+  if (f.locked !== undefined) return skip(`locked (${f.locked})`)
+  if (f.active) return skip('its agent has not stopped yet')
+  if (f.dirty) return skip('uncommitted changes')
+  if (!f.merged) return skip(`${f.branch} is not merged into the session's HEAD`)
+  return { kind: 'remove', path: f.path, branch: f.branch }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Effects: commands on the host.
 // ---------------------------------------------------------------------------------------------------------------
@@ -514,8 +548,9 @@ export function startContext(branch: string): string {
 
 // Told to the main thread at session start.
 export const SESSION_CONTEXT =
-  "Editing agents work in git worktrees on `worktree-*` branches. Before relying on an agent's work or starting an agent that " +
-  'depends on it, review and merge its branch: `git merge --ff-only worktree-<name>` for a relay leg, a normal merge otherwise.'
+  "Editing agents work in git worktrees on `worktree-*` branches; before relying on an agent's work or starting an agent that " +
+  'depends on it, review and merge its branch: `git merge --ff-only worktree-<name>` for a relay leg, a normal merge otherwise. ' +
+  "Once you merge it, that agent's worktree and branch are removed for you; leave other worktrees alone (`/tidy` is for those)."
 
 // `worktree-*` branches with commits outside origin's default branch and no merged PR: agent work nobody merged yet.
 export function unmergedAgentWork(facts: readonly BranchFacts[]): string[] {
@@ -753,6 +788,112 @@ async function cleanWorktree($: $, repo: Repo, path: string, base: number, relea
   return notes
 }
 
+// Merging `branch` into `into` would change nothing: `git merge-tree --write-tree` gives `into`'s own tree. undefined
+// when the check could not run (git before 2.38, or another error).
+async function mergesToSameTree($: $, cwd: string, into: string, intoTree: string, branch: string): Promise<boolean | undefined> {
+  const m = await run($, ['git', 'merge-tree', '--write-tree', into, branch], cwd, 60_000)
+  if (m.exitCode === 0) return m.stdout.replace(/\r/g, '').split('\n')[0]?.trim() === intoTree
+  if (m.exitCode === 1) return false
+  return undefined
+}
+
+// `git worktree remove`, never --force. On Windows an ignored path past MAX_PATH (node_modules) makes a plain remove
+// fail after git has already unregistered the worktree and deleted its tracked files, so core.longpaths is always on,
+// and a failure that leaves the worktree unregistered is finished here: what is left is ignored files git was deleting.
+async function removeWorktree($: $, cwd: string, path: string, windows: boolean): Promise<{ ok: boolean; err: string; note?: string }> {
+  const removed = await run($, ['git', ...(windows ? ['-c', 'core.longpaths=true'] : []), 'worktree', 'remove', path], cwd, 600_000)
+  if (removed.exitCode === 0) return { ok: true, err: '' }
+  const err = removed.stderr.replace(/\r/g, '').trim().split('\n')[0] ?? ''
+  const listed = await git($, cwd, 'worktree', 'list', '--porcelain')
+  const key = normPath(path, windows)
+  if (!listed.ok || parseWorktrees(listed.out).some(w => normPath(w.path, windows) === key)) return { ok: false, err }
+  // the \\?\ prefix lifts MAX_PATH for rd
+  const deleted = windows
+    ? await run($, ['cmd.exe', '/d', '/c', 'rd', '/s', '/q', `\\\\?\\${path.replace(/\//g, '\\')}`], undefined, 600_000)
+    : await run($, ['rm', '-rf', '--', path], undefined, 600_000)
+  await git($, cwd, 'worktree', 'prune')
+  if (await $.fs.exists(path)) return { ok: false, err: `${err}; git unregistered it, and deleting the rest failed: ${deleted.stderr.trim().split('\n')[0] ?? ''}` }
+  const note = `git worktree remove ${path} failed (${err}) after unregistering it; deleted the ignored files left behind`
+  await $.ui.log(`worktrees: ${note}`, { to: 'debug' })
+  return { ok: true, err: '', note }
+}
+
+// --- self-cleanup ---
+
+// Removes the worktrees in `tracked` (normalised path to path) whose agent is done, that are clean, and whose branch
+// is merged into the HEAD of the session's own checkout; then their branch with `git branch -d`. Answers what it
+// removed, for the toast. Removed paths, and paths that can never qualify, drop out of `tracked`.
+async function selfClean($: $, tracked: Map<string, string>, base: number): Promise<string[]> {
+  if (tracked.size === 0) return []
+  const windows = await isWindows($)
+  const cwd = await $.session.cwd()
+  const repo = await repoAt($, cwd)
+  if (repo === undefined) return []
+  const log = (line: string) => $.ui.log(`worktrees: ${line}`, { to: 'debug' })
+  const worktrees = parseWorktrees((await git($, cwd, 'worktree', 'list', '--porcelain')).out)
+  const headTree = await git($, cwd, 'rev-parse', 'HEAD^{tree}')
+  const state = await readState($, repo)
+  const now = await $.clock.now()
+  const removed: string[] = []
+  for (const [key, path] of [...tracked]) {
+    const wt = worktrees.find(w => normPath(w.path, windows) === key)
+    const branch = wt?.branch
+    let dirty = false
+    let merged = false
+    if (wt !== undefined && branch?.startsWith('worktree-')) {
+      const status = await git($, path, 'status', '--porcelain')
+      dirty = !status.ok || status.out !== ''
+      if (!dirty) {
+        merged = (await git($, cwd, 'merge-base', '--is-ancestor', branch, 'HEAD')).ok
+        if (!merged && headTree.ok && headTree.out !== '') merged = (await mergesToSameTree($, cwd, 'HEAD', headTree.out, branch)) === true
+      }
+    }
+    const plan = decideSelfClean({
+      path,
+      registered: wt !== undefined,
+      branch,
+      locked: wt?.locked,
+      isSession: key === normPath(repo.top, windows),
+      active: isActive(state, path, now, windows),
+      dirty,
+      merged,
+    })
+    if (plan.kind === 'skip') {
+      await log(`self-clean skipped ${path}: ${plan.reason}`)
+      if (plan.forget) tracked.delete(key)
+      continue
+    }
+    const notes = await cleanWorktree($, repo, path, base, true)
+    if (notes.length > 0) await log(notes.join('\n'))
+    const done = await removeWorktree($, cwd, path, windows)
+    if (!done.ok) {
+      await log(`self-clean could not remove ${path}: ${done.err}`)
+      continue
+    }
+    tracked.delete(key)
+    const deleted = await git($, cwd, 'branch', '-d', plan.branch)
+    if (deleted.ok) removed.push(plan.branch)
+    else {
+      await log(`self-clean removed ${path}; git branch -d ${plan.branch} refused: ${deleted.err.split('\n')[0]}`)
+      removed.push(`${plan.branch}'s worktree (branch kept: git branch -d refused)`)
+    }
+  }
+  return removed
+}
+
+// a session's tracked worktrees (normalised path to path) and its sweeps, which run one at a time
+type Sweeps = { tracked: Map<string, string>; chain: Promise<void> }
+
+function sweep($: $, s: Sweeps, base: number): Promise<void> {
+  s.chain = s.chain
+    .then(async () => {
+      const removed = await selfClean($, s.tracked, base)
+      if (removed.length > 0) await $.ui.toast(`worktrees: removed merged ${removed.join(', ')}`)
+    })
+    .catch(error => $.ui.log(`worktrees: self-clean failed: ${String(error)}`, { to: 'debug' }))
+  return s.chain
+}
+
 // --- tidy ---
 
 type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean; removed: string[]; unmerged: string[] }
@@ -851,9 +992,7 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
     let inMergedPr: number | undefined
     let contentMerged: boolean | undefined
     if (branch.startsWith('worktree-') && !isProtected && !gitMerged.has(branch) && mainTree !== undefined) {
-      const m = await run($, ['git', 'merge-tree', '--write-tree', mergedRef, branch], repo.top, 60_000)
-      if (m.exitCode === 0) contentMerged = m.stdout.replace(/\r/g, '').split('\n')[0]?.trim() === mainTree
-      else if (m.exitCode === 1) contentMerged = false
+      contentMerged = await mergesToSameTree($, repo.top, mergedRef, mainTree, branch)
     }
     if (!isProtected) {
       let inMergedHead = false
@@ -936,11 +1075,12 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
     acted = true
     if (plan.worktreePath) {
       lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false)))
-      const removed = await git($, repo.top, 'worktree', 'remove', plan.worktreePath)
+      const removed = await removeWorktree($, repo.top, plan.worktreePath, windows)
       if (!removed.ok) {
-        lines.push(`${plan.branch}: worktree remove failed, left the branch: ${removed.err.split('\n')[0]}`)
+        lines.push(`${plan.branch}: worktree remove failed, left the branch: ${removed.err}`)
         continue
       }
+      if (removed.note !== undefined) lines.push(`${plan.branch}: ${removed.note}`)
       const gone = plan.worktreePath
       await withState($, repo, async s => ({ state: markDone({ ...s, slots: releaseSlot(s.slots, gone, windows) }, gone, windows), value: undefined }))
     }
@@ -994,37 +1134,6 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
   return { plans, lines, acted, removed, unmerged }
 }
 
-// a SessionStart tidy at most every 10 minutes per repo, so resumes and parallel sessions do not repeat it
-const TIDY_EVERY_MS = 10 * 60_000
-
-async function tidyOnStart($: $, options: Record<string, unknown>): Promise<void> {
-  const repo = await repoAt($)
-  if (repo === undefined) return
-  const stamp = `${repo.common}/claude-worktrees/last-tidy.json`
-  const now = await $.clock.now()
-  if (await $.fs.exists(stamp)) {
-    const last = Number((JSON.parse((await $.fs.read(stamp)) as string) as { at?: number }).at ?? 0)
-    if (now - last < TIDY_EVERY_MS) return
-  }
-  await $.fs.write(stamp, JSON.stringify({ at: now }) + '\n')
-  const report = await tidy($, options, false)
-  if (report === undefined) return
-  await $.ui.log(`worktrees tidy:\n${report.lines.join('\n')}`, { to: 'debug' })
-  const stopped = report.lines.filter(l => l.startsWith('orphan: stopped')).length
-  const synced = report.lines.find(l => l.startsWith('fast-forward ') && l.endsWith(': done'))
-  if (report.removed.length + stopped + report.unmerged.length > 0 || synced !== undefined) {
-    const skipped = report.plans.filter(p => p.kind === 'skip').length
-    const parts = [
-      report.removed.length > 0 ? `deleted merged ${report.removed.join(', ')}` : '',
-      stopped > 0 ? `stopped ${stopped} orphan process${stopped === 1 ? '' : 'es'}` : '',
-      synced !== undefined ? synced.replace(/: done$/, '') : '',
-      ...report.unmerged,
-      skipped > 0 ? `${skipped} skipped (/tidy dry-run says why)` : '',
-    ]
-    await $.ui.toast(`worktrees: ${parts.filter(Boolean).join('; ')}`)
-  }
-}
-
 // ---------------------------------------------------------------------------------------------------------------
 
 // a hook of this plugin that fails leaves the call to the hooks beneath and the engine
@@ -1035,6 +1144,10 @@ export const register: Register = (on, options) => {
   const readOnly = readOnlyTypes(options.readOnlyAgents)
   const base = portBaseOf(options)
   let inRepo: boolean | undefined
+  // the worktrees this session's WorktreeCreate made or reused; in memory on purpose: what a resumed or crashed
+  // session left is for /tidy
+  const own: Sweeps = { tracked: new Map(), chain: Promise.resolve() }
+  const tracked = own.tracked
 
   // 1. Every Agent call that can edit gets a worktree.
   on('classic.PreToolUse', { tool: 'Agent' }, async ($, e, next) => {
@@ -1078,6 +1191,7 @@ export const register: Register = (on, options) => {
     }
     const now = await $.clock.now()
     await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }))
+    tracked.set(normPath(path, windows), path)
     const script = `${repo.top}/.claude/worktree-setup.${windows ? 'ps1' : 'sh'}`
     if (!(await $.fs.exists(script))) return { worktreePath: path }
 
@@ -1182,7 +1296,17 @@ export const register: Register = (on, options) => {
     return { ...result, additionalContext: [...(result.additionalContext ?? []), SESSION_CONTEXT] }
   }).catch(passThrough)
 
-  // 5. Merged branches: tidied in the background at start, and on demand with /tidy.
+  // 5. After the session runs a merge, its own agents' worktrees whose branch is now merged are removed, in the
+  // background: the process probe takes seconds on Windows. Everything else is /tidy's, on demand.
+  on('classic.PostToolUse', async ($, e, next) => {
+    const result = await next(e)
+    if (tracked.size === 0 || (e.tool_name !== 'Bash' && e.tool_name !== 'PowerShell')) return result
+    const command = (e.tool_input as { command?: unknown } | null)?.command
+    if (typeof command !== 'string' || !/\bmerge\b/.test(command)) return result
+    $.clock.after(0, () => void sweep($, own, base))
+    return result
+  }).catch(passThrough)
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({
@@ -1190,11 +1314,6 @@ export const register: Register = (on, options) => {
       description: 'Remove worktrees and branches whose PR merged, and stop processes left in deleted worktrees',
       argumentHint: '[dry-run]',
     })
-    if (options.tidyOnStart !== false) {
-      $.clock.after(3000, () => {
-        void tidyOnStart($, options).catch(error => $.ui.log(`worktrees: tidy failed: ${String(error)}`, { to: 'debug' }))
-      })
-    }
     return started
   })
 
