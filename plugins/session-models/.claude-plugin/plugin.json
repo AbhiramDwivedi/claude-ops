@@ -1,6 +1,6 @@
 {
   "name": "session-models",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Shows the main model and its effort, the live agents by model and effort, and the working directory, and warns about agent crowds and huge contexts",
   "types": "./types/index.d.ts",
   "author": {

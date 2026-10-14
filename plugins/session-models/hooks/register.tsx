@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { AgentStatus, EngineInterface, Register } from 'claude-code'
 
 import type { AgentsSeen } from '../types'
 
@@ -29,7 +29,13 @@ export function tokens(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`
 }
 
-// the agents running now: the main thread always, plus every running subagent or teammate
+// an agent at work: taking a turn, or held on background work it owns (a long shell,
+// an Agent call it waits on); an idle teammate waits for a message and is not
+export function isLive(status: AgentStatus): boolean {
+  return status === 'running' || status === 'waiting'
+}
+
+// the agents running now: the main thread always, plus every live subagent or teammate
 export function liveAgents(agents: AgentsSeen, running: ReadonlySet<string>): string[] {
   return Object.keys(agents).filter(id => id === 'main' || running.has(id))
 }
@@ -206,7 +212,7 @@ async function refresh($: EngineInterface, limits: Thresholds) {
   lastRefreshAt = now
   const agents = await read($, agentsSeen)
   const listed = await $.agent.list()
-  const running = new Set(listed.filter(a => a.status === 'running').map(a => a.id))
+  const running = new Set(listed.filter(a => isLive(a.status)).map(a => a.id))
   const descriptions = new Map(listed.map(a => [a.id, a.description]))
   const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
   const cwd = shortPath(await $.session.cwd(), home)

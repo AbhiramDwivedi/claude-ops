@@ -8,6 +8,7 @@ import {
   family,
   fitLine,
   formatModels,
+  isLive,
   liveAgents,
   setting,
   shortPath,
@@ -28,6 +29,12 @@ test('names model families', async () => {
 test('formats token counts', async () => {
   expect(tokens(955_492)).toBe('955K')
   expect(tokens(1_200_000)).toBe('1.2M')
+})
+
+test('counts an agent held on its own background work as live', async () => {
+  expect(isLive('running')).toBe(true)
+  expect(isLive('waiting')).toBe(true)
+  for (const status of ['pending', 'idle', 'completed', 'failed', 'killed'] as const) expect(isLive(status)).toBe(false)
 })
 
 test('shows the model alone until an agent beyond the main thread is running', async () => {
