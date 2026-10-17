@@ -40,6 +40,49 @@ export function liveAgents(agents: AgentsSeen, running: ReadonlySet<string>): st
   return Object.keys(agents).filter(id => id === 'main' || running.has(id))
 }
 
+// where an agent sits in the spawn tree: its parent, and the name it was given
+export type AgentNode = { parentId?: string; name?: string }
+export type Crew = { name: string; size: number; models: Map<string, number> }
+const CREWS_SHOWN = 3
+
+// a crew is a named top-level agent with at least one live descendant; its size is the
+// lead plus those descendants, grandchildren included. Largest first, then by name
+export function crews(tree: ReadonlyMap<string, AgentNode>, agents: AgentsSeen, running: ReadonlySet<string>): Crew[] {
+  const byLead = new Map<string, string[]>()
+  for (const id of running) {
+    // climb to the top-level ancestor; the hop limit guards against a cycle
+    let top = id
+    for (let hops = 0; hops <= tree.size; hops++) {
+      const parent = tree.get(top)?.parentId
+      if (parent === undefined || parent === 'main' || !tree.has(parent)) break
+      top = parent
+    }
+    if (top === id || tree.get(top)?.name === undefined || tree.get(top)?.name === '') continue
+    byLead.set(top, [...(byLead.get(top) ?? []), id])
+  }
+  const out: Crew[] = []
+  for (const [lead, members] of byLead) {
+    const models = new Map<string, number>()
+    for (const id of [lead, ...members]) {
+      const model = agents[id]?.model
+      if (model !== undefined) models.set(family(model).toLowerCase(), (models.get(family(model).toLowerCase()) ?? 0) + 1)
+    }
+    out.push({ name: tree.get(lead)!.name!, size: members.length + 1, models })
+  }
+  return out.sort((a, b) => b.size - a.size || a.name.localeCompare(b.name))
+}
+
+// export 4 (opus 1, sonnet 3) · staffing 3 (opus 1, sonnet 2) · +2 more
+export function crewsPart(list: readonly Crew[]): string | undefined {
+  if (list.length === 0) return undefined
+  const shown = list.slice(0, CREWS_SHOWN).map(c => {
+    const models = [...c.models].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([m, n]) => `${m} ${n}`)
+    return models.length > 0 ? `${c.name} ${c.size} (${models.join(', ')})` : `${c.name} ${c.size}`
+  })
+  if (list.length > CREWS_SHOWN) shown.push(`+${list.length - CREWS_SHOWN} more`)
+  return `crews: ${shown.join(' · ')}`
+}
+
 // the live agent carrying the most context, when any carries at least `threshold`
 export function biggestContext(agents: AgentsSeen, live: readonly string[], threshold: number) {
   let top: { id: string; context: number } | undefined
@@ -68,7 +111,7 @@ export function shortPath(path: string, home: string | undefined): string {
   return /^[\\/]/.test(rest) ? `~${rest}` : path
 }
 
-// "model: Opus · effort: high · agents: Opus (12 medium, 1 high), Sonnet (2 low) · ⚠ 15 live · ⚠ ctx 955K · cwd: ~/src/app"
+// "model: Opus · effort: high · agents: Opus (12 medium, 1 high), Sonnet (2 low) · crews: export 4 (opus 1, sonnet 3) · ⚠ 15 live · ⚠ ctx 955K · cwd: ~/src/app"
 // the agents part counts the live ones, main included, by the model and effort of each
 // one's latest request; it appears while anything beyond the main thread is running.
 // The directory goes last, so a long path is cut (from its head, by fitLine) rather
@@ -79,8 +122,9 @@ export function formatModels(
   running: ReadonlySet<string>,
   limits: Thresholds,
   cwd?: string,
+  tree?: ReadonlyMap<string, AgentNode>,
 ): string {
-  return modelParts(current, agents, running, limits, cwd).join(' · ')
+  return modelParts(current, agents, running, limits, cwd, tree).join(' · ')
 }
 
 // the line's parts, as formatModels joins them
@@ -90,6 +134,7 @@ export function modelParts(
   running: ReadonlySet<string>,
   limits: Thresholds,
   cwd?: string,
+  tree?: ReadonlyMap<string, AgentNode>,
 ): string[] {
   const parts = [`model: ${family(current)}`]
   // the main thread's latest request; unknown until it has made one
@@ -120,6 +165,9 @@ export function modelParts(
       })
       .join(', ')
     parts.push(`agents: ${list}`)
+    // named leads with live helpers, by the same live agents counted above
+    const crewsText = tree === undefined ? undefined : crewsPart(crews(tree, agents, running))
+    if (crewsText !== undefined) parts.push(crewsText)
   }
   if (live.size >= limits.liveAgents) parts.push(`⚠ ${live.size} live`)
   const top = biggestContext(agents, [...live], limits.context)
@@ -214,9 +262,10 @@ async function refresh($: EngineInterface, limits: Thresholds) {
   const listed = await $.agent.list()
   const running = new Set(listed.filter(a => isLive(a.status)).map(a => a.id))
   const descriptions = new Map(listed.map(a => [a.id, a.description]))
+  const tree = new Map<string, AgentNode>(listed.map(a => [a.id, { parentId: a.parentId, name: a.name }]))
   const home = (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
   const cwd = shortPath(await $.session.cwd(), home)
-  await show($, modelParts(await $.session.model(), agents, running, limits, cwd))
+  await show($, modelParts(await $.session.model(), agents, running, limits, cwd, tree))
 
   const live = liveAgents(agents, running)
   const alarm = crowdAlarm(crowd, live.length, now, limits.liveAgents)

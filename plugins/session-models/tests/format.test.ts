@@ -3,6 +3,8 @@ import { expect, test } from 'claude-code/testing'
 import {
   agentLabel,
   biggestContext,
+  crews,
+  crewsPart,
   crowdAlarm,
   effortLabel,
   family,
@@ -156,4 +158,75 @@ test('names an agent by its task in the context toast', async () => {
   expect(agentLabel('main', undefined)).toBe('The main thread')
   expect(agentLabel('ae9ca49e548d4f774', 'Builder A: evidence checks')).toBe('Builder A: evidence checks')
   expect(agentLabel('ae9ca49e548d4f774', undefined)).toBe('Agent ae9ca49e')
+})
+
+const node = (parentId?: string, name?: string) => ({ parentId, name })
+const seen = (model: string) => ({ model, context: 1 })
+
+test('shows no crews segment when no named agent leads live helpers', async () => {
+  const agents = { main: seen(opus), a1: seen(sonnet) }
+  const tree = new Map([['a1', node('main')]])
+  expect(formatModels(opus, agents, new Set(['a1']), LIMITS, undefined, tree)).toBe('model: Opus · agents: Opus (1), Sonnet (1)')
+})
+
+test('counts nested descendants in a crew, by model', async () => {
+  const agents = { main: seen(opus), lead: seen(opus), c1: seen(sonnet), c2: seen(sonnet), g1: seen(sonnet) }
+  const tree = new Map([
+    ['lead', node('main', 'export')],
+    ['c1', node('lead')],
+    ['c2', node('lead')],
+    ['g1', node('c1')],
+  ])
+  const running = new Set(['lead', 'c1', 'c2', 'g1'])
+  expect(crewsPart(crews(tree, agents, running))).toBe('crews: export 4 (sonnet 3, opus 1)')
+  expect(formatModels(opus, agents, running, LIMITS, '~/app', tree)).toBe(
+    'model: Opus · agents: Sonnet (3), Opus (2) · crews: export 4 (sonnet 3, opus 1) · cwd: ~/app',
+  )
+})
+
+test('does not make a crew of an unnamed lead or a named agent with no live helpers', async () => {
+  const agents = { main: seen(opus), u: seen(opus), u1: seen(sonnet), n: seen(opus), n1: seen(sonnet) }
+  const tree = new Map([
+    ['u', node('main')],
+    ['u1', node('u')],
+    ['n', node(undefined, 'solo')],
+    ['n1', node('n')],
+  ])
+  // n1 has finished
+  expect(crews(tree, agents, new Set(['u', 'u1', 'n']))).toEqual([])
+})
+
+test('leaves finished descendants out of the crew size', async () => {
+  const agents = { main: seen(opus), lead: seen(opus), c1: seen(sonnet), c2: seen(sonnet) }
+  const tree = new Map([
+    ['lead', node('main', 'export')],
+    ['c1', node('lead')],
+    ['c2', node('lead')],
+  ])
+  expect(crews(tree, agents, new Set(['lead', 'c1'])).map(c => c.size)).toEqual([2])
+})
+
+test('orders crews by size then name and collapses past three', async () => {
+  const agents: Record<string, { model: string; context: number }> = { main: seen(opus) }
+  const tree = new Map<string, { parentId?: string; name?: string }>()
+  const running = new Set<string>()
+  // sizes: a 2, b 3, c 2, d 2, e 2
+  for (const [lead, helpers] of [['a', 1], ['b', 2], ['c', 1], ['d', 1], ['e', 1]] as const) {
+    tree.set(lead, node('main', lead))
+    agents[lead] = seen(opus)
+    running.add(lead)
+    for (let i = 0; i < helpers; i++) {
+      tree.set(`${lead}${i}`, node(lead))
+      agents[`${lead}${i}`] = seen(sonnet)
+      running.add(`${lead}${i}`)
+    }
+  }
+  expect(crewsPart(crews(tree, agents, running))).toBe(
+    'crews: b 3 (sonnet 2, opus 1) · a 2 (opus 1, sonnet 1) · c 2 (opus 1, sonnet 1) · +2 more',
+  )
+})
+
+test('lists the crews with no models when none are known', async () => {
+  expect(crewsPart([{ name: 'x', size: 2, models: new Map() }])).toBe('crews: x 2')
+  expect(crewsPart([])).toBeUndefined()
 })
