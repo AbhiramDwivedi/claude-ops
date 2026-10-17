@@ -2,7 +2,8 @@
 
 Keeps agents from stepping on each other's files, and cleans up after them.
 
-- **Every agent that can edit gets a git worktree.** When an Agent call leaves `isolation` unset and the session is in a git repo, the mod sets `isolation: "worktree"`. Read-only agent types run in the session's checkout: `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer` (also with a plugin prefix, such as `kit:scout`), plus any you list in `readOnlyAgents`. A call that already chose `worktree` or `remote` is left alone.
+- **Every agent that can edit gets a git worktree.** When an Agent call leaves `isolation` unset and the session is in a git repo, the mod sets `isolation: "worktree"`. Read-only agent types run in the session's checkout: `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer` (also with a plugin prefix, such as `kit:scout`), plus any you list in `noIsolateAgents`. A call that already chose `worktree` or `remote` is left alone.
+- **A workspace of nested repos keeps its agents in the main checkout.** When the repo's ignored directories hold their own git repos (a workspace with service repos checked out inside it, each in `.gitignore`), a worktree of the outer repo would contain none of their code. Unless the repo has a setup script, the mod then leaves `isolation` unset and shows one toast per session saying why. See [Workspaces of nested repos](#workspaces-of-nested-repos).
 - **The worktree starts from your current commit.** Claude Code's default worktree starts from `origin/HEAD`, so an agent never sees your unmerged branch. The mod creates every worktree itself, from the HEAD of the checkout the session works in (a detached HEAD too).
 - **A project can set each worktree up.** Gitignored files listed in `.worktreeinclude` are copied in from the main checkout. If the repo has `.claude/worktree-setup.ps1` (Windows) or `.claude/worktree-setup.sh` (elsewhere), the mod gives the worktree a port slot and runs the script in it. See the contract below.
 - **What an agent leaves running is stopped.** When an agent that ran in a worktree stops, and when a worktree is removed, the mod stops every process whose command line names that worktree, and anything listening on its slot's ports.
@@ -21,8 +22,12 @@ Keeps agents from stepping on each other's files, and cleans up after them.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `readOnlyAgents` | empty | Comma-separated agent types that never edit, added to the built-in list. |
+| `noIsolateAgents` | empty | Comma-separated agent types that never get a worktree, added to the built-in read-only list. |
+| `readOnlyAgents` | empty | Deprecated name for `noIsolateAgents`. Still read; the types in both are used. |
+| `isolateNestedRepos` | false | Give agents worktrees even in a repo with ignored nested repos and no setup script. |
 | `portBase` | 4000 | Slot N owns ports `portBase + N*10` to `portBase + N*10 + 9`. |
+
+A worktree confines where an agent's Edit and Write calls land by default. The mod does not confine Bash: an agent's commands run wherever they `cd` to. Claude Code itself may refuse some commands it can't confirm stay inside the worktree, but don't count on that either way.
 
 ## How a worktree is made
 
@@ -45,6 +50,33 @@ Commit the script to the repo. The mod runs it once, right after it creates a wo
 A typical script writes ports from `PORT_BASE` into `.env` and installs dependencies. It may take up to 10 minutes. If it fails, the worktree is kept, you get a toast, and the agent works in it anyway.
 
 Slots are recorded in `<git common dir>/claude-worktrees/slots.json`, written under a lock directory beside it so parallel sessions never draw the same slot. A slot is freed when its worktree is removed, or once its folder is gone.
+
+## Workspaces of nested repos
+
+The mod looks for nested repos once per session: `git ls-files --others --ignored --exclude-standard --directory` lists the ignored directories, and each one with a `.git` entry counts. For a listed directory that is no repo itself, its subdirectories are checked too, one level down: with `services/` ignored as a whole, `services/a/.git` counts. A repo two or more levels below an ignored directory is not seen. At most 200 ignored directories, and 200 subdirectories of each, are checked.
+
+When it finds some, what happens depends on the repo:
+
+- **No setup script**: agents run in the main checkout, and a toast names the nested repos. This is the safe default; an agent in a worktree of the outer repo would find none of the code it was asked to change.
+- **A setup script for this platform** (`.claude/worktree-setup.sh`, or `.ps1` on Windows): agents get worktrees as usual. The script is expected to make a worktree of each nested repo inside the new one.
+- **`isolateNestedRepos` set**: agents get worktrees whatever the repo holds, and the check doesn't run.
+
+A setup script that gives each nested repo its own worktree on a branch named after the outer one:
+
+```bash
+#!/usr/bin/env bash
+# .claude/worktree-setup.sh: one worktree per nested repo, inside the agent's worktree
+set -euo pipefail
+for git_dir in "$REPO_ROOT"/*/.git; do
+  repo="$(dirname "$git_dir")"
+  name="$(basename "$repo")"
+  # only nested repos the outer repo ignores
+  git -C "$REPO_ROOT" check-ignore -q "$name" || continue
+  git -C "$repo" worktree add -b "worktree-$WORKTREE_NAME" "$WORKTREE_PATH/$name" HEAD
+done
+```
+
+The mod's commit, merge and cleanup rules see only the outer repo. The agent's commits in a nested worktree, its `worktree-<name>` branch there and the nested worktree's registration are yours to merge and remove: `git -C <nested repo> worktree prune` after the outer worktree is gone, then delete the branch once it is merged.
 
 ## Relays and dependent agents
 

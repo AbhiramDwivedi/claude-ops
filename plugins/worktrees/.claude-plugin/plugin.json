@@ -1,6 +1,6 @@
 {
   "name": "worktrees",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Gives every agent that can edit a git worktree of its own, runs a project's setup script with its own port range, kills what an agent left running, removes an agent's worktree and branch once the session merges it, and tidies other merged branches on demand with /tidy",
   "author": {
     "name": "Abhiram Dwivedi",
@@ -9,11 +9,23 @@
   "homepage": "https://github.com/AbhiramDwivedi/claude-ops/tree/main/plugins/worktrees",
   "license": "MIT",
   "userConfig": {
+    "noIsolateAgents": {
+      "type": "string",
+      "title": "Agent types without a worktree",
+      "description": "Comma-separated agent types that never get a worktree, on top of Explore, Plan, claude-code-guide, statusline-setup, scout and reviewer.",
+      "default": ""
+    },
     "readOnlyAgents": {
       "type": "string",
-      "title": "More read-only agent types",
-      "description": "Comma-separated agent types that never edit files and so run without a worktree, on top of Explore, Plan, claude-code-guide, statusline-setup, scout and reviewer.",
+      "title": "More read-only agent types (deprecated)",
+      "description": "Old name for noIsolateAgents, still read. The types listed in either one run without a worktree.",
       "default": ""
+    },
+    "isolateNestedRepos": {
+      "type": "boolean",
+      "title": "Isolate agents in a repo with nested repos",
+      "description": "Give agents worktrees even when the repo's ignored directories hold their own git repos and the repo has no .claude/worktree-setup script. Off by default: such agents run in the main checkout.",
+      "default": false
     },
     "portBase": {
       "type": "number",
