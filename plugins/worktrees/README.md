@@ -27,7 +27,7 @@ Keeps agents from stepping on each other's files, and cleans up after them.
 | `isolateNestedRepos` | false | Give agents worktrees even in a repo with ignored nested repos and no setup script. |
 | `portBase` | 4000 | Slot N owns ports `portBase + N*10` to `portBase + N*10 + 9`. |
 
-A worktree confines where an agent's Edit and Write calls land by default, nothing more. It does not sandbox Bash: an agent can still `cd` out of its worktree and change files there.
+A worktree confines where an agent's Edit and Write calls land by default. The mod does not confine Bash: an agent's commands run wherever they `cd` to. Claude Code itself may refuse some commands it can't confirm stay inside the worktree, but don't count on that either way.
 
 ## How a worktree is made
 
@@ -53,7 +53,7 @@ Slots are recorded in `<git common dir>/claude-worktrees/slots.json`, written un
 
 ## Workspaces of nested repos
 
-The mod looks for nested repos once per session: `git ls-files --others --ignored --exclude-standard --directory` lists the ignored directories, and each one with a `.git` entry counts. It checks only the directories git lists, so a repo sitting inside a larger ignored directory (`services/` ignored as a whole, with `services/a/.git`) is not seen.
+The mod looks for nested repos once per session: `git ls-files --others --ignored --exclude-standard --directory` lists the ignored directories, and each one with a `.git` entry counts. For a listed directory that is no repo itself, its subdirectories are checked too, one level down: with `services/` ignored as a whole, `services/a/.git` counts. A repo two or more levels below an ignored directory is not seen. At most 200 ignored directories, and 200 subdirectories of each, are checked.
 
 When it finds some, what happens depends on the repo:
 

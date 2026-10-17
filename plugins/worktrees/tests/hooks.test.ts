@@ -82,14 +82,30 @@ test('takes no-isolate types from noIsolateAgents and readOnlyAgents at once', {
 })
 
 // a workspace repo at C:/w whose .gitignore hides the nested repos svc-a and svc-b, and node_modules, which is no
-// repo; `setup` says whether .claude/worktree-setup.sh is there
-function workspace(on: On, setup: boolean) {
+// repo; `setup` says whether .claude/worktree-setup.sh is there. `grouped` puts the repos under services/, which
+// .gitignore hides as a whole.
+function workspace(on: On, setup: boolean, grouped = false) {
   const seen: Record<string, unknown>[] = []
   const toasts: string[] = []
   const ran: string[] = []
-  const present = new Set(['C:/w/svc-a/.git', 'C:/w/svc-b/.git', ...(setup ? ['C:/w/.claude/worktree-setup.sh'] : [])])
+  const at = grouped ? 'C:/w/services' : 'C:/w'
+  const present = new Set([`${at}/svc-a/.git`, `${at}/svc-b/.git`, ...(setup ? ['C:/w/.claude/worktree-setup.sh'] : [])])
   on('env.get', async () => ({ value: undefined }))
   on('fs.exists', async (_, e) => ({ value: present.has(e.path.replace(/\\/g, '/')) }))
+  const listings: Record<string, { name: string; kind: 'file' | 'dir' | 'other'; size: number; isLink: boolean }[]> = {
+    'C:/w/services': [
+      { name: 'README.md', kind: 'file', size: 1, isLink: false },
+      { name: 'linked', kind: 'other', size: 0, isLink: true },
+      { name: 'svc-a', kind: 'dir', size: 0, isLink: false },
+      { name: 'svc-b', kind: 'dir', size: 0, isLink: false },
+    ],
+    'C:/w/node_modules': [{ name: 'lodash', kind: 'dir', size: 0, isLink: false }],
+  }
+  on('fs.list', async (_, e) => {
+    const listing = listings[(e.path ?? '').replace(/\\/g, '/')]
+    if (listing === undefined) throw new Error('ENOENT')
+    return { value: listing }
+  })
   on('ui.log', async () => ({ value: undefined }))
   on('ui.toast', async (_, e) => {
     toasts.push(e.text)
@@ -103,7 +119,9 @@ function workspace(on: On, setup: boolean) {
       : argv.includes('--show-toplevel')
         ? 'C:/w\n'
         : argv.includes('ls-files')
-          ? 'svc-a/\nsvc-b/\nnode_modules/\n'
+          ? grouped
+            ? 'services/\nnode_modules/\n'
+            : 'svc-a/\nsvc-b/\nnode_modules/\n'
           : ''
     return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -124,6 +142,13 @@ test('keeps agents in the main checkout of a repo with ignored nested repos, and
   expect(toasts[0]?.includes('node_modules')).toBe(false)
   // found once for the session
   expect(ran.filter(r => r.includes('ls-files')).length).toBe(1)
+})
+
+test('finds nested repos one level inside a directory ignored as a whole', async ($, on) => {
+  const { seen, toasts } = workspace(on, false, true)
+  await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p' } as never)
+  expect(seen[0]?.isolation).toBe(undefined)
+  expect(toasts[0]).toContain('services/svc-a, services/svc-b')
 })
 
 test('isolates agents in a repo with nested repos when it has a setup script', async ($, on) => {

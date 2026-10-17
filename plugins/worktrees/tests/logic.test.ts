@@ -29,6 +29,7 @@ import {
   parseWindowsSnapshot,
   parseWorktrees,
   portRange,
+  childDirs,
   ignoredDirs,
   nestedToast,
   noIsolateTypes,
@@ -77,6 +78,18 @@ test('picks the ignored directories out of ls-files output', async () => {
   expect(ignoredDirs('svc-a/\r\nnode_modules/\n.env\nservices/b/\n../out/\n"we\\"ird/"\n')).toEqual(['svc-a', 'node_modules', 'services/b'])
   expect(ignoredDirs('')).toEqual([])
   expect(ignoredDirs('a/\nb/\nc/', 2)).toEqual(['a', 'b'])
+})
+
+test('checks only real subdirectories one level down, at most cap of them', async () => {
+  const entries = [
+    { name: 'a', kind: 'dir' },
+    { name: 'notes.md', kind: 'file' },
+    { name: 'link', kind: 'other', isLink: true },
+    { name: '.git', kind: 'dir' },
+    { name: 'b', kind: 'dir' },
+  ]
+  expect(childDirs('services', entries)).toEqual(['services/a', 'services/b'])
+  expect(childDirs('services', entries, 1)).toEqual(['services/a'])
 })
 
 test('keeps agents in the main checkout for nested repos only without a setup script', async () => {

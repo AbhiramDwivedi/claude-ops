@@ -29,6 +29,15 @@ export function ignoredDirs(lsFilesOut: string, cap = 200): string[] {
     .slice(0, cap)
 }
 
+// The subdirectories of an ignored directory that is no repo itself, to check one level down (`services/` ignored
+// whole, holding `services/a/.git`): real directories only, no links, at most `cap`.
+export function childDirs(dir: string, entries: readonly { name: string; kind: string; isLink?: boolean }[], cap = 200): string[] {
+  return entries
+    .filter(entry => entry.kind === 'dir' && !entry.isLink && entry.name !== '.git')
+    .slice(0, cap)
+    .map(entry => `${dir}/${entry.name}`)
+}
+
 // A repo whose ignored directories hold their own git repos (a workspace of service repos) keeps its code
 // outside what a worktree of it would contain. Agents then stay in the main checkout, unless the repo has a setup
 // script (expected to make the nested worktrees). isolateNestedRepos skips this check altogether.
@@ -799,7 +808,19 @@ async function nestedRepos($: $): Promise<{ skip: boolean; toast: string }> {
   const ls = await git($, top.out, '-c', 'core.quotePath=false', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')
   if (!ls.ok) return { skip: false, toast: '' }
   const nested: string[] = []
-  for (const dir of ignoredDirs(ls.out)) if (await $.fs.exists(`${top.out}/${dir}/.git`)) nested.push(dir)
+  for (const dir of ignoredDirs(ls.out)) {
+    if (await $.fs.exists(`${top.out}/${dir}/.git`)) {
+      nested.push(dir)
+      continue
+    }
+    let entries: { name: string; kind: string; isLink?: boolean }[] = []
+    try {
+      entries = await $.fs.list(`${top.out}/${dir}`)
+    } catch {
+      continue
+    }
+    for (const child of childDirs(dir, entries)) if (await $.fs.exists(`${top.out}/${child}/.git`)) nested.push(child)
+  }
   if (nested.length === 0) return { skip: false, toast: '' }
   const script = `.claude/worktree-setup.${(await isWindows($)) ? 'ps1' : 'sh'}`
   const hasSetup = await $.fs.exists(`${top.out}/${script}`)
