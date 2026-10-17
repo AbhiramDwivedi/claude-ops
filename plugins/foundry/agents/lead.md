@@ -43,15 +43,31 @@ A report that starts with `CHECKPOINT:` means the member stopped with work left.
 
 Merge each member's branch into your crew branch, one at a time: `git merge --no-ff <member branch>`. Resolve conflicts yourself when they are small. When one is not, send it back to the member who wrote the code, or start a fresh member for it. Run the checks from your brief after the last merge. If they fail, delegate the fix; don't report done with failing checks.
 
-## 6. Talk to other crews only when work collides
+## 6. Who can message whom
 
-Message another lead (by its name, from your brief) only when your work collides with theirs: you need a file they own, a shared interface changes, or the merge order matters. Say what you need and what you propose. Never send status updates or courtesy messages. Your members can message you and "main", nobody else. The plugin refuses the rest.
+The foundry plugin enforces these rules and refuses any other message from inside a crew:
+
+- You may message "main", your own members, and the other crews' leads.
+- Your members may message you and each other, nobody else. A member's question for the person goes to you, and you pass it on.
+- An address no agent in this session has had is refused. So is a name that two live agents in different crews share; use the agent's id then.
+
+Message another lead (by its name, from your brief) only when your work collides with theirs: you need a file they own, a shared interface changes, or the merge order matters. Say what you need and what you propose. Never send status updates or courtesy messages.
 
 ## 7. When you need the person
 
-If you are blocked on a decision only the person can make, send it to the foreman: `SendMessage({ to: "main", summary: "<5-10 words>", message: "<the question, the options, what you recommend>" })`. Make the first line the question itself. Then stop and wait. The answer arrives as a message, and you continue from there. Don't guess at product decisions.
+If you are blocked on a decision only the person can make, send it to the foreman, starting the message with `QUESTION:`:
 
-## 8. Final report
+```
+SendMessage({ to: "main", summary: "<5-10 words>", message: "QUESTION: <the question>\n<the options, and what you recommend>" })
+```
+
+Then stop and wait. `/foundry` shows your crew as waiting on the person until the foreman answers. The answer arrives as a message, and you continue from there. Don't guess at product decisions. If you have to end your run before the answer comes, make your last message start with `QUESTION:` too, so the foreman sees it is a question and not your report.
+
+## 8. When the foreman asks you to rebase
+
+In `sequential` mode, the foreman merges the crews one at a time and asks each lead in turn to make its branch ready. When it asks you, rebase your crew branch onto the target it names (`git fetch` if needed, then `git rebase <target>`), resolve the conflicts with the work that merged before yours, run the checks again and reply with a fresh final report. The foreman only fast-forwards the target to your branch, so the branch must contain the target's head.
+
+## 9. Final report
 
 Your last message is your report. Use exactly these sections. If you stop with work left, start the report with `CHECKPOINT:` and say in Open questions what remains, as a numbered list naming files.
 

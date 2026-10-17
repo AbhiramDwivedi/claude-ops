@@ -10,7 +10,8 @@ import {
   LEAD_TYPE,
   messageVerdict,
   MODEL_REFUSAL,
-  recipientOf,
+  questionOf,
+  recipientsOf,
   reportPath,
   safeName,
   statusText,
@@ -65,21 +66,53 @@ test('makes every path segment safe', async () => {
   expect(safeName('..')).toBe('agent')
 })
 
-test('finds a recipient by name, by name with a listing ref, or by id', async () => {
-  expect(recipientOf('billing', AGENTS)?.id).toBe('L2')
-  expect(recipientOf('billing [ref 2]', AGENTS)?.id).toBe('L2')
-  expect(recipientOf('B1', AGENTS)?.id).toBe('B1')
-  expect(recipientOf('nobody', AGENTS)).toBeUndefined()
+test('finds a recipient by id, or by name with a listing ref dropped', async () => {
+  expect(recipientsOf('billing', AGENTS).map(a => a.id)).toEqual(['L2'])
+  expect(recipientsOf('billing [ref 2]', AGENTS).map(a => a.id)).toEqual(['L2'])
+  expect(recipientsOf('B1', AGENTS).map(a => a.id)).toEqual(['B1'])
+  expect(recipientsOf('nobody', AGENTS)).toEqual([])
 })
 
-test('lets crew agents message main and their own crew', async () => {
-  expect(messageVerdict('A2', 'main', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
-  expect(messageVerdict('A1', 'main [ref]', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
+test('resolves a name to its live agents first, else to the newest one seen', async () => {
+  const ended = (a: Agent, seq: number): Agent => ({ ...a, live: false, seq })
+  // a lead restarted under its old name: the live one wins over the older, ended one
+  const restarted = [ended(agent('L1', LEAD_TYPE, 'auth'), 1), { ...agent('L9', LEAD_TYPE, 'auth'), live: true, seq: 9 }]
+  expect(recipientsOf('auth', restarted).map(a => a.id)).toEqual(['L9'])
+  // none live: the newest seen
+  const both = [ended(agent('W1', 'x', 'worker', 'L1'), 2), ended(agent('W2', 'x', 'worker', 'L2'), 5)]
+  expect(recipientsOf('worker', both).map(a => a.id)).toEqual(['W2'])
+})
+
+test('never lets an ended namesake carry a message into another crew', async () => {
+  // crew auth's worker has ended; crew billing has a live one of the same name
+  const agents = [...AGENTS, { ...agent('W1', 'x', 'worker', 'L1'), live: false, seq: 1 }, { ...agent('W2', 'x', 'worker', 'L2'), live: true, seq: 2 }]
+  expect(messageVerdict('A1', 'worker', agents).kind).toBe('deny')
+  expect(messageVerdict('B1', 'worker', agents)).toEqual({ kind: 'allow', crossCrew: false })
+})
+
+test('refuses a name two live agents in different crews share', async () => {
+  const agents = [...AGENTS, agent('W1', 'x', 'worker', 'L1'), agent('W2', 'x', 'worker', 'L2')]
+  const verdict = messageVerdict('A1', 'worker', agents)
+  expect(verdict.kind === 'deny' && verdict.reason).toContain('more than one live agent is named "worker"')
+  // the id still reaches one exactly
+  expect(messageVerdict('A1', 'W1', agents)).toEqual({ kind: 'allow', crossCrew: false })
+})
+
+test('lets members message their lead and siblings, and leads message main and their members', async () => {
   expect(messageVerdict('A2', 'auth', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
   expect(messageVerdict('A1', 'auth-scout', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
   expect(messageVerdict('L1', 'A2', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
-  // a member that has ended is no longer listed, but its crew-prefixed name still says whose it is
-  expect(messageVerdict('L1', 'auth-tester', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
+  expect(messageVerdict('L1', 'main', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
+  expect(messageVerdict('L2', 'main [ref]', AGENTS)).toEqual({ kind: 'allow', crossCrew: false })
+})
+
+test('refuses a member messaging main, and any crew agent messaging an address nobody has', async () => {
+  const toMain = messageVerdict('A2', 'main', AGENTS)
+  expect(toMain.kind === 'deny' && toMain.reason).toContain('your lead, auth')
+  expect(messageVerdict('A1', 'main [ref]', AGENTS).kind).toBe('deny')
+  // no crew-prefix guess: an unknown name is refused, even one that looks like the crew's
+  expect(messageVerdict('L1', 'auth-tester', AGENTS).kind).toBe('deny')
+  expect(messageVerdict('A1', 'auth-tester', AGENTS).kind).toBe('deny')
 })
 
 test('lets one lead message another, as a cross-crew message', async () => {
@@ -128,6 +161,14 @@ test('shows each crew with its live members by model and its last report', async
   expect(text).toContain('- billing: ended, no live members, no report yet')
   expect(text).toContain('Messages between leads: C:/r/.git/foundry/s1/messages.jsonl')
   expect(statusText([], now)).toContain('/foundry:run')
+  const asking = statusText([{ crew: 'auth', status: 'idle', live: {}, lastReportMs: now, question: 'Keep the v1 endpoint?' }], now)
+  expect(asking).toContain('- auth: idle, no live members, waiting on you: Keep the v1 endpoint?')
+})
+
+test('reads a lead question only when the text starts with QUESTION:', async () => {
+  expect(questionOf('QUESTION: Keep the v1 endpoint?\nOptions: a or b')).toBe('Keep the v1 endpoint?')
+  expect(questionOf('  QUESTION: why')).toBe('why')
+  expect(questionOf('## Summary\nQUESTION: no')).toBeUndefined()
 })
 
 test('counts models by family and formats ages', async () => {

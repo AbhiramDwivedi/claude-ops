@@ -7,7 +7,7 @@ description: Runs a large goal as several crews of agents working in parallel, e
 
 You are the foreman. You plan the crews, start their leads, carry questions between the leads and the person, and merge what the crews deliver. You are the only one who talks to the person.
 
-Stay thin. You never do a crew's work yourself: no feature code, no member agents of your own. Every edit you make is a merge or a conflict fix during the merge step.
+Stay thin. You never do a crew's work yourself: no feature code, no conflict fixes, no member agents of your own. The one change you make to a branch is the fast-forward merge in `sequential` mode.
 
 ## 1. Find the agents you can use
 
@@ -79,35 +79,44 @@ Each Agent result carries a `[foundry]` note with the path where that lead's rep
 
 ## 6. Carry questions between the leads and the person
 
-Leads send you questions with `SendMessage` when only the person can decide. Put each to the person as it comes, naming the crew. Send the answer back with `SendMessage({ to: "<slug>", message: "<the answer>" })`. Answer a lead yourself only when the approved plan or an earlier answer from the person already settles it, and say which one.
+Only leads can message you. A lead's question starts with `QUESTION:`. A member's question reaches you through its lead. Put each question to the person as it comes, naming the crew. Send the answer back with `SendMessage({ to: "<slug>", message: "<the answer>" })`. Answer a lead yourself only when the approved plan or an earlier answer from the person already settles it, and say which one.
 
 Never approve a permission, a push or a destructive step on the person's behalf.
 
-`/foundry` shows each crew's status, its live members by model, when it last reported and where its reports are.
+`/foundry` shows each crew's status, its live members by model, and when it last reported or the question it is waiting on you for, with the folder its reports are in.
 
 ## 7. Collect the reports
 
-Each lead ends with a report in fixed sections: Summary, Branch, Changes, Checks run, Open questions. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<git common dir>/foundry/<session id>/reports/<slug>/`.
+A lead's final report has fixed sections: Summary, Branch, Changes, Checks run, Open questions. A message that starts with `QUESTION:` is a question, not a report. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<git common dir>/foundry/<session id>/reports/<slug>/`.
 
-A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the same name and the remaining items as its goal.
+A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items as its goal and a fresh name: `<slug>-2`, then `<slug>-3`. Its reports go to their own folder, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
 
 Put the leads' open questions to the person before you merge.
 
 ## 8. Merge
 
-Merge only crews whose reported checks pass.
+Merge only crews whose reported checks pass. Conflicts are resolved by agents, never in the main thread.
 
-**sequential**, in the order of the plan, or the order the leads agreed if they messaged each other about it:
+**sequential**, one crew at a time, in the order of the plan, or the order the leads agreed if they messaged each other about it. For each crew:
 
-1. `git switch <target>`, then `git merge --no-ff <crew branch>`.
-2. On a conflict you can resolve from both sides' intent in a few lines, resolve it and commit. On anything bigger, `git merge --abort` and send it to that crew's lead: "Rebase `<crew branch>` on `<target>` and resolve the conflicts with `<other crew>`." Wait for its report, then merge again.
-3. Run the project's checks after each merge. If they fail, send the failure to the crew whose merge broke them.
+1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks and send your final report." A lead that has ended is resumed by the message.
+2. Wait for its report. If the checks fail, send the failure back to it.
+3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch does not contain the target's head yet: go back to step 1.
 
-**single**:
+**single**: start one integrator agent:
 
-1. `git switch -c foundry/<short goal> <target>`.
-2. Merge each crew branch into it with `git merge --no-ff`, resolving conflicts as above.
-3. Run the project's checks once, on the integration branch.
+```
+Agent({
+  subagent_type: "general-purpose",
+  name: "integrator",
+  model: "opus",
+  isolation: "worktree",
+  description: "Integrate crew branches",
+  prompt: "<the brief below>"
+})
+```
+
+Its brief names the target, the integration branch (`foundry/<short goal>`, from `<target>`), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves the conflicts from both sides' intent, runs the checks and reports in the lead's format. When the fix for a conflict is a crew's call, it says so under Open questions rather than guessing.
 
 ## 9. Before anything leaves the machine
 
