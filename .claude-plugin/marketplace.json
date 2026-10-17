@@ -39,6 +39,12 @@
       "description": "Sets a project up from its actual code: conventions, lint and test hooks, a review checklist and agents with fixed models; revises it later from real sessions",
       "source": "./plugins/kit",
       "category": "productivity"
+    },
+    {
+      "name": "foundry",
+      "description": "Runs a big goal as parallel crews of agents: each crew's lead delegates to your project's agents in its own worktree, and the crews merge one at a time or as one PR",
+      "source": "./plugins/foundry",
+      "category": "productivity"
     }
   ]
 }
