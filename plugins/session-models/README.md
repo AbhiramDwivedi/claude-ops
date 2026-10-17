@@ -8,6 +8,14 @@ model: Opus · effort: high · agents: Opus (12 medium, 1 high), Sonnet (2 low) 
 
 The line is dim. Only the warnings marked ⚠ are drawn in the warning color. The directory comes last, with your home folder shown as `~`. When the band is too narrow, the path loses its start, so the folders nearest you stay readable: `cwd: …/plugins/session-models`. The line sits in the band above the prompt, alongside any other plugin's line there; collapse the band with its `[-]` or ctrl+x ctrl+a. In the VS Code extension and on a phone, which have no band, the line falls back to the plugin status line. That status shows everywhere, in its usual yellow, while such a surface is attached.
 
+A crew is a named top-level agent (one with a name, spawned by the main thread) that has at least one live descendant. Its size is the lead plus every live descendant, grandchildren included, and the segment breaks that size down by model:
+
+```
+crews: export 4 (sonnet 3, opus 1) · staffing 3 (sonnet 2, opus 1)
+```
+
+Crews run largest first, then by name, and models within a crew by count. A [foundry](../foundry) lead and its crew show up here this way. Past three, the rest collapse to `+N more`. With no crew, the segment is left out. Crew members still count in `agents:` and in the live total as before. An unnamed lead, a named agent with no live helpers, and finished helpers are not counted. A member whose model is not known yet adds to the size but not to the breakdown.
+
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `liveAgentsWarn` | 6 | Warns when this many agents run at once, counting the main thread. |

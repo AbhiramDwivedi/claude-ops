@@ -29,7 +29,11 @@ import {
   parseWindowsSnapshot,
   parseWorktrees,
   portRange,
-  readOnlyTypes,
+  childDirs,
+  ignoredDirs,
+  nestedToast,
+  noIsolateTypes,
+  skipForNested,
   releaseSlot,
   safeGroups,
   selectVictims,
@@ -38,7 +42,7 @@ import {
   worktreeRootOf,
 } from '../hooks/register'
 
-const RO = readOnlyTypes('')
+const RO = noIsolateTypes('')
 
 test('gives an editing agent a worktree, and a reading one none', async () => {
   expect(needsWorktree({ subagent_type: 'general-purpose' }, true, RO)).toBe(true)
@@ -56,9 +60,46 @@ test('gives an editing agent a worktree, and a reading one none', async () => {
   expect(needsWorktree({ isolation: 'worktree' }, true, RO)).toBe(false)
   expect(needsWorktree({ subagent_type: 'general-purpose' }, false, RO)).toBe(false)
   // the configured list adds to the defaults
-  const more = readOnlyTypes('auditor, Linter ,')
+  const more = noIsolateTypes('auditor, Linter ,')
   expect(needsWorktree({ subagent_type: 'linter' }, true, more)).toBe(false)
   expect(needsWorktree({ subagent_type: 'Explore' }, true, more)).toBe(false)
+})
+
+test('takes no-isolate types from noIsolateAgents and the old readOnlyAgents together', async () => {
+  const both = noIsolateTypes('builder, tester', ['auditor'], undefined)
+  for (const t of ['builder', 'tester', 'auditor', 'kit:builder', 'Explore']) {
+    expect(needsWorktree({ subagent_type: t }, true, both)).toBe(false)
+  }
+  expect(needsWorktree({ subagent_type: 'general-purpose' }, true, both)).toBe(true)
+  expect(noIsolateTypes(undefined, '')).toEqual(noIsolateTypes(''))
+})
+
+test('picks the ignored directories out of ls-files output', async () => {
+  expect(ignoredDirs('svc-a/\r\nnode_modules/\n.env\nservices/b/\n../out/\n"we\\"ird/"\n')).toEqual(['svc-a', 'node_modules', 'services/b'])
+  expect(ignoredDirs('')).toEqual([])
+  expect(ignoredDirs('a/\nb/\nc/', 2)).toEqual(['a', 'b'])
+})
+
+test('checks only real subdirectories one level down, at most cap of them', async () => {
+  const entries = [
+    { name: 'a', kind: 'dir' },
+    { name: 'notes.md', kind: 'file' },
+    { name: 'link', kind: 'other', isLink: true },
+    { name: '.git', kind: 'dir' },
+    { name: 'b', kind: 'dir' },
+  ]
+  expect(childDirs('services', entries)).toEqual(['services/a', 'services/b'])
+  expect(childDirs('services', entries, 1)).toEqual(['services/a'])
+})
+
+test('keeps agents in the main checkout for nested repos only without a setup script', async () => {
+  expect(skipForNested({ nested: ['svc-a'], hasSetup: false })).toBe(true)
+  expect(skipForNested({ nested: ['svc-a'], hasSetup: true })).toBe(false)
+  expect(skipForNested({ nested: [], hasSetup: false })).toBe(false)
+  const text = nestedToast(['a', 'b', 'c', 'd', 'e'], '.claude/worktree-setup.sh')
+  expect(text).toContain('a, b, c, +2 more')
+  expect(text).toContain('.claude/worktree-setup.sh')
+  expect(text).toContain('isolateNestedRepos')
 })
 
 test('rewrites only the Agent arguments, adding isolation', async () => {
