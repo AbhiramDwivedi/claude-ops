@@ -10,10 +10,35 @@ export const READ_ONLY_AGENTS = ['Explore', 'Plan', 'claude-code-guide', 'status
 // the Agent tool's own arguments, the ones an updatedInput may carry back
 const AGENT_KEYS = ['description', 'prompt', 'subagent_type', 'model', 'effort', 'name', 'team_name', 'mode', 'run_in_background', 'isolation']
 
-// the configured extra read-only types: a comma-separated string, or a list
-export function readOnlyTypes(extra: unknown): Set<string> {
-  const more = Array.isArray(extra) ? extra.map(String) : typeof extra === 'string' ? extra.split(',') : []
+// The agent types that never get a worktree: the built-in read-only ones plus each configured list, each a
+// comma-separated string or a list. `noIsolateAgents` is the option; `readOnlyAgents` is its deprecated old name.
+export function noIsolateTypes(...extras: unknown[]): Set<string> {
+  const more = extras.flatMap(extra => (Array.isArray(extra) ? extra.map(String) : typeof extra === 'string' ? extra.split(',') : []))
   return new Set([...READ_ONLY_AGENTS, ...more].map(t => t.trim().toLowerCase()).filter(t => t !== ''))
+}
+
+// The ignored directories worth checking for a nested repo, from `git ls-files --others --ignored
+// --exclude-standard --directory` run with core.quotePath off: only directory entries, at most `cap` of them,
+// without the trailing slash. A name git still quotes (a quote or newline in it) is skipped.
+export function ignoredDirs(lsFilesOut: string, cap = 200): string[] {
+  return lsFilesOut
+    .replace(/\r/g, '')
+    .split('\n')
+    .filter(entry => entry.endsWith('/') && !entry.startsWith('"') && !entry.split('/').includes('..'))
+    .map(entry => entry.slice(0, -1))
+    .slice(0, cap)
+}
+
+// A repo whose ignored directories hold their own git repos (a workspace of service repos) keeps its code
+// outside what a worktree of it would contain. Agents then stay in the main checkout, unless the repo has a setup
+// script (expected to make the nested worktrees). isolateNestedRepos skips this check altogether.
+export function skipForNested(f: { nested: readonly string[]; hasSetup: boolean }): boolean {
+  return f.nested.length > 0 && !f.hasSetup
+}
+
+export function nestedToast(nested: readonly string[], script: string): string {
+  const named = nested.slice(0, 3).join(', ') + (nested.length > 3 ? `, +${nested.length - 3} more` : '')
+  return `worktrees: agents run in the main checkout, as this repo ignores nested git repos (${named}) a worktree would not contain. To isolate them, add ${script} to make their worktrees, or set isolateNestedRepos.`
 }
 
 // An Agent call gets a worktree when nothing chose its isolation, the session is in a git repo, and its type can
@@ -766,6 +791,22 @@ async function copyIncluded($: $, repo: Repo, path: string, windows: boolean): P
   return r.exitCode === 0 ? `copied ${files.length} .worktreeinclude file(s)` : `.worktreeinclude copy failed: ${r.stderr.slice(0, 300)}`
 }
 
+// The nested repos of the session's repo that its .gitignore hides, and whether agents stay in the main checkout
+// for them: only when the repo has no setup script for this platform.
+async function nestedRepos($: $): Promise<{ skip: boolean; toast: string }> {
+  const top = await git($, undefined, 'rev-parse', '--show-toplevel')
+  if (!top.ok || top.out === '') return { skip: false, toast: '' }
+  const ls = await git($, top.out, '-c', 'core.quotePath=false', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')
+  if (!ls.ok) return { skip: false, toast: '' }
+  const nested: string[] = []
+  for (const dir of ignoredDirs(ls.out)) if (await $.fs.exists(`${top.out}/${dir}/.git`)) nested.push(dir)
+  if (nested.length === 0) return { skip: false, toast: '' }
+  const script = `.claude/worktree-setup.${(await isWindows($)) ? 'ps1' : 'sh'}`
+  const hasSetup = await $.fs.exists(`${top.out}/${script}`)
+  await $.ui.log(`worktrees: nested repos ${nested.join(', ')}; setup script ${hasSetup ? 'present' : 'absent'}`, { to: 'debug' })
+  return { skip: skipForNested({ nested, hasSetup }), toast: nestedToast(nested, script) }
+}
+
 function portBaseOf(options: Record<string, unknown>): number {
   const n = Number(options.portBase ?? 4000)
   return Number.isFinite(n) && n >= 1024 && n <= 64_000 ? Math.floor(n) : 4000
@@ -1141,9 +1182,14 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
 const passThrough = ($: unknown, e: any, next: any) => next(e)
 
 export const register: Register = (on, options) => {
-  const readOnly = readOnlyTypes(options.readOnlyAgents)
+  const noIsolate = noIsolateTypes(options.noIsolateAgents, options.readOnlyAgents)
+  const isolateNested = options.isolateNestedRepos === true || options.isolateNestedRepos === 'true'
   const base = portBaseOf(options)
   let inRepo: boolean | undefined
+  // whether this session's repo keeps its agents in the main checkout for its nested repos, found once; and
+  // whether the session was told so
+  let nested: Promise<{ skip: boolean; toast: string }> | undefined
+  let toldNested = false
   // the worktrees this session's WorktreeCreate made or reused; in memory on purpose: what a resumed or crashed
   // session left is for /tidy
   const own: Sweeps = { tracked: new Map(), chain: Promise.resolve() }
@@ -1154,7 +1200,18 @@ export const register: Register = (on, options) => {
     const input = e as unknown as Record<string, unknown>
     if (input.isolation !== undefined) return next(e)
     inRepo ??= (await git($, undefined, 'rev-parse', '--is-inside-work-tree')).out === 'true'
-    if (!needsWorktree(input, inRepo, readOnly)) return next(e)
+    if (!needsWorktree(input, inRepo, noIsolate)) return next(e)
+    if (!isolateNested) {
+      nested ??= nestedRepos($)
+      const found = await nested
+      if (found.skip) {
+        if (!toldNested) {
+          toldNested = true
+          await $.ui.toast(found.toast)
+        }
+        return next(e)
+      }
+    }
     const result = await next(e)
     if (result.deny !== undefined || result.updatedInput !== undefined) return result
     return { ...result, updatedInput: withWorktree(input) }
