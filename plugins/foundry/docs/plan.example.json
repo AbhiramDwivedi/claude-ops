@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "goal": "Add rate limiting to the public API, with per-key quotas stored in Postgres",
+  "architecture": "docs/architecture.md",
+  "approval": "owner",
+  "approvedAt": null,
+  "agentCap": 40,
+  "maxParallelCrews": 4,
+  "crews": [
+    {
+      "slug": "ratelimit-design",
+      "wave": 0,
+      "verdict": "design",
+      "modules": ["gateway", "quotas"],
+      "owns": [
+        "docs/architecture.md",
+        "docs/adr/0007-rate-limiting.md",
+        "tests/contract/quota-store.test.ts"
+      ],
+      "doneCheck": "pnpm test -- tests/contract/quota-store.test.ts",
+      "doneCheckProved": true,
+      "estAgents": 5,
+      "status": "planned"
+    },
+    {
+      "slug": "quotas",
+      "wave": 1,
+      "verdict": "change",
+      "modules": ["quotas"],
+      "owns": ["src/quotas/**", "migrations/0012_quotas.sql", "tests/quotas/**"],
+      "doneCheck": "pnpm test -- quotas",
+      "doneCheckProved": true,
+      "estAgents": 8,
+      "status": "planned"
+    },
+    {
+      "slug": "gateway",
+      "wave": 1,
+      "verdict": "extend",
+      "modules": ["gateway"],
+      "owns": ["src/gateway/middleware/ratelimit.ts", "tests/gateway/ratelimit.test.ts"],
+      "doneCheck": "pnpm test -- gateway/ratelimit",
+      "doneCheckProved": true,
+      "estAgents": 6,
+      "status": "planned"
+    }
+  ]
+}
