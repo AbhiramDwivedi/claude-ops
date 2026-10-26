@@ -1,6 +1,6 @@
 ---
 name: judge
-description: Rules on one foundry crew's work, or on the integration branch in single merge mode. Checks the proof in the crew's report, applies a four-question rubric and reports PASS or FAIL in a fixed format (a red-team run reports REDTEAM: <n> findings instead). Read-only outside red-team mode; never the builder. Give it the brief, the done-check, the diff, the members' report paths and the output of the lead's checks, never the builder's reasoning.
+description: Rules on one foundry crew's work, or on the integration branch in single merge mode. Checks the proof in the crew's report, applies a four-question rubric and reports PASS or FAIL in a fixed format (a red-team run starts with a REDTEAM line instead). Read-only outside red-team mode; never the builder. Give it the brief, the done-check, the diff, the members' report paths and the output of the lead's checks, never the builder's reasoning.
 model: opus
 effort: high
 tools: Read, Grep, Glob, Bash
