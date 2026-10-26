@@ -71,7 +71,7 @@ A crew, as the hooks see it, is a `foundry:lead` with no parent (the main thread
 4. Split: Crews own disjoint files, each with a done-check it can't game, its high-impact paths, a red team yes or no, and a resource slice (port range, database or temp directory).
 5. Approval and freeze: The foreman shows the plan table and asks for the merge mode and target branch. On approval it writes `plan.md`. From here the scope is frozen, and only the owner can change it.
 6. Leads start: The foreman writes `goals/<slug>.md` for each crew and starts all leads in one message.
-7. Inside each crew: The lead runs its checks to prove its environment works, runs a full depth pass, splits the work into member tasks, and delegates. Members report with proof. The lead merges the members' branches with `git merge --no-ff`, runs the checks, then runs the red team (when there is one) and a fresh judge.
+7. Inside each crew: The lead runs its checks to prove its environment works, runs a full depth pass, splits the work into member tasks, and delegates. Members report with proof. The lead merges the members' branches with `git merge --no-ff`, runs the checks, then runs the red team (when there is one) and a fresh judge. Before the judge it compares its diff with the files it owns and asks the foreman for any extension. Every member commit carries `Foundry-Crew: <slug>` and `Foundry-Role: <role>` trailers. The judge reads the role with `git log --format='%H %(trailers:key=Foundry-Role,valueonly)'` and fails the crew if a `builder` commit touched the done-check tests. A file outside the crew's ownership is a `QUESTION:` for the foreman in the judge's findings, not a FAIL by itself.
 8. Messages: Leads send the foreman `QUESTION:`, `BLOCKED:` or `PROPOSAL:`. The foreman settles what it can and logs it. Items for the owner go through a cynic first.
 9. Pre-merge review: A cynic reads each crew's final report and the plan, and checks for drift and overlap between crews.
 10. Judge-gated merge: The foreman reads the crew's highest-numbered judge file itself and merges only on `VERDICT: PASS` whose `## Proof checked` SHA matches the crew branch head. In `sequential` mode each lead rebases onto the target in turn, a fresh judge rules if the head moved, and the foreman fast-forwards. In `single` mode an integrator merges every crew branch into `foundry-<short goal>` and an integration judge rules on it.
@@ -83,15 +83,16 @@ Everything for a session lives under one folder:
 
 ```
 <git common dir>/foundry/<session id>/
-  decisions.md               foreman: one line per decision, with the cynic's recommendation
+  decisions.md               foreman: one line per decision, `- HH:MM | decision | reason | cynic | followed`
   plan.md                    foreman: the approved plan, written once the owner approves
   goals/<slug>.md            foreman: each crew's goal, done-check, owned files, high-impact paths
   reports/<crew>/<agent>.md  plugin: each crew agent's last report, judges' included
+  reports/<crew>/<agent>.interim.md  plugin: a stop the gate sent back
   messages.jsonl             plugin: lead-to-lead messages
   messages.<n>.jsonl         plugin: the log rolled over, past 3 MiB
 ```
 
-The plugin writes only `reports/` and the message logs. The foreman writes the other three, as `skills/run/SKILL.md` tells it to.
+The plugin writes only `reports/` and the message logs. The foreman writes the other three, as `skills/run/SKILL.md` tells it to; the plugin only stamps the time on new `decisions.md` lines (see Decision times).
 
 The folder is `git rev-parse --path-format=absolute --git-common-dir` run in the session's working directory, plus `foundry/<session id>`. Every worktree of a repo shares one git common dir, so all crews write to the same place. Outside git the base is `$HOME/.claude` (or `%USERPROFILE%\.claude`). The path is worked out once per session and cached; a `/clear` works it out again. Session ids, crew names and agent names pass through `safeName` in `register.ts`: anything other than letters, digits, `.`, `_` and `-` becomes `-`, and the result is cut to 100 characters.
 
@@ -102,7 +103,7 @@ Each line of `messages.jsonl` is `{ "ts", "from", "to", "summary" }`, where `fro
 Two kinds of state don't go to the foundry folder:
 
 - `foundry.limitReset` in Claude Code's plugin state, `{ resetsAt, fired }`: the five-hour reset a wake is armed for and whether it has gone out. It survives a hot reload of the hooks module.
-- The module's memory: every agent seen this session with its spawn name, parent and model, each agent's last activity time, the stalled set, each lead's tag, and the stop-gate counters. A reload or `/clear` starts it over.
+- The module's memory: every agent seen this session with its spawn name, parent and model, each agent's start and last activity time, each agent's status at the last heartbeat, the stalled set, each lead's tag, idle period and final-report time, the stop-gate counters, and when the main session was last active. A reload or `/clear` starts it over, except the main session's last activity, which `/clear` keeps.
 
 ## Hooks
 
@@ -113,11 +114,12 @@ All of these are in `hooks/register.ts`.
 | `classic.SessionStart`, main session only | Adds `[foundry] dir: <path>` to the context, so the foreman never derives the folder itself. |
 | `session.start` | Registers `/foundry`, starts the one-minute heartbeat, and re-arms a pending limit-reset wake from plugin state. |
 | `session.end` with reason `clear` | Clears the module's memory. |
-| `agent.spawn` | Records each agent's spawn name, type, parent and model. |
+| `agent.spawn` | Records each agent's spawn name, type, parent, model and start time, and counts the spawn as activity. |
 | `tool.call` on `SendMessage` | Enforces who a crew agent may message, logs lead-to-lead messages, and tracks each lead's tag for `/foundry`. |
 | `tool.call` on `Agent` | Refuses crew agents' calls without `model` or `effort`, or with `effort: "max"`. Adds the report-path note to calls that start a lead or a crew member. |
-| `tool.call`, any tool | Records activity. On `SubagentHandback`, captures the report. |
-| `turn.step` | Records activity for each model request. |
+| `tool.call` on `Write`, `Edit` | Stamps the clock's time on new lines of this session's `decisions.md`. |
+| `tool.call`, any tool | Records activity, the main session's too. On `SubagentHandback`, refuses an empty hand-back from a crew agent and captures the report. |
+| `turn.step` | Records activity for each model request, the main session's too. |
 | `classic.SubagentStop` | Runs the lead stop gate and saves the stopping agent's report. |
 | `session.measure`, `classic.StopFailure` | Arm the limit-reset wake. |
 | `command.run` for `foundry` | Prints the crew status. |
@@ -150,19 +152,29 @@ A call that starts a lead from the main thread, or any agent from inside a crew,
 
 When a crew agent stops, the hook writes its last assistant message to its report file. When the agent sent its report through `SubagentHandback`, the hook writes that message instead, and the stop that follows leaves the file alone. A lead's hand-back is written only if it would pass the stop gate; otherwise the stop decides what's written.
 
+A crew agent's hand-back under 40 characters once trimmed (`HANDBACK_MIN`), or one that is only `placeholder`, `todo` or `tbd`, is refused: `[foundry] Refused: that hand-back is too short to be a report. Hand back your real report: what you did, the branch, and proof.` If the crew can't be read, the hand-back goes through.
+
 ### The lead stop gate
 
 A lead's stop is checked against its hand-back, else its last message. It goes through when the text starts with `CHECKPOINT:`, `BLOCKED:`, `QUESTION:` or `PROPOSAL:`, or has a `## Proof` heading. Otherwise the stop is sent back with:
 
 `[foundry] Not done yet: finish with your report, in the sections Summary, Branch, Changes, Proof, Checks run and Open questions (each a "## " heading), or, if you cannot finish, start your final message with CHECKPOINT:, BLOCKED:, QUESTION: or PROPOSAL:.`
 
-The gate sends a stop back at most twice in a row (`LEAD_STOP_BLOCKS`), then lets the next one through, so a lead can't loop forever. A stop while the lead still has work out is interim and always goes through: a descendant is live, or a background task belonging to a descendant is running or pending. An interim stop's text is saved to the lead's report file but doesn't change its tag. The gate applies to `foundry:lead` agents only.
+The gate sends a stop back at most twice in a row (`LEAD_STOP_BLOCKS`), then lets the next one through, so a lead can't loop forever. A stop while the lead still has work out is interim and always goes through: a descendant is live, or a background task belonging to a descendant is running or pending. An interim stop's text is saved to `<agent>.interim.md` and doesn't change the report file, its tag or the lead's idle period. A stop the gate sends back is saved there too. The gate applies to `foundry:lead` agents only.
 
 ### Heartbeat and stalls
 
-Every 60 seconds the module checks each crew agent listed as `running`. An agent counts as active at each tool call and each model request. One with nothing on record starts counting from the first check. An agent idle for 15 minutes or more is reported once, until it is active again, with a toast, `[foundry] stalled: <agent> (crew <crew>), no activity for <n>m`, and a prompt to the main session:
+Every 60 seconds the module checks each crew agent listed as `running`. An agent counts as active at its spawn, each tool call and each model request. One with nothing on record starts counting from the first check. One that is `running` now but wasn't at the last check, or wasn't listed then, counts as active now and leaves the stalled set: a resumed agent isn't reported on its old activity. An agent idle for 15 minutes or more is reported once, until it is active again, with a toast, `[foundry] stalled: <agent> (crew <crew>), no activity for <n>m`, and a prompt to the main session:
 
-`[foundry] stalled: <agent> in crew <crew>, no activity for <n>m. Check /foundry and message the <crew> lead.`
+`[foundry] stalled: <agent> in crew <crew>, no activity for <n>m. Check /foundry and message the <crew> lead. Read its transcript tail before you stop it; a resumed agent may be compacting.`
+
+### Idle leads
+
+The same check looks at each listed lead that isn't `running` and has no member at work. A lead is excused while it waits on the foreman (a `QUESTION:`, `BLOCKED:` or `PROPOSAL:` tag) or after a final report: a `## Proof` section, `CHECKPOINT:` or `BLOCKED:`, captured at or after its last activity. Otherwise its idle period starts at the first check, and after 15 minutes the main session gets one prompt per period:
+
+`[foundry] idle lead: <lead> in crew <crew>, no report for <n>m and no member at work. Read its last message and resume it with SendMessage, or start <crew>-2 from its report.`
+
+The period ends when the lead runs again or a report of its own is captured. The successor named is the crew's next one: `auth` gives `auth-2`, `auth-2` gives `auth-3`.
 
 ### Limit-reset wake
 
@@ -170,11 +182,15 @@ Two events arm it, and only while a lead is live: a `session.measure` showing th
 
 `[foundry] limit reset: the five-hour usage window reset at <resetsAt>. Check /foundry and message each lead whose crew isn't done to resume.`
 
-The wake goes out once per `resetsAt`. A hot reload cancels the timer with the old module, and `session.start` arms it again from plugin state.
+The wake goes out once per `resetsAt`. A hot reload cancels the timer with the old module, and `session.start` arms it again from plugin state. If the main session made a tool call or model request after `resetsAt`, the reset is claimed and no prompt goes out: the foreman is already at work.
+
+### Decision times
+
+A `Write` or `Edit` of `<foundry dir>/decisions.md` for this session has each new line that starts `- HH:MM |` rewritten with the clock's local time. Lines the log already holds keep their time, and an `Edit` changes only `new_string`. Line endings are kept. Any other file, and another session's log, is left alone.
 
 ### `/foundry`
 
-Prints `Crews (<n>):` and one line per lead: name, status (`ended` once the agent list drops it), live members by model family, then one of `waiting on you: <question>`, `blocked: <text>`, `proposal: <text>`, `waiting on members`, `no report yet` or `last report <time> ago`, then `last active <time> ago`. Under each lead it lists stalled agents, the verdict in the highest-numbered judge file and the report folder. The last lines name the message log, when there is one, and `Foundry dir: <path>`. With no crews it prints `No foundry crews in this session. Start them with /foundry:run.` If reading the crews fails: `foundry could not read the crews; see the debug log.`
+Prints `Crews (<n>):` and one line per lead: name, status (`ended` once the agent list drops it), live members by model family, then one of `waiting on you: <question>`, `blocked: <text>`, `proposal: <text>`, `waiting on members`, `no report yet` or `last report <time> ago`, then `last active <time> ago`. Under each lead it lists stalled agents, the verdict in the highest-numbered judge file and the report folder, then one line per member: `<name> <status> <n>m (<family>), last activity <time> ago` (or `no activity seen`), timed from its spawn or first sighting. The last lines name the message log, when there is one, and `Foundry dir: <path>`. With no crews it prints `No foundry crews in this session. Start them with /foundry:run.` If reading the crews fails: `foundry could not read the crews; see the debug log.`
 
 ### Failing open
 
@@ -182,7 +198,9 @@ Each hook step runs inside a guard. If foundry's code throws, the guard logs `fo
 
 ## Failure modes and recovery
 
-**A stalled agent.** The heartbeat prompts the foreman. The foreman messages the stalled agent's lead, or the lead itself, and asks for its state. `/foundry` keeps showing the agent as stalled until it does something.
+**A stalled agent.** The heartbeat prompts the foreman. The foreman messages the stalled agent's lead, or the lead itself, and asks for its state. `/foundry` keeps showing the agent as stalled until it does something. Before stopping it, the foreman or lead reads its transcript tail: a resumed agent may be compacting.
+
+**An idle lead.** A lead that stopped without a final report while no member works gets one `[foundry] idle lead:` prompt after 15 minutes. The foreman resumes it with a message, or starts its successor from its report.
 
 **The usage limit.** When the five-hour window runs out while crews work, the limit-reset wake prompts the foreman after the reset. The foreman messages each lead that hasn't sent its final report: "Usage limit reset. Resume from where you stopped."
 
