@@ -33,7 +33,7 @@ foundry works with or without agents of your own. When the project defines none 
 8. merges each crew once its highest-numbered judge file says `VERDICT: PASS` for the crew branch's head commit;
 9. reports to you, and asks before every push and every PR.
 
-The foreman follows the cynic's recommendation by default. To overrule it, the foreman logs a one-line reason, and every overrule appears in the end-of-run report. A `BLOCKED:`, a production promotion, a change to frozen scope, and every push or PR reach you whatever the cynic recommends, unless the project grants the foreman merge ownership for pushes and PRs.
+The foreman follows the cynic's recommendation by default. To overrule it, the foreman logs a one-line reason, and every overrule appears in the end-of-run report. The foreman clears a `BLOCKED:` itself only when the plan or decision log gets past it inside frozen scope; every other `BLOCKED:` reaches you, and none is deferred. A production promotion, a change to frozen scope, and every push or PR reach you whatever the cynic recommends, unless the project grants the foreman merge ownership for pushes and PRs.
 
 ## Inside a crew
 
@@ -41,7 +41,7 @@ A lead first proves it can run its crew's checks in its own worktree. If it can'
 
 Every member report carries proof: a command and its output, before-and-after numbers, or a walk through the real flow. These don't count as proof: tests the builder wrote after building, "I verified it" with no output, a typecheck alone, a mocked end-to-end test, and output from another commit. Builders may not edit the done-check tests. Every commit carries a `Foundry-Crew: <slug>` trailer.
 
-After the last merge and a green run of the checks, the lead starts a fresh judge. For a crew with high-impact paths, the plan can add a red team first: `foundry:judge` in red-team mode, working in its own worktree at the crew branch's head, which proves each break with a command and its output. A reproduced break is fixed, and a fresh red team runs before the judge does.
+After the last merge and a green run of the checks, the lead starts a fresh judge. For a crew with high-impact paths, the plan can add a red team first: `foundry:judge` in red-team mode, which works in its own worktree, checks out the crew head SHA there itself, and proves each break with a command and its output. A reproduced break is fixed, and a fresh red team runs before the judge does.
 
 When two fix attempts at one level end with the same check failing, the lead climbs the escalation ladder: Sonnet, then Opus at effort `medium`, `high`, `xhigh`. Each step is a fresh agent, never a resume, and its first deliverable is a root-cause analysis with evidence. If `xhigh` fails twice, the lead sends `BLOCKED:`.
 
@@ -68,7 +68,7 @@ A crew is a `foundry:lead` started by the main thread, plus every agent below it
 - **Crew messages follow the chain.** A member's `SendMessage` may go to its own lead and the other members of its crew. A lead's may go to `main`, its own members and the other leads. Anything else from inside a crew is refused, with a reason telling a member to go through its lead and a lead to message the other crew's lead. So is an address no agent of the session has had, and a name two live agents in different crews share.
 - **Lead-to-lead messages are logged** to `<foundry folder>/messages.jsonl` as `{ ts, from, to, summary }`. Once the log passes 3 MiB it moves to `messages.<n>.jsonl`, the first free number, and a new log starts.
 - **Crew agents set a model and an effort.** An Agent call from inside a crew without `model`, without `effort`, or with `effort: "max"` is refused, with a reason saying what to set.
-- **A lead can't stop without a report.** When a lead with no work still running stops on a message that has no `## Proof` section and doesn't start with `CHECKPOINT:`, `BLOCKED:`, `QUESTION:` or `PROPOSAL:`, the stop is sent back with a reason. The hook sends a stop back at most twice in a row, then lets it through. A stop while the lead's members still run goes through.
+- **A lead can't stop without a report.** When a lead with no live members and no members' background tasks running stops on a message that has no `## Proof` section and doesn't start with `CHECKPOINT:`, `BLOCKED:`, `QUESTION:` or `PROPOSAL:`, the stop is sent back with a reason. The hook sends a stop back at most twice in a row, then lets it through. A stop while a member, or a member's background task, still runs goes through; the lead's own background tasks don't count.
 - **Stalls wake the foreman.** Every minute the plugin checks for running crew agents with no tool call or model request for 15 minutes. It reports each one once, with a toast and a `[foundry] stalled:` prompt to the main session.
 - **A usage-limit reset wakes the foreman.** When the five-hour window hits its limit while a lead is still at work, the plugin sets a timer for two minutes after the reset and then sends a `[foundry] limit reset:` prompt, once per reset.
 - **`/foundry`** lists the crews: each lead's name and status, its live members by model, when it last reported and was last active, any stalled agents, the verdict in its highest-numbered judge file, and its report folder. A lead whose last message to `main`, or last captured report, starts with `QUESTION:`, `BLOCKED:` or `PROPOSAL:` shows as `waiting on you:`, `blocked:` or `proposal:` with the first line, until the foreman messages it. A lead that ended its turn while its members still work shows as `waiting on members`.
@@ -85,7 +85,7 @@ Every hook fails open. If foundry's own code throws, the call goes on as if the 
 - Capturing a report from the hand-back tool, through a `tool.call` hook on `SubagentHandback`, is covered by tests but not yet verified in a live session.
 - The limit-reset wake rests on three things a probe confirmed: `$.clock` timers run from `session.start`, a hot reload cancels them (so the wake is re-armed from plugin state), and `$.prompt.submit` wakes an idle session. Nobody has yet seen the wake fire after a real usage-limit stop.
 - Where an organization manages Claude Code, `SubagentStop` hooks run only in plugins it lists. There, reports are captured only from the hand-back tool. The lead stop gate is a `SubagentStop` hook too, so it shouldn't run there either; that is inferred from the code, not seen.
-- `agents/lead.md` preloads `subagent-limits:split-work`, a skill from the [subagent-limits](../subagent-limits) plugin. What happens when that plugin isn't installed hasn't been tested.
+- `agents/lead.md` tells a lead to load `subagent-limits:split-work`, a skill from the [subagent-limits](../subagent-limits) plugin, when it is available. A run without that plugin hasn't been tested.
 
 ## Install
 

@@ -11,7 +11,7 @@ Be brave: take the hard path, keep going when it gets difficult, don't ask permi
 
 ## 1. Find the deploy setup
 
-Never assume a platform. Read what the project says, in this order: your brief, the project's foundry config, `CLAUDE.md`, the package scripts (`package.json`, `Makefile`, `justfile` and the like), and the CI files (`.github/workflows/`, `.gitlab-ci.yml` and the like). Collect:
+Never assume a platform. Read what the project says, in this order: your brief, `CLAUDE.md`, the package scripts (`package.json`, `Makefile`, `justfile` and the like), and the CI files (`.github/workflows/`, `.gitlab-ci.yml` and the like). Collect:
 
 - the deploy target and environment (preview, staging, production);
 - the deploy or preview command;
