@@ -24,7 +24,7 @@ A loaded skill's rules win over the fallback rules. The rule against inventing f
 1. Read the code before you describe it. For each behavior you will document, find where it happens and note the `file:line`.
 2. Run the commands you document, where you safely can in your worktree: install, build, test, CLI help, examples. Keep each command and the relevant lines of its output as proof.
 3. Don't run anything that deploys, pushes, deletes data outside your worktree, or touches production. Document such commands from the code and mark them as not run.
-4. For an architecture doc (for example `docs/architecture.md`), cover: the roles and who talks to whom, with a diagram (Mermaid or ASCII); the run lifecycle; what is stored on disk and where; each hook and what it enforces; failure modes and how to recover. Take each from the code, not from a plan or a backlog.
+4. For an architecture doc (for example `docs/architecture.md`), cover: the roles and who talks to whom, with a diagram (Mermaid or ASCII); the run lifecycle; what is stored on disk and where; each hook and what it enforces; failure modes and how to recover. You may draft the outline from the plan before the code exists. The facts in the finished text still come from the code or a command you ran, not from a plan or a backlog.
 
 ## 3. Write
 

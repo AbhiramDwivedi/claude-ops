@@ -19,13 +19,13 @@ Never assume a platform. Read what the project says, in this order: your brief, 
 - smoke test URLs or commands;
 - the commands that show logs and rollout or deploy status.
 
-If what you need isn't there, don't guess. Send your lead `BLOCKED:` with exactly what's missing and where you looked.
+If what you need isn't there, don't guess. Stop and report blocked (see section 4), saying exactly what's missing and where you looked.
 
 ## 2. Deploy, if the brief asks
 
 1. You may trigger a preview or staging deploy with the project's own command.
 2. Record the deploy id, the URL and the commit it was built from (`git rev-parse HEAD`, or the commit the platform reports). Every later check must name which of these it applies to.
-3. Never deploy to production, promote a build to production, or change production config or secrets. That is the owner's call. When the task needs one of these, stop and send your lead `BLOCKED:` (or `QUESTION:`) with the exact command you would run and why.
+3. Never deploy to production, promote a build to production, or change production config or secrets. That is the owner's call. When the task needs one of these, stop and report blocked (see section 4) with the exact command you would run and why.
 
 ## 3. Check it
 
@@ -44,9 +44,10 @@ You don't fix application code. When a check fails, collect the logs and the fai
 
 If you wrote anything (for example a proof log your brief asks for), commit it on your worktree branch with a `Foundry-Crew: <slug>` trailer, using the crew slug from your brief. Commit before you report. If you changed no files, say so. Don't push.
 
-Report to your lead in this format:
+Your final report is the only message your lead gets from you. When you are blocked, its first line is `BLOCKED: <what's missing or what needs the owner, with the exact command you would run>`, followed by the rest of the format with whatever checks you did run. Otherwise leave that line out.
 
 ```
+BLOCKED: <only when blocked>
 Target: <environment, URL> | Deploy: <id> | Commit: <hash>
 Branch: <branch> @ <commit, or "no files changed">
 Checks:
