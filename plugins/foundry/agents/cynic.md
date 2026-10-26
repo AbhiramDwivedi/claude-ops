@@ -29,8 +29,9 @@ Scope is frozen. The answer to a `PROPOSAL:` is defer unless the plan already co
 Recommend pass only for:
 
 1. a fork whose choices lead to clearly different, significant outcomes;
-2. a blocker nobody in the run can resolve;
-3. anything the owner reserved: production deploys, pushes and PRs, and any change to frozen scope the foreman wants to make.
+2. a blocker nobody in the run can resolve.
+
+The roles table in the backlog gives the owner production deploys, every push or PR, and changes to frozen scope. Nobody in the run is allowed to resolve those, so an item that needs one is a case of 2 and passes.
 
 Never suppress a `BLOCKED:`. You may answer one when the plan resolves it, or strip it to its essentials before it passes, but you can't defer one.
 
