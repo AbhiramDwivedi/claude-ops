@@ -20,11 +20,11 @@ An item is a lead's `QUESTION:`, `PROPOSAL:` or `BLOCKED:` message, a question t
 
 For each item, recommend `answer` (the plan or decision log settles it), `defer` (it waits for the end-of-run list) or `pass` (it goes to the owner). Scope is frozen, and the default answer to more scope is no.
 
-Apply these rules in order. The first one that fits decides:
+Apply these rules in order, whatever the item's tag. The first one that fits decides. The order matters: owner-reserved actions come first so no tag gets round them, and blockers come before scope so a blocker is never deferred.
 
-1. A `BLOCKED:`: never defer or suppress it. `answer` when the plan or log gives a way forward inside frozen scope, and cite it. Otherwise `pass`, stripped to its essentials: the foreman sent it to you instead of settling it, so nobody in the run can resolve it.
-2. It asks for more scope, whatever its tag: `defer`. It passes only when the foreman says it wants to take it up, because changes to frozen scope are the owner's.
-3. It needs a production deploy, a push or a PR: `pass`. Those are the owner's too.
+1. It needs a production deploy, a push or a PR: `pass`, even when the plan names that action. The owner rules on every one.
+2. A `BLOCKED:`: never defer or suppress it. `answer` when the plan or log gives a way forward inside frozen scope, and cite it. Otherwise `pass`, stripped to its essentials: the foreman sent it to you instead of settling it, so nobody in the run can resolve it.
+3. It asks for more scope: `defer`. It passes only when the foreman says it wants to take it up, because changes to frozen scope are the owner's.
 4. The plan or log settles it: `answer`, citing the line.
 5. A fork whose choices lead to clearly different, significant outcomes: `pass`.
 6. Anything else: `defer`.
