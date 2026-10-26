@@ -17,7 +17,7 @@ import {
   agentVerdict,
   effortVerdict,
 } from '../hooks/register'
-import { NOW, ROOT, handBack, measure, startSession, status, stop, world } from './harness'
+import { NOW, ROOT, handBack, measure, quiet, startSession, status, stop, world } from './harness'
 
 const MIN = 60_000
 
@@ -370,7 +370,7 @@ test('a rate_limit StopFailure without a live lead arms nothing', async ($, on) 
 // ---------- 4. lead stop gate ----------
 
 test('blocks a lead that stops without a report, with a [foundry] reason naming the sections', async ($, on) => {
-  const w = world($, on)
+  const w = quiet(world($, on))
   const r = (await $.classic.SubagentStop(stop('L1', 'All done, merged everything.'))) as { block?: string }
   expect(r.block?.startsWith('[foundry]')).toBe(true)
   for (const s of ['Summary', 'Branch', 'Changes', 'Proof', 'Checks run', 'Open questions', 'CHECKPOINT:', 'BLOCKED:', 'QUESTION:']) expect(r.block).toContain(s)
@@ -385,14 +385,14 @@ test('lets a lead stop when its message starts with CHECKPOINT, BLOCKED or QUEST
 })
 
 test('does not take look-alikes for a report', async ($, on) => {
-  world($, on)
+  quiet(world($, on))
   for (const text of ['PROPOSAL: x', 'Summary: x\nsee CHECKPOINT: later', '## Proofs\nx', '### Proof\nx', 'The ## Proof is below', '']) {
     expect(((await $.classic.SubagentStop(stop('L1', text))) as { block?: string }).block?.startsWith('[foundry]')).toBe(true)
   }
 })
 
 test('blocks at most twice per streak, then lets the third stop through', async ($, on) => {
-  world($, on)
+  quiet(world($, on))
   const blocked = async (active: boolean) => ((await $.classic.SubagentStop(stop('L1', 'chatter', active))) as { block?: string }).block !== undefined
   expect(await blocked(false)).toBe(true)
   expect(await blocked(true)).toBe(true)
@@ -400,7 +400,7 @@ test('blocks at most twice per streak, then lets the third stop through', async 
 })
 
 test('stop_hook_active false starts a new streak; a stop that goes through ends the streak', async ($, on) => {
-  world($, on)
+  quiet(world($, on))
   const blocked = async (active: boolean, text = 'chatter') => ((await $.classic.SubagentStop(stop('L1', text, active))) as { block?: string }).block !== undefined
   expect(await blocked(false)).toBe(true)
   expect(await blocked(true)).toBe(true)
@@ -417,7 +417,7 @@ test('stop_hook_active false starts a new streak; a stop that goes through ends 
 })
 
 test('counts streaks per lead', async ($, on) => {
-  world($, on)
+  quiet(world($, on))
   const blocked = async (id: string, active: boolean) => ((await $.classic.SubagentStop(stop(id, 'chatter', active))) as { block?: string }).block !== undefined
   expect(await blocked('L1', false)).toBe(true)
   expect(await blocked('L1', true)).toBe(true)
@@ -439,7 +439,7 @@ test('never gates an agent outside every crew', async ($, on) => {
 })
 
 test('a blocked stop is not captured; the stop that goes through is', async ($, on) => {
-  const w = world($, on)
+  const w = quiet(world($, on))
   const path = `${ROOT}/reports/auth/auth.md`
   await $.classic.SubagentStop(stop('L1', 'chatter one'))
   await $.classic.SubagentStop(stop('L1', 'chatter two', true))
@@ -449,7 +449,7 @@ test('a blocked stop is not captured; the stop that goes through is', async ($, 
 })
 
 test('a third stop of a streak goes through and is captured', async ($, on) => {
-  const w = world($, on)
+  const w = quiet(world($, on))
   await $.classic.SubagentStop(stop('L1', 'one'))
   await $.classic.SubagentStop(stop('L1', 'two', true))
   await $.classic.SubagentStop(stop('L1', 'three', true))
@@ -457,7 +457,7 @@ test('a third stop of a streak goes through and is captured', async ($, on) => {
 })
 
 test('a blocked stop neither sets nor clears the waiting state', async ($, on) => {
-  const w = world($, on)
+  const w = quiet(world($, on))
   void w
   await $.classic.SubagentStop(stop('L1', 'QUESTION: Keep v1?\nmore'))
   expect(await status($)).toContain('waiting on you: Keep v1?')
@@ -473,7 +473,7 @@ test('checks the hand-back text, not the sign-off, when the lead handed back', a
 })
 
 test('blocks a lead whose hand-back lacks the report even if the sign-off has a Proof heading', async ($, on) => {
-  const w = world($, on)
+  const w = quiet(world($, on))
   await handBack($, 'L1', 'just a note')
   const r = (await $.classic.SubagentStop(stop('L1', '## Proof\nlooks fine'))) as { block?: string }
   expect(r.block?.startsWith('[foundry]')).toBe(true)
@@ -696,7 +696,164 @@ test('a throwing $.state never blocks, denies or throws', async ($, on) => {
 })
 
 test('a throwing file write never blocks a lead\'s stop', async ($, on) => {
-  world($, on, { writeFails: true })
+  quiet(world($, on, { writeFails: true }))
   expect(((await $.classic.SubagentStop(stop('L1', 'CHECKPOINT: x'))) as { block?: string }).block).toBeUndefined()
   expect(((await $.classic.SubagentStop(stop('L1', 'chatter'))) as { block?: string }).block?.startsWith('[foundry]')).toBe(true)
+})
+
+// ---------- 4b. interim stops: a lead with live descendants or its own background work ----------
+
+const blockOf = async ($: Parameters<typeof status>[0], id: string, text: string, active: boolean, tasks?: Parameters<typeof stop>[3]) =>
+  ((await $.classic.SubagentStop(stop(id, text, active, tasks))) as { block?: string }).block
+const idle = (w: ReturnType<typeof world>, id: string) => {
+  w.agents = w.agents.map(a => (a.id === id ? { ...a, status: 'idle' } : a))
+}
+const task = (id: string, status = 'running') => ({ id, type: 'local_agent', status, description: 'd' })
+
+test('a lead with a live member may stop without a report', async ($, on) => {
+  world($, on)
+  expect(await blockOf($, 'L1', 'waiting for the builder', false)).toBeUndefined()
+  expect(await blockOf($, 'L1', 'still waiting', false)).toBeUndefined()
+})
+
+test('a live descendant at any depth, in any live status, allows the stop', async ($, on) => {
+  const w = world($, on)
+  w.agents = w.agents.map(a => (a.id === 'A1' ? { ...a, status: 'completed' } : a))
+  // only the grandchild A2 is live
+  expect(await blockOf($, 'L1', 'chatter', false)).toBeUndefined()
+  for (const s of ['pending', 'waiting', 'idle', 'running']) {
+    w.agents = w.agents.map(a => (a.id === 'A2' ? { ...a, status: s } : a))
+    expect(await blockOf($, 'L1', 'chatter', false)).toBeUndefined()
+  }
+  w.agents = w.agents.map(a => (a.id === 'A2' ? { ...a, status: 'killed' } : a))
+  expect(await blockOf($, 'L1', 'chatter', false)).toBeDefined()
+})
+
+test('another crew\'s live members do not excuse a lead', async ($, on) => {
+  const w = world($, on)
+  w.agents = w.agents.map(a => (a.id === 'A1' || a.id === 'A2' ? { ...a, status: 'completed' } : a))
+  expect((await blockOf($, 'L1', 'chatter', false))?.startsWith('[foundry]')).toBe(true)
+})
+
+test('an interim stop neither counts toward nor resets the block streak', async ($, on) => {
+  const w = world($, on)
+  w.agents = w.agents.map(a => (a.id === 'A1' || a.id === 'A2' ? { ...a, status: 'completed' } : a))
+  expect(await blockOf($, 'L1', 'chatter', false)).toBeDefined()
+  w.agents = w.agents.map(a => (a.id === 'A1' ? { ...a, status: 'running' } : a))
+  // interim, with stop_hook_active false: would reset the streak if it counted
+  expect(await blockOf($, 'L1', 'interim', false)).toBeUndefined()
+  expect(await blockOf($, 'L1', 'interim', true)).toBeUndefined()
+  w.agents = w.agents.map(a => (a.id === 'A1' ? { ...a, status: 'completed' } : a))
+  expect(await blockOf($, 'L1', 'chatter', true)).toBeDefined()
+  expect(await blockOf($, 'L1', 'chatter', true)).toBeUndefined()
+})
+
+test('no live members and no proof is still blocked; the third consecutive such stop goes through', async ($, on) => {
+  quiet(world($, on))
+  expect(await blockOf($, 'L1', 'chatter', false)).toBeDefined()
+  expect(await blockOf($, 'L1', 'chatter', true)).toBeDefined()
+  expect(await blockOf($, 'L1', 'chatter', true)).toBeUndefined()
+})
+
+test('a running or pending background task of a descendant allows the stop', async ($, on) => {
+  quiet(world($, on))
+  expect(await blockOf($, 'L1', 'chatter', false, [task('A1')])).toBeUndefined()
+  expect(await blockOf($, 'L1', 'chatter', false, [task('A1', 'pending')])).toBeUndefined()
+  // a task of a grandchild counts too
+  expect(await blockOf($, 'L1', 'chatter', false, [task('A2')])).toBeUndefined()
+})
+
+test('a background task that is finished, unattributable or another crew\'s does not allow the stop', async ($, on) => {
+  quiet(world($, on))
+  expect(await blockOf($, 'L1', 'chatter', false, [task('A1', 'completed')])).toBeDefined()
+  expect(await blockOf($, 'L1', 'chatter', false, [task('zzz')])).toBeDefined()
+  expect(await blockOf($, 'L1', 'chatter', false, [task('B1')])).toBeDefined()
+  expect(await blockOf($, 'L1', 'chatter', false, [task('bash-1'), task('B1'), task('A1', 'killed')])).toBeDefined()
+  expect(await blockOf($, 'L1', 'chatter', false, [])).toBeDefined()
+})
+
+test('one attributable task among unattributable ones allows the stop', async ($, on) => {
+  quiet(world($, on))
+  expect(await blockOf($, 'L1', 'chatter', false, [task('zzz'), task('B1'), task('A1')])).toBeUndefined()
+})
+
+test('/foundry shows waiting on members for an idle lead with live members', async ($, on) => {
+  const w = world($, on)
+  idle(w, 'L1')
+  await blockOf($, 'L1', 'waiting for the builder', false)
+  expect(await status($)).toContain('- auth: idle, 2 live members (unknown 2), waiting on members')
+})
+
+test('/foundry shows waiting on members for a pending or waiting lead, and for one no longer listed', async ($, on) => {
+  const w = world($, on)
+  w.agents = w.agents.map(a => (a.id === 'L1' ? { ...a, status: 'waiting' } : a))
+  expect(await status($)).toContain('- auth: waiting, 2 live members (unknown 2), waiting on members')
+  w.agents = w.agents.map(a => (a.id === 'L1' ? { ...a, status: 'pending' } : a))
+  expect(await status($)).toContain('waiting on members')
+  w.agents = w.agents.filter(a => a.id !== 'L1')
+  expect(await status($)).toContain('- auth: ended, 2 live members (unknown 2), waiting on members')
+})
+
+test('/foundry keeps the report slot for a running lead with running members', async ($, on) => {
+  const w = world($, on)
+  await blockOf($, 'L1', 'interim', false)
+  const text = await status($)
+  expect(text).toContain('- auth: running, 2 live members (unknown 2), ')
+  expect(text).not.toContain('waiting on members')
+  void w
+})
+
+test('/foundry shows the report, not waiting on members, once the lead has no live descendants', async ($, on) => {
+  const w = world($, on)
+  idle(w, 'L1')
+  expect(await status($)).toContain('waiting on members')
+  quiet(w)
+  await $.classic.SubagentStop(stop('L1', 'CHECKPOINT: done'))
+  const text = await status($)
+  expect(text).not.toContain('waiting on members')
+  expect(text).toContain('last report')
+})
+
+test('waiting on members beats the last report; a tag beats waiting on members', async ($, on) => {
+  const w = world($, on)
+  await $.classic.SubagentStop(stop('L1', 'CHECKPOINT: first slice'))
+  idle(w, 'L1')
+  expect(await status($)).toContain('- auth: idle, 2 live members (unknown 2), waiting on members')
+  await w.send('L1', 'main', 'BLOCKED: no key')
+  let text = await status($)
+  expect(text).toContain('blocked: no key')
+  expect(text).not.toContain('waiting on members')
+  await w.send(undefined, 'auth', 'Use the shared key.')
+  text = await status($)
+  expect(text).toContain('waiting on members')
+  await w.send('L1', 'main', 'QUESTION: Keep v1?')
+  expect(await status($)).toContain('waiting on you: Keep v1?')
+})
+
+test('an interim stop neither sets nor clears the tag state', async ($, on) => {
+  const w = world($, on)
+  idle(w, 'L1')
+  await w.send('L1', 'main', 'BLOCKED: no key')
+  await blockOf($, 'L1', 'just waiting', false)
+  expect(await status($)).toContain('blocked: no key')
+  await blockOf($, 'L1', 'QUESTION: Keep v1?\nmore', false)
+  const text = await status($)
+  expect(text).toContain('blocked: no key')
+  expect(text).not.toContain('waiting on you')
+})
+
+test('an interim QUESTION stop does not set waiting on you', async ($, on) => {
+  const w = world($, on)
+  idle(w, 'L1')
+  await blockOf($, 'L1', 'QUESTION: Keep v1?', false)
+  const text = await status($)
+  expect(text).not.toContain('waiting on you')
+  expect(text).toContain('waiting on members')
+})
+
+test('a running background task of another crew\'s live member does not allow the stop', async ($, on) => {
+  const w = world($, on)
+  w.agents = w.agents.map(a => (a.id === 'A1' || a.id === 'A2' ? { ...a, status: 'completed' } : a))
+  expect((await blockOf($, 'L1', 'chatter', false, [task('B1')]))?.startsWith('[foundry]')).toBe(true)
+  expect((await blockOf($, 'L2', 'chatter', false, [task('B1')])) ?? 'allowed').toBe('allowed')
 })
