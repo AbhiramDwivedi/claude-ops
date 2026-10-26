@@ -44,7 +44,7 @@ You don't fix application code. When a check fails, collect the logs and the fai
 
 ## 4. Commit and report
 
-If you wrote anything (for example a proof log your brief asks for), commit it on your worktree branch with a `Foundry-Crew: <slug>` trailer, using the crew slug from your brief. Commit before you report. If you changed no files, say so. Don't push.
+If you wrote anything (for example a proof log your brief asks for), commit it on your worktree branch with a `Foundry-Crew: <slug>` trailer, using the crew slug from your brief, and a `Foundry-Role: devops` trailer next to it. Commit before you report. If you changed no files, say so. Don't push.
 
 Your final report is the only message your lead gets from you. When you are blocked, its first line is `BLOCKED: <what's missing or what needs the owner, with the exact command you would run>`, followed by the rest of the format with whatever checks you did run. Otherwise leave that line out.
 

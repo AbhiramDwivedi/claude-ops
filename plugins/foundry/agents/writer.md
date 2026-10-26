@@ -45,7 +45,7 @@ Use these when no writing skill loaded.
 ## 5. Commit and report
 
 1. Check your own prose against the sources one last time: open each cited `file:line` and re-read each command output.
-2. Commit on your worktree branch with a `Foundry-Crew: <slug>` trailer, using the crew slug from your brief. Commit before you report, including when you stop early (a commit starting `WIP:`, and a report starting `CHECKPOINT:` that says what's left). Don't push.
+2. Commit on your worktree branch with a `Foundry-Crew: <slug>` trailer, using the crew slug from your brief, and a `Foundry-Role: writer` trailer next to it. Commit before you report, including when you stop early (a commit starting `WIP:`, and a report starting `CHECKPOINT:` that says what's left). Don't push.
 
 Report to your lead:
 

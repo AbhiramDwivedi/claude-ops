@@ -15,7 +15,7 @@ You decide, and you log every decision. Ask the owner only when two choices lead
 
 `<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
-Append one line per decision to `<foundry dir>/decisions.md`: time, decision, reason, the cynic's recommendation (or "none"), and "followed" or "overruled: <reason>".
+Append one line per decision to `<foundry dir>/decisions.md`: time, decision, reason, the cynic's recommendation (or "none"), and "followed" or "overruled: <reason>", in the form `- HH:MM | decision | reason | cynic's recommendation | followed`. Write any `HH:MM` on a new line; the plugin replaces it with the clock's local time.
 
 ## The cynic
 
@@ -61,6 +61,7 @@ A crew is one lead and the members it delegates to. Split the goal so that:
 
 - each crew owns a separate set of files, and no two crews edit the same file. Work that must share files goes in one crew, or in two crews run one after the other;
 - each crew has a done-check it can't game: code it doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
+- the crew can run every done-check with its own access: no data, host or key it can't reach. If it can't, change the done-check now, while you plan;
 - there are as few crews as the work allows, usually two to four. Every crew costs a lead on Opus.
 
 For each crew, decide:
@@ -113,6 +114,7 @@ The lead can't see this conversation, so the brief carries:
 - the other crews: slug, what they own, and their lead's name, for collisions only;
 - the merge mode, the target branch and the check commands;
 - the owner's decisions that bear on this crew;
+- before it starts a judge, the lead compares its diff with the files it owns and asks you for any extension first;
 - this rule, verbatim: "Be brave: take the hard path, keep going when it gets difficult, don't ask permission for anything in scope. Never be brave with the truth: proof or it didn't happen."
 
 Each Agent result carries a `[foundry]` note with the path where that lead's report will be saved. Keep it.
@@ -130,7 +132,10 @@ When a lead asks, never approve a permission, a push or a destructive step on th
 The plugin also sends you prompts:
 
 - `[foundry] stalled:` an agent has had no activity for 15 minutes. Message its lead (or the lead itself, if the stalled agent is a lead) and ask for its state.
+- `[foundry] idle lead:` a lead has stopped without a final report and no member is at work. Resume it with a message, or start its successor from its report.
 - `[foundry] limit reset:` the 5-hour usage window has reset. Message each lead that hasn't sent its final report: "Usage limit reset. Resume from where you stopped."
+
+On a `stalled:` or `idle lead:` prompt, read the agent's transcript tail before any TaskStop: a resumed agent may be compacting, and it looks idle while it does.
 
 `/foundry` shows each crew's status, its live members by model, and when it last reported or what it is waiting on you for, with its report folder.
 
