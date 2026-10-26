@@ -37,4 +37,4 @@ The Skill tool's result for this skill gives its base directory. Read `<base dir
 
 ## How the rules are used
 
-The project's architecture doc owns the principles (ADR-0001, section 1). It adopts the pack rules that fit, adapts them to the repo's paths, languages and tools, and gives a reason for each rule it drops. A pack rule is a default, not law over the doc: where the doc adapts or drops a rule, the doc wins. When you review a diff, check it against the doc's principles; use a pack directly only for a rule the doc doesn't address.
+The project's architecture doc owns the principles (foundry's design ADR, `docs/adr/0001-design-phase.md` in the foundry plugin, section 1). It adopts the pack rules that fit, adapts them to the repo's paths, languages and tools, and gives a reason for each rule it drops. A pack rule is a default, not law over the doc: where the doc adapts or drops a rule, the doc wins. When you review a diff, check it against the doc's principles; use a pack directly only for a rule the doc doesn't address.

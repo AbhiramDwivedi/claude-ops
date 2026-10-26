@@ -66,7 +66,7 @@ Every member's brief also carries:
 
 - the "be brave" sentence above, verbatim, for every builder;
 - the proof rule from section 5;
-- the commit trailers: every commit ends with a `Foundry-Crew: <slug>` line, the original slug even in a successor's crew, and next to it a `Foundry-Role: <role>` line naming the member's role: `test-writer`, `builder`, `writer`, `devops`, `redteam` or `architect`. The judge reads the role to check that no builder touched the done-check tests;
+- the commit trailers: every commit ends with a `Foundry-Crew: <slug>` line, the original slug even in a successor's crew, and next to it a `Foundry-Role: <role>` line naming the member's role: `test-writer`, `builder`, `writer`, `devops`, `redteam` or `architect`. Both lines go in the message's last block, with any `Co-Authored-By:` line and no blank line between them; otherwise git doesn't parse them as trailers and `git log --format='%(trailers:key=Foundry-Role)'` prints nothing. The judge reads the role to check that no builder touched the done-check tests;
 - commit on its branch before reporting, and report the branch and commit.
 
 ## 4. Delegate

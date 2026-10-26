@@ -67,7 +67,8 @@ It never edits source or tests. It runs in three modes.
 - **plan:**
   - Started by the foreman at the start of every run, outside every crew, like the cynic.
   - For a goal, it writes the verdicts and the work breakdown (sections 4 and 5) as a draft `plan.json` plus a readable `plan.md`.
-  - The foreman owns both files after that: it sets `approval` and `approvedAt`, and updates `status`.
+  - The draft sets `approval`: `owner` when the plan has a wave-0 crew, `auto` otherwise.
+  - The foreman owns both files after that: it checks `approval`, sets `approvedAt`, and updates `status`.
 - **design:**
   - A member of a wave-0 design crew, started by that crew's lead.
   - It writes the ADR and the architecture-doc change for each `change` verdict, and names the seams the crew's test-writer must pin with contract tests.
@@ -124,11 +125,11 @@ The architect splits the goal once, on paper, along the module map. Agents never
 ### 6. Approval only when the design changes
 
 - **Extend-only run, no wave 0:**
-  - The foreman logs the plan, sets `approval: "auto"` and `approvedAt` to now, and starts the crews without asking.
+  - The architect's draft has `approval: "auto"`. The foreman logs the plan, overwrites `approvedAt` with its own log time, and starts the crews without asking.
   - Merge mode and target come from `.claude/foundry.json`. Without them, the merge mode is `sequential` and the target is the current branch. The foreman logs which it used.
   - The owner sees the plan in the end-of-run report.
 - **Run with a wave 0:**
-  - The foreman sets `approval: "owner"`, leaves `approvedAt` null, shows the plan table with the ADRs, and asks for the merge mode and target as in 0.2.1.
+  - The architect's draft has `approval: "owner"` and `approvedAt` null. The foreman shows the plan table with the ADRs and asks for the merge mode and target as in 0.2.1.
   - It sets `approvedAt` when the owner approves.
   - Later waves start as earlier ones merge, with no further pause.
   - `approvedAt` is null only while a run waits for the owner.
