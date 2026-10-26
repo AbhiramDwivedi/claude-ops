@@ -30,7 +30,7 @@ foundry works with or without agents of your own. When the project defines none 
 5. shows the plan as a table and asks for the merge mode and the target branch. Scope grows here, once. When you approve, the foreman writes the plan to disk and the scope is frozen;
 6. writes a goal file for each crew and starts every lead in one message, in the background, each in its own worktree;
 7. handles the leads' messages, each tagged `QUESTION:`, `BLOCKED:` or `PROPOSAL:`. It decides what it can and logs it. Anything bound for you goes through a cynic first, and a `PROPOSAL:` defaults to no because the scope is frozen;
-8. merges each crew once its latest judge file says `VERDICT: PASS` for the crew branch's head commit;
+8. merges each crew once its highest-numbered judge file says `VERDICT: PASS` for the crew branch's head commit;
 9. reports to you, and asks before every push and every PR.
 
 The foreman follows the cynic's recommendation by default. To overrule it, the foreman logs a one-line reason, and every overrule appears in the end-of-run report. A `BLOCKED:`, a production promotion, a change to frozen scope, and every push or PR reach you whatever the cynic recommends, unless the project grants the foreman merge ownership for pushes and PRs.
@@ -71,7 +71,7 @@ A crew is a `foundry:lead` started by the main thread, plus every agent below it
 - **A lead can't stop without a report.** When a lead with no work still running stops on a message that has no `## Proof` section and doesn't start with `CHECKPOINT:`, `BLOCKED:` or `QUESTION:`, the stop is sent back with a reason. The hook sends a stop back at most twice in a row, then lets it through. A stop while the lead's members still run goes through.
 - **Stalls wake the foreman.** Every minute the plugin checks for running crew agents with no tool call or model request for 15 minutes. It reports each one once, with a toast and a `[foundry] stalled:` prompt to the main session.
 - **A usage-limit reset wakes the foreman.** When the five-hour window hits its limit while a lead is still at work, the plugin sets a timer for two minutes after the reset and then sends a `[foundry] limit reset:` prompt, once per reset.
-- **`/foundry`** lists the crews: each lead's name and status, its live members by model, when it last reported and was last active, any stalled agents, the latest judge verdict, and its report folder. A lead whose last message to `main`, or last captured report, starts with `QUESTION:`, `BLOCKED:` or `PROPOSAL:` shows as `waiting on you:`, `blocked:` or `proposal:` with the first line, until the foreman messages it. A lead that ended its turn while its members still work shows as `waiting on members`.
+- **`/foundry`** lists the crews: each lead's name and status, its live members by model, when it last reported and was last active, any stalled agents, the verdict in its highest-numbered judge file, and its report folder. A lead whose last message to `main`, or last captured report, starts with `QUESTION:`, `BLOCKED:` or `PROPOSAL:` shows as `waiting on you:`, `blocked:` or `proposal:` with the first line, until the foreman messages it. A lead that ended its turn while its members still work shows as `waiting on members`.
 
 Every hook fails open. If foundry's own code throws, the call goes on as if the plugin were not installed, and the error goes to the debug log.
 
@@ -83,9 +83,9 @@ Every hook fails open. If foundry's own code throws, the call goes on as if the 
 - No prompt in 0.2.0 (the skill or any of the five agents) has yet run as a live agent in a real run. The hooks are covered by tests against a mock engine.
 - What status a lead shows after it ends its turn while its members still run hasn't been observed in a live session. `waiting on members` depends on it.
 - Capturing a report from the hand-back tool, through a `tool.call` hook on `SubagentHandback`, is covered by tests but not yet verified in a live session.
-- The limit-reset wake is a timer inside the running session. TODO: confirm whether it fires while the foreman is idle and after a usage-limit stop.
-- Where an organization manages Claude Code, `SubagentStop` hooks run only in plugins it lists. There, reports are captured only from the hand-back tool, and the lead stop gate doesn't run.
-- The lead preloads the [subagent-limits](../subagent-limits) plugin's `split-work` skill. TODO: confirm how a lead behaves when subagent-limits isn't installed.
+- The limit-reset wake rests on three things a probe confirmed: `$.clock` timers run from `session.start`, a hot reload cancels them (so the wake is re-armed from plugin state), and `$.prompt.submit` wakes an idle session. Nobody has yet seen the wake fire after a real usage-limit stop.
+- Where an organization manages Claude Code, `SubagentStop` hooks run only in plugins it lists. There, reports are captured only from the hand-back tool. The lead stop gate is a `SubagentStop` hook too, so it shouldn't run there either; that is inferred from the code, not seen.
+- `agents/lead.md` preloads `subagent-limits:split-work`, a skill from the [subagent-limits](../subagent-limits) plugin. What happens when that plugin isn't installed hasn't been tested.
 
 ## Install
 
