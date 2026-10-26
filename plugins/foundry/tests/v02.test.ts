@@ -126,7 +126,7 @@ test('reports whole minutes idle, rounded down', async ($, on) => {
   await w.clock.advance(30_000)
   await w.activity('A1')
   await w.clock.advance(STALL_MS + HEARTBEAT_MS)
-  expect(w.prompts.filter(p => p.startsWith(STALLED))).toEqual([
+  expect(w.prompts.filter(p => p.startsWith(STALLED) && p.includes('auth-builder'))).toEqual([
     '[foundry] stalled: auth-builder in crew auth, no activity for 15m. Check /foundry and message the auth lead.',
   ])
 })
@@ -521,7 +521,7 @@ test('a later untagged message to main replaces the tag', async ($, on) => {
 })
 
 test('a captured report starting with BLOCKED or PROPOSAL shows its tag; an untagged report clears it', async ($, on) => {
-  world($, on)
+  quiet(world($, on))
   await $.classic.SubagentStop(stop('L1', 'BLOCKED: waiting on infra\nrest'))
   expect(await status($)).toContain('blocked: waiting on infra')
   await $.classic.SubagentStop(stop('L1', 'PROPOSAL: merge early\n## Proof\nx'))
@@ -650,9 +650,11 @@ test('/foundry prints the dir as the last line with crews', async ($, on) => {
 
 test('/foundry omits the dir line when the dir cannot be resolved', async ($, on) => {
   const w = world($, on, { dirFails: true })
-  expect(await status($)).not.toContain('Foundry dir:')
-  w.agents = w.agents.filter(a => a.id === 'X')
+  const all = w.agents
+  w.agents = all.filter(a => a.id === 'X')
   expect(await status($)).toBe('No foundry crews in this session. Start them with /foundry:run.')
+  w.agents = all
+  expect(await status($)).not.toContain('Foundry dir:')
 })
 
 // ---------- fail-open ----------

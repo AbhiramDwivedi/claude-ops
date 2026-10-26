@@ -88,18 +88,18 @@ export function world($: Engine, on: On, options: Options = {}): World {
   on('prompt.submit', async (_, e) => {
     if (options.submitFails) throw new Error('submit is down')
     w.prompts.push(e.text)
-    return {} as never
+    return { text: e.text } as never
   })
   const key = (e: { plugin: string; key: string; id?: string }) => `${e.plugin}/${e.key}${e.id === undefined ? '' : `/${e.id}`}`
   on('state.get', async (_, e) => {
     if (options.stateFails) throw new Error('state is down')
     const k = key(e as never)
-    return { value: w.stateValues.get(k), version: w.stateValues.has(k) ? 1 : 0 } as never
+    return { value: { value: w.stateValues.get(k), version: w.stateValues.has(k) ? 1 : 0 } } as never
   })
   on('state.set', async (_, e) => {
     if (options.stateFails) throw new Error('state is down')
     w.stateValues.set(key(e as never), (e as { value: unknown }).value)
-    return { isSet: true, version: 1 } as never
+    return { value: { isSet: true, version: 1 } } as never
   })
   on('session.usage', async () => ({ value: { startedAt: NOW, context: {}, rateLimits: w.usageLimits } }) as never)
   on('session.id', async () => ({ value: 's1' }))
