@@ -134,7 +134,7 @@ SendMessage({ to: "main", summary: "<5-10 words>", message: "QUESTION: <the ques
 
 Then wait; the answer arrives as a message. After a `QUESTION:`, `/foundry` shows your crew as waiting until the foreman answers.
 
-Ask each question through exactly one channel, never both: a SendMessage to main when you will wait for the answer, or a hand-back starting `QUESTION:` when you have to end your run. The foreman would otherwise answer it twice. If you have to end your run while a `BLOCKED:` or `PROPOSAL:` you sent waits for an answer, start your last message with the same tag, so the foreman doesn't read it as your report.
+Ask each question through exactly one channel, never both: a SendMessage to main, or a hand-back starting `QUESTION:`. The foreman would otherwise answer it twice. While a `QUESTION:`, `BLOCKED:` or `PROPOSAL:` you sent to main is unanswered, the plugin lets you end your turn with any message; it isn't read as your report.
 
 ## 12. When the foreman asks you to rebase
 

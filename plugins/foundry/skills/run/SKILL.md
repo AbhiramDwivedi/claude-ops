@@ -15,7 +15,7 @@ You decide, and you log every decision. Ask the owner only when two choices lead
 
 `<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
-Append one line per decision to `<foundry dir>/decisions.md`: time, decision, reason, the cynic's recommendation (or "none"), and "followed" or "overruled: <reason>", in the form `- HH:MM | decision | reason | cynic's recommendation | followed`. Write any `HH:MM` on a new line; the plugin replaces it with the clock's local time.
+Append one line per decision to `<foundry dir>/decisions.md`: time, decision, reason, the cynic's recommendation (or "none"), and "followed" or "overruled: <reason>", in the form `- HH:MM | decision | reason | cynic's recommendation | followed`. Write it with Edit or Write, never Bash: the plugin then replaces the `HH:MM` on each new line with the clock's local time, and a line already logged keeps its time.
 
 ## The cynic
 
