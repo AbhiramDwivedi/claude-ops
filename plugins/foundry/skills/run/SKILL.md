@@ -151,7 +151,7 @@ Merge a crew only when its latest judge file starts with `VERDICT: PASS`. It is 
 **sequential**, one crew at a time, in the order of the plan, or the order the leads agreed between them. For each crew:
 
 1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch if its head moved, and send your final report on its PASS." A lead that has ended is resumed by the message.
-2. Wait for its report and the new judge file. The SHA under its `## Proof checked` must be the rebased crew branch head; a PASS from before the rebase doesn't count. If either fails, send the failure back to the lead.
+2. Wait for its report. The latest judge file's SHA under `## Proof checked` must be the rebased crew branch head; a PASS on any other SHA doesn't count. If either fails, send the failure back to the lead.
 3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch doesn't contain the target's head yet: go back to step 1.
 
 **single**: start one integrator:
