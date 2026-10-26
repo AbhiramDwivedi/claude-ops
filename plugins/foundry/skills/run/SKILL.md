@@ -11,7 +11,7 @@ Stay thin. Never do a crew's work yourself: no feature code, no conflict fixes, 
 
 ## Decisions and the decision log
 
-You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, production deploys, and every push or PR, unless the project grants you merge ownership (section 10).
+You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, production deploys, and every push or PR (the last only unless the project grants you merge ownership, section 10).
 
 `<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
@@ -32,7 +32,7 @@ Agent({
 })
 ```
 
-For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. A `BLOCKED:`, a production promotion, and every push or PR, unless the project grants you merge ownership (section 10), go to the owner whatever the cynic recommends.
+For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. A `BLOCKED:`, a production promotion, a change to frozen scope, and every push or PR (unless the project grants you merge ownership, section 10) go to the owner whatever the cynic recommends.
 
 ## 1. Check the altitude
 
@@ -129,7 +129,7 @@ Never approve a permission, a push or a destructive step on the owner's behalf.
 
 The plugin also sends you prompts:
 
-- `[foundry] stalled:` an agent has had no activity for 15 minutes. Read its report file, if one exists; if not, message its lead (or the lead itself, if the stalled agent is a lead) and ask for its state.
+- `[foundry] stalled:` an agent has had no activity for 15 minutes. Message its lead (or the lead itself, if the stalled agent is a lead) and ask for its state.
 - `[foundry] limit reset:` the 5-hour usage window has reset. Message each lead that hasn't sent its final report: "Usage limit reset. Resume from where you stopped."
 
 `/foundry` shows each crew's status, its live members by model, and when it last reported or what it is waiting on you for, with its report folder.
@@ -138,7 +138,7 @@ The plugin also sends you prompts:
 
 A lead's final report has these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. A first line of `QUESTION:`, `BLOCKED:` or `CHECKPOINT:` marks a stop that isn't final. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<foundry dir>/reports/<lead name>/`.
 
-A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items as its goal and a fresh name: `<slug>-2`, then `<slug>-3`. Its brief keeps the original slug and names the original crew's goal file, `<foundry dir>/goals/<slug>.md`; don't write a new one. It also names the predecessor's branch, that branch's commit and the crew's original base commit; the new lead resets its worktree to that branch first. Its members and judges are named after it (`auth-2-judge`), its reports go to its own folder, `reports/<slug>-<n>/`, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
+A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items as its goal and a fresh name: `<slug>-2`, then `<slug>-3`. Its brief states its own name (`<slug>-<n>`, the name you start it with), keeps the original slug, and names the original crew's goal file, `<foundry dir>/goals/<slug>.md`; don't write a new one. It also names the predecessor's branch, that branch's commit and the crew's original base commit; the new lead resets its worktree to that branch first. Its members and judges are named after it (`auth-2-judge`), its reports go to its own folder, `reports/<slug>-<n>/`, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
 
 A final message that starts with `BLOCKED:` or `QUESTION:` is handled as in section 7.
 
@@ -150,7 +150,7 @@ Merge a crew only when its latest judge file starts with `VERDICT: PASS`. It is 
 
 **sequential**, one crew at a time, in the order of the plan, or the order the leads agreed between them. For each crew:
 
-1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch, and send your final report on its PASS." A lead that has ended is resumed by the message.
+1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch if its head moved, and send your final report on its PASS." A lead that has ended is resumed by the message.
 2. Wait for its report and the new judge file. The SHA under its `## Proof checked` must be the rebased crew branch head; a PASS from before the rebase doesn't count. If either fails, send the failure back to the lead.
 3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch doesn't contain the target's head yet: go back to step 1.
 
@@ -168,7 +168,7 @@ Agent({
 })
 ```
 
-Its brief names the target, the integration branch (`foundry/<short goal>`, from `<target>`), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves conflicts from both sides' intent, runs the checks and reports in the lead's format, with `## Proof`. When a conflict's fix is a crew's call, it says so under Open questions rather than guessing.
+Its brief names the target, the integration branch (`foundry/<short goal>`, from `<target>`), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves conflicts from both sides' intent, runs the checks and reports with these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. When a conflict's fix is a crew's call, it says so under Open questions rather than guessing.
 
 Then have a judge rule on the integration branch:
 
