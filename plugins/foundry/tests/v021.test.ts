@@ -15,7 +15,7 @@ const api = foundry as unknown as Record<string, unknown>
 const IDLE = '[foundry] idle lead:'
 const idleLeads = (prompts: string[]) => prompts.filter(p => p.startsWith(IDLE))
 const stalls = (prompts: string[], label: string) => prompts.filter(p => p.startsWith(STALLED) && p.includes(` ${label} in crew`))
-const setStatus = (w: ReturnType<typeof world>, id: string, s: string) => {
+const setStatus = (w: ReturnType<typeof world>, id: string, s: ReturnType<typeof world>['agents'][number]['status']) => {
   w.agents = w.agents.map(a => (a.id === id ? { ...a, status: s } : a))
 }
 const blockOf = async ($: Parameters<typeof status>[0], id: string, text: string, active = false) =>
