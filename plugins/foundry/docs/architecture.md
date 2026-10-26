@@ -4,6 +4,8 @@ foundry is three kinds of file. The protocol lives in prompts: the foreman's in 
 
 The prompts decide what agents should do. The hooks refuse the calls that break the chain of command, save reports to disk, and wake the foreman when something needs it.
 
+Foundry 0.3.0 adds a design phase: an architect, principle packs, a plan file and waves. [ADR-0001](adr/0001-design-phase.md) decides it; this doc describes it and marks each part "0.3.0, planned" until it is built. None of it exists in the plugin yet: there is no `agents/architect.md`, no `skills/principles/`, no `init`, and no hook reads `plan.json`. The plan file's contract is [`plan.schema.json`](plan.schema.json), with an example in [`plan.example.json`](plan.example.json).
+
 ## Roles and who talks to whom
 
 ```mermaid
@@ -14,6 +16,7 @@ flowchart TD
   integ[Integrator, single mode]
   ijudge[Integration judge, single mode]
   disk[(foundry dir on disk)]
+  arch[Architect: agents/architect.md, 0.3.0 planned]
 
   subgraph crewA [Crew A]
     leadA[Lead: foundry:lead]
@@ -46,13 +49,16 @@ flowchart TD
   foreman --> ijudge
   crewA -.->|reports| disk
   crewB -.->|reports| disk
+  arch -.->|plan.json, plan.md| disk
+  arch <-.->|verdicts, one round to reconcile| cynic
 ```
 
 Only the foreman talks to the owner. Only leads message the foreman, so a member's question reaches the foreman through its lead. Leads message each other only when their work collides: a file another crew owns, a shared interface that changes, or the merge order. The hooks enforce the message rules for everything inside a crew (see [Hooks](#hooks)). The cynic, the integrator and the integration judge are started by the foreman, so they sit outside every crew. The hooks don't police them and don't save their reports.
 
 | Agent | Started by | Model and effort | Edits files |
 | --- | --- | --- | --- |
-| Foreman | You, with `/foundry:run` | The session's | Only `decisions.md`, `plan.md`, goal files, and the fast-forward in `sequential` mode |
+| Foreman | You, with `/foundry:run` | The session's | Only `decisions.md`, `plan.md`, goal files, and the fast-forward in `sequential` mode; from 0.3.0 (planned), each crew's `status` in `plan.json` |
+| Architect, 0.3.0, planned | TODO: ADR-0001 doesn't say who starts each mode | Opus, `high` | Only the architecture doc and ADRs, plus `.claude/foundry.json` in `init` mode and `plan.json` and `plan.md` in `plan` mode; never source or tests |
 | Cynic, `cynic-<n>` | Foreman, fresh for each batch | Opus, `high` | No |
 | Lead, `<slug>` | Foreman, in the background, in a worktree | Opus, `medium` | Merges and rebases the crew branch; writes code only for conflicts and small fixes the checks demand |
 | Members, named after their lead | Lead | Set on every call; Sonnet for mechanical work, Opus for judgment | Yes, each in its own worktree |
@@ -61,17 +67,28 @@ Only the foreman talks to the owner. Only leads message the foreman, so a member
 | Integrator | Foreman, `single` mode | `general-purpose`, Opus, `high` | Yes, the integration branch |
 | Integration judge | Foreman, `single` mode | Opus, `xhigh` | No |
 
+The architect (0.3.0, planned) will be `agents/architect.md`. It loads the principle packs the work touches from the `skills/principles/` skill (also planned) and runs in three modes ([ADR-0001](adr/0001-design-phase.md), sections 2 and 3):
+
+- `init`: writes the project's architecture doc (principles, module map, ADRs for decisions already in the code) and `.claude/foundry.json`.
+- `plan`: for a goal, gives each touched module an `extend` or `change` verdict and splits the work into crews and waves by the leaf test. The cynic reviews the verdicts.
+- `design`: in wave 0, writes the ADR and architecture-doc change for each `change` verdict, and names the seams the contract tests must pin.
+
+Its tools are Read, Grep, Glob, Bash for read-only git, Skill, and Write and Edit for the design files above. Crews never edit the architecture doc or ADRs; a design change they need goes to the foreman as `PROPOSAL:`, and the foreman starts a design crew for it as a new wave 0 slice.
+
 A crew, as the hooks see it, is a `foundry:lead` with no parent (the main thread started it) and every agent whose parent chain reaches it. A `foundry:lead` started by some other agent is not a crew.
 
 ## The run lifecycle
 
+The 0.3.0 additions are marked; all of them are planned, not built.
+
+0. Init (0.3.0, planned): When the repo has no architecture doc, the architect in `init` mode writes it, extending the repo's existing one if there is one, and records its path in `.claude/foundry.json`.
 1. Altitude: The foreman asks the owner once whether the goal is the end or a step toward a bigger outcome, and describes the bigger version.
 2. Depth pass: The foreman answers four questions (what a top practitioner would add, the rawest material, the practitioner's tools, what besides a model verifies the result). The answers decide which crews exist.
 3. Inventory: The foreman lists the agent types and skills the session can use.
-4. Split: Crews own disjoint files, each with a done-check it can't game, its high-impact paths, a red team yes or no, and a resource slice (port range, database or temp directory).
-5. Approval and freeze: The foreman shows the plan table and asks for the merge mode and target branch. On approval it writes `plan.md`. From here the scope is frozen, and only the owner can change it.
-6. Leads start: The foreman writes `goals/<slug>.md` for each crew and starts all leads in one message.
-7. Inside each crew: The lead runs its checks to prove its environment works, runs a full depth pass, splits the work into member tasks, and delegates. Members report with proof. The lead merges the members' branches with `git merge --no-ff`, runs the checks, then runs the red team (when there is one) and a fresh judge. Before the judge it compares its diff with the files it owns and asks the foreman for any extension. Every member commit carries `Foundry-Crew: <slug>` and `Foundry-Role: <role>` trailers. The judge reads the role with `git log --format='%H %(trailers:key=Foundry-Role,valueonly)'` and fails the crew if a `builder` commit touched the done-check tests. A file outside the crew's ownership is a `QUESTION:` for the foreman in the judge's findings, not a FAIL by itself.
+4. Split: Crews own disjoint files, each with a done-check it can't game, its high-impact paths, a red team yes or no, and a resource slice (port range, database or temp directory). From 0.3.0 (planned), the architect's plan pass does the split instead: one verdict per touched module, `extend` by default, the leaf-test breakdown into crews and waves, each crew's done-check run once to prove it, and an agent estimate per crew, re-planned until the total is under `agentCap`. It writes `plan.json` and `plan.md`, and a cynic reviews the verdicts.
+5. Approval and freeze: The foreman shows the plan table and asks for the merge mode and target branch. On approval it writes `plan.md`. From here the scope is frozen, and only the owner can change it. From 0.3.0 (planned), the pause depends on the plan. An extend-only run, with no wave 0, doesn't pause: the foreman logs the plan and starts the crews, and the owner sees the plan in the end-of-run report. A run with a wave 0 has `approval: "owner"`: the foreman shows the plan table with the ADRs and waits for the owner's approval, recorded as `approvedAt`, before wave 0 starts. After that, no further pause. TODO: ADR-0001 doesn't say when an extend-only run gets its merge mode and target branch.
+6. Leads start: The foreman writes `goals/<slug>.md` for each crew and starts all leads in one message. From 0.3.0 (planned), leads start by wave. Wave 0 holds the `change` work (ADRs, the architecture-doc change, the contract tests) and merges before any other wave starts; each wave merges before the next starts. Within a wave, at most `maxParallelCrews` crews run at once; the rest queue in the plan's order and start as running ones merge. The foreman sets each crew's `status` in `plan.json` as it starts and merges.
+7. Inside each crew: The lead runs its checks to prove its environment works, runs a full depth pass, splits the work into member tasks, and delegates. Members report with proof. The lead merges the members' branches with `git merge --no-ff`, runs the checks, then runs the red team (when there is one) and a fresh judge. Before the judge it compares its diff with the files it owns and asks the foreman for any extension. Every member commit carries `Foundry-Crew: <slug>` and `Foundry-Role: <role>` trailers. The judge reads the role with `git log --format='%H %(trailers:key=Foundry-Role,valueonly)'` and fails the crew if a `builder` commit touched the done-check tests. A file outside the crew's ownership is a `QUESTION:` for the foreman in the judge's findings, not a FAIL by itself. From 0.3.0 (planned), the judge also checks the diff against the architecture doc's principles and module map and the run's ADRs: a violation that breaks a declared principle is a FAIL, any other is a QUESTION.
 8. Messages: Leads send the foreman `QUESTION:`, `BLOCKED:` or `PROPOSAL:`. The foreman settles what it can and logs it. Items for the owner go through a cynic first.
 9. Pre-merge review: A cynic reads each crew's final report and the plan, and checks for drift and overlap between crews.
 10. Judge-gated merge: The foreman reads the crew's highest-numbered judge file itself and merges only on `VERDICT: PASS` whose `## Proof checked` SHA matches the crew branch head. In `sequential` mode each lead rebases onto the target in turn, a fresh judge rules if the head moved, and the foreman fast-forwards. In `single` mode an integrator merges every crew branch into `foundry-<short goal>` and an integration judge rules on it.
@@ -85,6 +102,8 @@ Everything for a session lives under one folder:
 <git common dir>/foundry/<session id>/
   decisions.md               foreman: one line per decision, `- HH:MM | decision | reason | cynic | followed`
   plan.md                    foreman: the approved plan, written once the owner approves
+                             (0.3.0, planned: the architect writes it with plan.json)
+  plan.json                  0.3.0, planned: architect writes it; foreman updates each crew's status; hooks only read it
   goals/<slug>.md            foreman: each crew's goal, done-check, owned files, high-impact paths
   reports/<crew>/<agent>.md  plugin: each crew agent's last report, judges' included
   reports/<crew>/<agent>.interim.md  plugin: a lead's interim stop
@@ -92,13 +111,23 @@ Everything for a session lives under one folder:
   messages.<n>.jsonl         plugin: the log rolled over, past 3 MiB
 ```
 
-The plugin writes only `reports/` and the message logs. The foreman writes the other three, as `skills/run/SKILL.md` tells it to; the plugin only stamps the time on new `decisions.md` lines (see Decision times).
+The plugin writes only `reports/` and the message logs. The foreman writes `decisions.md`, `plan.md` and `goals/`, as `skills/run/SKILL.md` tells it to; the plugin only stamps the time on new `decisions.md` lines (see Decision times).
 
 The folder is `git rev-parse --path-format=absolute --git-common-dir` run in the session's working directory, plus `foundry/<session id>`. Every worktree of a repo shares one git common dir, so all crews write to the same place. Outside git the base is `$HOME/.claude` (or `%USERPROFILE%\.claude`). The path is worked out once per session and cached; a `/clear` works it out again. Session ids, crew names and agent names pass through `safeName` in `register.ts`: anything other than letters, digits, `.`, `_` and `-` becomes `-`, and the result is cut to 100 characters.
 
 A report file is named after the agent's spawn name, else its id, under its crew's folder. A judge's report is `reports/<crew>/<crew>-judge.md`, then `<crew>-judge-2.md` and so on; those are the merge-gate files. A red team is named `<crew>-redteam` so its report never lands on one. A successor lead `<slug>-2` is a crew of its own as far as the hooks go, with its own folder.
 
 Each line of `messages.jsonl` is `{ "ts", "from", "to", "summary" }`, where `from` and `to` are crew names and `summary` is the `SendMessage` summary. Only messages between two leads of different crews are logged. When the log is 3 MiB or more, the next append first copies it to `messages.<n>.jsonl` at the first free `n` and starts a new log.
+
+`plan.json` (0.3.0, planned) is the seam between the architect, the foreman and the hooks: the goal, the architecture doc's path, `approval` (`auto` or `owner`, and `owner` exactly when some crew is in wave 0), `approvedAt`, `agentCap`, `maxParallelCrews`, and one entry per crew with its wave, verdict, modules, owned paths, done-check, estimated agents and status. [`plan.schema.json`](plan.schema.json) is the contract; [ADR-0001](adr/0001-design-phase.md), section 8, is the source.
+
+One file lives in the project repo, not the foundry folder:
+
+```
+<repo>/.claude/foundry.json  0.3.0, planned: { "architecture": "<path>", "adr": "<dir>" }, written by init
+```
+
+It is the only config `init` writes. The architecture doc defaults to `docs/architecture.md` with ADRs in `docs/adr/` when the repo has no architecture doc of its own. The same file can set `maxParallelCrews` (default 4) and `agentCap` (default 40).
 
 Two kinds of state don't go to the foundry folder:
 
@@ -117,6 +146,7 @@ All of these are in `hooks/register.ts`.
 | `agent.spawn` | Records each agent's spawn name, type, parent, model and start time, and counts the spawn as activity. |
 | `tool.call` on `SendMessage` | Enforces who a crew agent may message, logs lead-to-lead messages, and tracks each lead's tag for `/foundry`. |
 | `tool.call` on `Agent` | Refuses crew agents' calls without `model` or `effort`, or with `effort: "max"`. Adds the report-path note to calls that start a lead or a crew member. |
+| `tool.call` on `Agent`, 0.3.0, planned | Refuses starting a lead that `plan.json` holds back: the wave gate, the parallel cap and the approval gate (see [Plan gates](#plan-gates-030-planned)). |
 | `tool.call` on `Write`, `Edit` | Stamps the clock's time on new lines of this session's `decisions.md`. |
 | `tool.call`, any tool | Records activity, the main session's too. On `SubagentHandback`, refuses an empty hand-back from a crew agent and captures the report. |
 | `turn.step` | Records activity for each model request, the main session's too. |
@@ -147,6 +177,16 @@ From inside a crew, every Agent call needs `model`, and `effort` set to `low`, `
 The model check runs first. The foreman's own Agent calls aren't checked, though the skill tells it to set both.
 
 A call that starts a lead from the main thread, or any agent from inside a crew, gets this note in its result: `[foundry] If <name>'s report does not reach you, read <path> once it stops.`
+
+### Plan gates (0.3.0, planned)
+
+None of these is in `hooks/register.ts` yet; the hooks crew lands them. Each applies to an Agent call that starts a `foundry:lead` whose slug is in `plan.json`, and is refused with the reason below ([ADR-0001](adr/0001-design-phase.md), section 9):
+
+- Wave gate: refused while any crew in an earlier wave isn't `merged` or `dropped`. Reason: `wave <n> isn't merged yet: <slugs>`.
+- Parallel cap: refused while `maxParallelCrews` crews are already `running`. Reason: `<n> crews running, the cap is <n>; start <slug> when one merges`.
+- Approval gate: while `approval` is `owner` and `approvedAt` is null, starting any lead is refused. Reason: `this run changes the design; get the owner's approval first`.
+
+With no plan file, or a slug not in it, no gate applies, so 0.2.1 runs keep working. The hooks treat `plan.json` as read-only and fail open like every other foundry hook. They trust the foreman's `status` field: a crew marked `merged` too early gets past the wave gate. The judge-gated merge is still the real control.
 
 ### Report capture
 
@@ -192,6 +232,8 @@ A `Write` or `Edit` of `<foundry dir>/decisions.md` for this session has each ne
 
 Prints `Crews (<n>):` and one line per lead: name, status (`ended` once the agent list drops it), live members by model family, then one of `waiting on you: <question>`, `blocked: <text>`, `proposal: <text>`, `waiting on members`, `no report yet` or `last report <time> ago`, then `last active <time> ago`. Under each lead it lists stalled agents, the verdict in the highest-numbered judge file and the report folder, then one line per member: `<name> <status> <n>m (<family>), last activity <time> ago` (or `no activity seen`), timed from its spawn or first sighting. The last lines name the message log, when there is one, and `Foundry dir: <path>`. With no crews it prints `No foundry crews in this session. Start them with /foundry:run.` If reading the crews fails: `foundry could not read the crews; see the debug log.`
 
+From 0.3.0 (planned), `/foundry` first shows each crew's wave, verdict and status from `plan.json`, then the lines above.
+
 ### Failing open
 
 Each hook step runs inside a guard. If foundry's code throws, the guard logs `foundry: <step> failed, letting the call through: <error>` or `foundry: a hook failed and was skipped: <error>` to the debug log, and the call goes on as if the plugin weren't installed. A step that fails refuses nothing.
@@ -217,6 +259,8 @@ Each hook step runs inside a guard. If foundry's code throws, the guard logs `fo
 **A reload mid-session.** The module's memory starts over. An agent that ended before the reload resolves to no crew, so a message to it from a crew agent is refused. A pending limit-reset wake survives in plugin state.
 
 ## Not verified yet
+
+- Everything marked 0.3.0 is a decision in [ADR-0001](adr/0001-design-phase.md), not built code. The one checked piece is that [`plan.example.json`](plan.example.json) validates against [`plan.schema.json`](plan.schema.json).
 
 - No prompt in 0.2.0, neither the skill nor any of the five agents, has run as a live agent in a 0.2 run. The hooks are covered by `tests/crew.test.ts`, `tests/hooks.test.ts` and `tests/v02.test.ts`, which run `register.ts` against the mock engine from `claude-code/testing`.
 - A lead's status after it ends a turn while its members still run is unobserved. `/foundry` shows `waiting on members` for a lead that isn't `running` and has live descendants, and the stall check skips any agent that isn't `running`; both rest on that status.
