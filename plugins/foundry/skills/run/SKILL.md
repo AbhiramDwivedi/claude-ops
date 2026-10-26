@@ -19,7 +19,7 @@ Append one line per decision to `<foundry dir>/decisions.md`: time, decision, re
 
 ## The cynic
 
-Once the plan is approved, nothing goes to the owner before the cynic has seen it: questions, proposals, open questions from reports. Start a fresh cynic for each batch, numbered `cynic-1`, `cynic-2` and so on:
+Once the plan is approved, nothing goes to the owner before the cynic has seen it: questions, proposals, open questions from reports. The cynic advises on production promotions, pushes and PRs but never settles them; those always reach the owner. Start a fresh cynic for each batch, numbered `cynic-1`, `cynic-2` and so on:
 
 ```
 Agent({
@@ -32,7 +32,7 @@ Agent({
 })
 ```
 
-For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. A `BLOCKED:` goes to the owner whatever the cynic says.
+For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. A `BLOCKED:`, a production promotion, a push and a PR go to the owner whatever the cynic recommends.
 
 ## 1. Check the altitude
 
@@ -66,7 +66,7 @@ A crew is one lead and the members it delegates to. Split the goal so that:
 For each crew, decide:
 
 - **slug**: short, lowercase, hyphenated (`auth`, `billing-api`). It names the lead, the crew and the prefix of its members' names.
-- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the builder it judges: at least Opus high, at most xhigh. Add a writer (`foundry:writer`) when the crew changes docs, and devops (`foundry:devops`, Sonnet) when it deploys or touches a pipeline.
+- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `medium`, and Opus builders start there. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline.
 - **high-impact paths**: files under auth, money, migrations, CI or lockfiles. Suggest a red team (an Opus member whose job is to break the crew's work) for every crew that has any.
 - **resources**: a port range and a database or temp directory of its own, so parallel end-to-end tests don't collide.
 
@@ -74,9 +74,9 @@ For each crew, decide:
 
 Show the plan as a table before you start anything:
 
-| Crew | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team | Done-check (not gameable) | Resources |
+| Crew | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Resources (port range; DB or temp dir) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `auth` | Session refresh on the API | `kit:test-writer` (sonnet), `kit:builder` (sonnet), red team `general-purpose` (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | ports 4100-4109; temp dir `.tmp/auth` |
+| `auth` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `general-purpose` (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | ports 4100-4109; temp dir `.tmp/auth` |
 
 Under it, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Ask the owner two more things:
 
@@ -138,20 +138,20 @@ The plugin also sends you prompts:
 
 A lead's final report has these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. A first line of `QUESTION:`, `BLOCKED:` or `CHECKPOINT:` marks a stop that isn't final. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<foundry dir>/reports/<slug>/`.
 
-A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items as its goal and a fresh name: `<slug>-2`, then `<slug>-3`. Point it at the same goal file. Its reports go to their own folder, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
+A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items as its goal and a fresh name: `<slug>-2`, then `<slug>-3`. Its brief names the original crew's goal file, `<foundry dir>/goals/<slug>.md`; don't write a new one. Its reports go to their own folder, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
 
 A report that starts with `BLOCKED:` is handled as in section 7.
 
-Run the leads' open questions through the cynic before you merge.
-
 ## 9. Merge
 
-Merge a crew only when its latest judge file, `<foundry dir>/reports/<slug>/<slug>-judge.md` (or the highest `<slug>-judge-<n>.md`), starts with `VERDICT: PASS`. Read the file yourself; a lead's summary of the verdict doesn't count. On `VERDICT: FAIL`, send the findings back to the lead. Agents resolve conflicts, never the main thread.
+Before you merge, give a cynic each crew's final report, with its open questions, and the plan, and ask it also to check for drift from the plan and overlap between crews. One cynic call can cover several crews.
+
+Merge a crew only when its latest judge file starts with `VERDICT: PASS`. It lives in the folder of the crew's newest lead, `<foundry dir>/reports/<lead>/`, where `<lead>` is `<slug>` or its latest successor `<slug>-<n>`: `<lead>-judge.md`, or the highest `<lead>-judge-<k>.md` (for example `reports/auth-2/auth-2-judge.md`). Read the file yourself; a lead's summary of the verdict doesn't count. On `VERDICT: FAIL`, send the findings back to the lead. Agents resolve conflicts, never the main thread.
 
 **sequential**, one crew at a time, in the order of the plan, or the order the leads agreed between them. For each crew:
 
-1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have the judge rule again, and send your final report." A lead that has ended is resumed by the message.
-2. Wait for its report and the new judge file. If either fails, send the failure back to the lead.
+1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch, and send your final report on its PASS." A lead that has ended is resumed by the message.
+2. Wait for its report and the new judge file, which must judge the rebased commit; a PASS from before the rebase doesn't count. If either fails, send the failure back to the lead.
 3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch doesn't contain the target's head yet: go back to step 1.
 
 **single**: start one integrator:
