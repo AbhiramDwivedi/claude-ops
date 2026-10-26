@@ -38,7 +38,7 @@ For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a sug
 
 ## 0. Check for the architecture doc
 
-The plan is built on the project's architecture doc. Its path is the `architecture` key of `<repo>/.claude/foundry.json`, where `<repo>` is `git rev-parse --show-toplevel` in the session's working directory. If that file is missing, or the doc it names doesn't exist, run the `foundry:init` skill with the Skill tool before anything else. It starts the architect in `init` mode, shows the owner what the architect wrote, and stops. Then ask the owner whether to go on with the run, and continue at section 1 when they say yes.
+The plan is built on the project's architecture doc. Its path is the `architecture` key of `<repo>/.claude/foundry.json`, where `<repo>` is `git rev-parse --show-toplevel` in the session's working directory. If that file is missing, or the doc it names doesn't exist, run the `foundry:init` skill with the Skill tool before anything else. It starts the architect in `init` mode, shows the owner what the architect wrote, and stops. Then ask the owner whether to go on with the run, and continue at section 1 when they say yes. If init stopped because `.claude/foundry.json` is invalid or has no `architecture` key, the run can't go on: tell the owner, and stop until they fix the file.
 
 Read the rest of `.claude/foundry.json` now. Each key the owner hasn't set takes its default: `agentCap` 40, `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch.
 

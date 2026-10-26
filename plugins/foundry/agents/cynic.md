@@ -76,4 +76,5 @@ REVIEW: agree | disagree
 Reason: one line, citing the plan line and the doc line or code `file:line` it rests on.
 Owner: none, or each owner trigger that holds, one line each.
 ```
- Put drift findings after the items, under `## Drift`, one per line: crew, file path, what drifted or overlaps. Write "None." when a drift check finds nothing. Leave the section out when no drift check was asked for.
+
+Put drift findings after the items and any `## Verdicts` section, under `## Drift`, one per line: crew, file path, what drifted or overlaps. Write "None." when a drift check finds nothing. Leave the section out when no drift check was asked for.
