@@ -243,8 +243,9 @@ export function parsePlan(text: string): Plan | undefined {
 
 // The plan entry a lead's name is gated as. A name that is a plan slug is that crew. Otherwise the successor rule: a
 // name `<base>-<n>`, n an integer >= 2, whose base is a plan slug, is gated as that base crew, so restarting a crew
-// under a fresh name (nextCrew) can't slip past its gates. One suffix only is stripped, and a name that is itself a
-// slug never is. Undefined: no gate.
+// under a fresh name can't slip past its gates. That holds for the name successorCrew suggests; plain nextCrew can
+// slip (phase-1 -> phase-2 is another crew's slug), so the idle prompt uses successorCrew. One suffix only is
+// stripped, and a name that is itself a slug never is. Undefined: no gate.
 export function planCrewFor(plan: Plan, name: string): { slug: string; crew: PlanCrew } | undefined {
   const find = (slug: string) => plan.crews.find((c): c is PlanCrew => isRecord(c) && c.slug === slug)
   const own = find(name)
@@ -350,8 +351,18 @@ export function nextCrew(crew: string): string {
   return m?.[1] !== undefined && m[2] !== undefined ? `${m[1]}-${Number(m[2]) + 1}` : `${crew}-2`
 }
 
-export function idleLeadText(label: string, crew: string, minutes: number): string {
-  return `${IDLE_LEAD} ${label} in crew ${crew}, no report for ${minutes}m and no member at work. Read its last message and resume it with SendMessage, or start ${nextCrew(crew)} from its report.`
+// The successor name the idle prompt suggests, one the plan gate maps back to the same plan crew: a plan slug C takes
+// C-2 (never an incremented C, which may be another crew), a successor B-<n> of plan slug B takes B-<n+1>. No plan,
+// or a crew not in it: nextCrew, as in 0.2.1.
+export function successorCrew(plan: Plan | undefined, crew: string): string {
+  const target = plan === undefined ? undefined : planCrewFor(plan, crew)
+  if (target === undefined) return nextCrew(crew)
+  if (target.slug === crew) return `${crew}-2`
+  return `${target.slug}-${Number(crew.slice(target.slug.length + 1)) + 1}`
+}
+
+export function idleLeadText(label: string, crew: string, minutes: number, next: string = nextCrew(crew)): string {
+  return `${IDLE_LEAD} ${label} in crew ${crew}, no report for ${minutes}m and no member at work. Read its last message and resume it with SendMessage, or start ${next} from its report.`
 }
 
 // A lead's captured report that ends its work: one with a Proof section, a checkpoint or a blocker. A question or a
@@ -812,7 +823,13 @@ async function idleLeadCheck($: $, state: State, lead: Agent, crew: Crew, all: r
   if (state.idlePrompted.has(lead.id) || now - since < STALL_MS) return
   // flagged before any await, so an overlapping check never prompts twice
   state.idlePrompted.add(lead.id)
-  const text = idleLeadText(labelOf(lead), crew.crew, Math.floor((now - since) / 60_000))
+  let next = nextCrew(crew.crew)
+  try {
+    next = successorCrew(await planOf($, state), crew.crew)
+  } catch {
+    // fails open: any error reading the plan gives the 0.2.1 name
+  }
+  const text = idleLeadText(labelOf(lead), crew.crew, Math.floor((now - since) / 60_000), next)
   await safely($, 'idle lead wake', () => $.prompt.submit({ text }))
 }
 
