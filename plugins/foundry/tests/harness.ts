@@ -165,8 +165,8 @@ export const quiet = (w: World): World => {
   return w
 }
 
-export const stop = (id: string, text: string, active = false, tasks?: Task[]) =>
-  ({ background_tasks: tasks, hook_event_name: 'SubagentStop', session_id: 's1', cwd: 'C:/r/.claude/worktrees/x', agent_id: id, agent_type: 'x', agent_transcript_path: '', stop_hook_active: active, last_assistant_message: text, transcript_path: '' }) as never
+export const stop = (id: string, text: string, active = false, tasks?: Task[], type = 'x') =>
+  ({ background_tasks: tasks, hook_event_name: 'SubagentStop', session_id: 's1', cwd: 'C:/r/.claude/worktrees/x', agent_id: id, agent_type: type, agent_transcript_path: '', stop_hook_active: active, last_assistant_message: text, transcript_path: '' }) as never
 
 export const handBack = ($: Engine, id: string, message: string) => $.tool.call({ tool: 'SubagentHandback', message, agentId: id } as never)
 

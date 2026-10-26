@@ -17,7 +17,7 @@ import {
   agentVerdict,
   effortVerdict,
 } from '../hooks/register'
-import { NOW, ROOT, handBack, measure, quiet, startSession, status, stop, world } from './harness'
+import { NOW, ROOT, agent, handBack, measure, quiet, startSession, status, stop, world } from './harness'
 
 const MIN = 60_000
 
@@ -456,6 +456,20 @@ test('never gates an agent outside every crew', async ($, on) => {
   world($, on)
   expect(((await $.classic.SubagentStop(stop('X', 'chatter'))) as { block?: string }).block).toBeUndefined()
   expect(((await $.classic.SubagentStop(stop('C1', 'chatter'))) as { block?: string }).block).toBeUndefined()
+})
+
+test('never gates a foundry:lead another agent started', async ($, on) => {
+  const w = quiet(world($, on))
+  w.agents.push(agent('N1', LEAD_TYPE, 'side', 'X'))
+  expect(((await $.classic.SubagentStop(stop('N1', 'chatter', false, undefined, LEAD_TYPE))) as { block?: string }).block).toBeUndefined()
+})
+
+test('a foundry:lead a crew member started is a member: never gated, its hand-back captured', async ($, on) => {
+  const w = quiet(world($, on))
+  w.agents.push(agent('N2', LEAD_TYPE, 'sub', 'A1'))
+  await handBack($, 'N2', 'just a note')
+  expect(((await $.classic.SubagentStop(stop('N2', 'Done.', false, undefined, LEAD_TYPE))) as { block?: string }).block).toBeUndefined()
+  expect(w.files.get(`${ROOT}/reports/auth/sub.md`)).toBe('just a note')
 })
 
 test('a blocked stop is not captured; the stop that goes through is', async ($, on) => {

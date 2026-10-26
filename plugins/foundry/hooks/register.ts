@@ -440,10 +440,12 @@ function noteActivity($: $, state: State, id: string) {
   }
 }
 
-// what the stop gate needs of a stopping agent: whether it is a lead, and its descendants as last listed
+// what the stop gate needs of a stopping agent: whether it is a lead the main thread started, and its descendants
+// as last listed. One not yet listed is taken at its event's type.
 async function stopperOf($: $, state: State, id: string, type: string | undefined): Promise<{ lead: boolean; descendants: Agent[] }> {
   const all = (await agentsOf($, state)).all
-  const lead = type === LEAD_TYPE || all.find(a => a.id === id)?.type === LEAD_TYPE
+  const known = all.find(a => a.id === id)
+  const lead = known === undefined ? type === LEAD_TYPE : isLead(known)
   return { lead, descendants: lead ? descendantsOf(id, all) : [] }
 }
 
@@ -786,7 +788,7 @@ export const register: Register = on => {
         const crew = crewOf(id, all)
         if (crew === undefined) return
         // a lead's report the stop gate will send back is not its report: the stop that goes through writes it
-        if (all.find(a => a.id === id)?.type === LEAD_TYPE && !leadStopPasses(message)) return
+        if (crew.isLead && !leadStopPasses(message)) return
         await writeReport($, state, crew, id, message)
       })
     }
