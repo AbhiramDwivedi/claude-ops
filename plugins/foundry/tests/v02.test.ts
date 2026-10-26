@@ -214,10 +214,30 @@ test('an agent with no activity on record is not flagged on first sight, only ST
 test('session.start twice never runs two checks', async ($, on) => {
   const w = world($, on)
   await startSession($)
-  await startSession($)
   await w.activity('A1')
-  await w.clock.advance(STALL_MS + HEARTBEAT_MS)
+  // one timer: each heartbeat asks for the agent list a fixed number of times
+  const before = w.listCalls
+  await w.clock.advance(10 * HEARTBEAT_MS)
+  const perTen = w.listCalls - before
+  expect(perTen).toBeGreaterThan(0)
+  await startSession($)
+  await startSession($)
+  const mid = w.listCalls
+  await w.clock.advance(10 * HEARTBEAT_MS)
+  // a second timer would double the checks, so the lists asked
+  expect(w.listCalls - mid).toBe(perTen)
+  await w.clock.advance(STALL_MS)
   expect(w.prompts.filter(p => p.startsWith(STALLED) && p.includes('auth-builder')).length).toBe(1)
+})
+
+test('the harness\'s $.state counts versions: arming then firing a reset writes the value at least twice', async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  await measure($, limit(resetAt(10 * MIN)))
+  await w.clock.advance(20 * MIN)
+  const mine = [...w.versions.entries()].filter(([k]) => k.startsWith('foundry/'))
+  expect(mine.length).toBeGreaterThan(0)
+  expect(Math.max(...mine.map(([, v]) => v))).toBeGreaterThanOrEqual(2)
 })
 
 test('/foundry lists a stalled agent under its crew and the lead\'s last activity on the crew line', async ($, on) => {
@@ -859,3 +879,27 @@ test('a running background task of another crew\'s live member does not allow th
   expect((await blockOf($, 'L1', 'chatter', false, [task('B1')]))?.startsWith('[foundry]')).toBe(true)
   expect((await blockOf($, 'L2', 'chatter', false, [task('B1')])) ?? 'allowed').toBe('allowed')
 })
+
+// ---------- 3b. a lead that is no longer live never gets a reset wake ----------
+
+for (const ended of ['completed', 'failed', 'killed'] as const) {
+  test(`a ${ended} lead is not live: a five-hour 100 percent measure arms nothing`, async ($, on) => {
+    const w = world($, on)
+    w.agents = w.agents.map(a => (a.type === LEAD_TYPE ? { ...a, status: ended } : a))
+    await startSession($)
+    await measure($, limit(resetAt(30 * MIN)))
+    await w.clock.advance(3 * 60 * MIN)
+    expect(resets(w.prompts)).toEqual([])
+    expect(JSON.stringify([...w.stateValues.entries()])).not.toContain(resetAt(30 * MIN))
+  })
+
+  test(`a ${ended} lead is not live: a rate_limit StopFailure arms nothing`, async ($, on) => {
+    const w = world($, on)
+    w.agents = w.agents.map(a => (a.type === LEAD_TYPE ? { ...a, status: ended } : a))
+    await startSession($)
+    w.usageLimits = limit(resetAt(30 * MIN))
+    await $.classic.StopFailure({ error: 'rate_limit' } as never)
+    await w.clock.advance(3 * 60 * MIN)
+    expect(resets(w.prompts)).toEqual([])
+  })
+}
