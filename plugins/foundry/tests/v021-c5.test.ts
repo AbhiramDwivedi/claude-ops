@@ -1,6 +1,6 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
 
-import { NOW, ROOT, world } from './harness'
+import { NOW, ROOT, world, test } from './harness'
 
 // foundry 0.2.1 C5: a `- HH:MM |` the foreman types on a new decision-log line is replaced with the clock's local time
 

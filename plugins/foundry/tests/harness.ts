@@ -1,8 +1,24 @@
 import type { AgentInfo, On, ToolCallResult } from 'claude-code'
-import type { Engine, MockClock } from 'claude-code/testing'
-import { mock } from 'claude-code/testing'
+import type { Engine, MockClock, TestBody, TestOptions } from 'claude-code/testing'
+import { mock, test as kitTest } from 'claude-code/testing'
 
 import { LEAD_TYPE } from '../hooks/register'
+
+// Per-test time bound for every suite. The kit's 5000 ms default trips when the
+// runner executes all seven suite files in parallel: a test that takes well
+// under a second alone can wait seconds for CPU, and a different few tests
+// timed out on each full run. 30000 ms is six times the default, enough
+// margin for that contention, and still finite, so a real hang fails the test.
+export const TEST_TIMEOUT_MS = 30_000
+
+// `test` from the kit with TEST_TIMEOUT_MS as the default timeoutMs. A test
+// that passes its own options keeps them; its own timeoutMs wins.
+export function test(name: string, body: TestBody): void
+export function test(name: string, options: TestOptions, body: TestBody): void
+export function test(name: string, a: TestBody | TestOptions, b?: TestBody): void {
+  if (typeof a === 'function') kitTest(name, { timeoutMs: TEST_TIMEOUT_MS }, a)
+  else kitTest(name, { timeoutMs: TEST_TIMEOUT_MS, ...a }, b as TestBody)
+}
 
 export const agent = (id: string, type: string, name?: string, parentId?: string): AgentInfo => ({ id, type, name, parentId, status: 'running', description: id })
 
