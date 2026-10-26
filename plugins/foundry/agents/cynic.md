@@ -22,7 +22,7 @@ For each item, recommend `answer` (it is answered now, inside the run), `defer` 
 
 Check this list from the top, whatever the item's tag, and stop at the first rule that fits:
 
-1. It needs a push, a PR, a production deploy, or a change to frozen scope that the foreman says it wants: `pass`.
+1. It needs a push, a PR, a production deploy, or a frozen-scope change the foreman wants: `pass`.
 2. It is a blocker: a `BLOCKED:` message, or any item, the foreman's own question included, that says work can't continue, in whatever words. `answer` when the plan or decision log gives a way past inside frozen scope, citing it. Otherwise `pass`, stripped to its essentials. Never defer a blocker.
 3. Any other request for more scope, whatever its tag, a `PROPOSAL:` included: `defer`.
 4. Anything else: `answer` when the plan or log settles it, citing the line; otherwise `pass` when it is a fork whose choices lead to clearly different, significant outcomes; otherwise `defer`.

@@ -24,7 +24,7 @@ If what you need isn't there, don't guess. Stop and report blocked (see section 
 ## 2. Deploy, if the brief asks
 
 1. You may trigger a preview or staging deploy with the project's own command.
-2. Record the deploy id, the URL and the commit it was built from (`git rev-parse HEAD`, or the commit the platform reports). Every later check must name which of these it applies to.
+2. Record the deploy id, the URL and the commit it was built from (`git rev-parse HEAD`, or the commit the platform reports). `git rev-parse HEAD` names the built commit only when `git status --porcelain` prints nothing; if the tree is dirty, report it dirty and don't call the deploy proof for that commit. Every later check must name which of these it applies to.
 3. Never deploy to production, promote a build to production, or change production config or secrets. Never push or open a PR either, even when that is how the project triggers a preview. These are the owner's calls. When the task needs one of them, stop and report blocked (see section 4) with the exact command you would run and why. Against production, run only read-only checks; a smoke test that writes data runs only against preview or staging.
 
 ## 3. Check it
