@@ -797,6 +797,10 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) noteActivity($, state, e.agentId)
     return yield* next(e)
+  }).catch(async function* ($, e, next) {
+    // turn.step streams, so its catch is a generator: log as failOpen does, then let the stream go on
+    failOpen($, e, next)
+    return yield* next(e)
   })
 
   on('classic.SubagentStop', async ($, e, next) => {
