@@ -116,8 +116,10 @@ test('C2: exports IDLE_LEAD and idleLeadText with the exact prompt', () => {
 
 test('C2 flow: an idle lead with no live member and no report is prompted once after 15 minutes', async ($, on) => {
   const w = quiet(world($, on))
-  setStatus(w, 'L1', 'idle')
+  // the module must see the lead go from running to idle (v021-fix item 1)
   await startSession($)
+  await w.clock.advance(2 * MIN)
+  setStatus(w, 'L1', 'idle')
   await w.clock.advance(14 * MIN)
   expect(idleLeads(w.prompts)).toEqual([])
   await w.clock.advance(3 * MIN)
@@ -134,8 +136,9 @@ test('C2 flow: an idle lead with no live member and no report is prompted once a
 
 test('C2 flow: resuming the lead ends the idle period and re-arms the prompt', async ($, on) => {
   const w = quiet(world($, on))
-  setStatus(w, 'L1', 'idle')
   await startSession($)
+  await w.clock.advance(2 * MIN)
+  setStatus(w, 'L1', 'idle')
   await w.clock.advance(17 * MIN)
   expect(idleLeads(w.prompts).length).toBe(1)
   setStatus(w, 'L1', 'running')
