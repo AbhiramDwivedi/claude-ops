@@ -351,14 +351,18 @@ export function nextCrew(crew: string): string {
   return m?.[1] !== undefined && m[2] !== undefined ? `${m[1]}-${Number(m[2]) + 1}` : `${crew}-2`
 }
 
-// The successor name the idle prompt suggests, one the plan gate maps back to the same plan crew: a plan slug C takes
-// C-2 (never an incremented C, which may be another crew), a successor B-<n> of plan slug B takes B-<n+1>. No plan,
-// or a crew not in it: nextCrew, as in 0.2.1.
+// The successor name the idle prompt suggests, one the plan gate maps back to the same plan crew: a plan slug C starts
+// at C-2 (never an incremented C, which may be another crew), a successor B-<n> of plan slug B starts at B-<n+1>. A
+// candidate that is itself a plan slug is another crew, so k counts on past it: plan [auth, auth-2] gives auth-3. n+1
+// is BigInt arithmetic on the digit string, so the name is always plain digits, however large n is. No plan, or a crew
+// not in it: nextCrew, as in 0.2.1.
 export function successorCrew(plan: Plan | undefined, crew: string): string {
   const target = plan === undefined ? undefined : planCrewFor(plan, crew)
-  if (target === undefined) return nextCrew(crew)
-  if (target.slug === crew) return `${crew}-2`
-  return `${target.slug}-${Number(crew.slice(target.slug.length + 1)) + 1}`
+  if (plan === undefined || target === undefined) return nextCrew(crew)
+  const isSlug = (name: string) => planCrewFor(plan, name)?.slug === name
+  let k = target.slug === crew ? 2n : BigInt(crew.slice(target.slug.length + 1)) + 1n
+  while (isSlug(`${target.slug}-${k}`)) k += 1n
+  return `${target.slug}-${k}`
 }
 
 export function idleLeadText(label: string, crew: string, minutes: number, next: string = nextCrew(crew)): string {
@@ -609,6 +613,28 @@ async function planOf($: $, state: State): Promise<Plan | undefined> {
   return parsePlan(String(await $.fs.read(planPath(dir))))
 }
 
+// how long the idle prompt waits on the plan read before it names the 0.2.1 successor instead
+const PLAN_READ_MS = 2000
+
+// The plan as planOf reads it, or undefined when the read hasn't settled within `ms` on the engine clock, so a hung
+// read never holds up the heartbeat pass that awaits it. The timer is cancelled once the read settles; a read that
+// settles after the bound is dropped. A read that throws rejects, as planOf does.
+function planWithin($: $, state: State, ms: number): Promise<Plan | undefined> {
+  return new Promise((resolve, reject) => {
+    const timer = $.clock.after(ms, () => resolve(undefined))
+    planOf($, state).then(
+      plan => {
+        timer.cancel()
+        resolve(plan)
+      },
+      (err: unknown) => {
+        timer.cancel()
+        reject(err)
+      },
+    )
+  })
+}
+
 // the agent list, merged into what was seen before. `listed` is every agent the list returned, whatever its
 // status (a completed or killed agent can still be listed); test isLive for an agent that is still at work.
 async function agentsOf($: $, state: State): Promise<{ all: Agent[]; listed: Agent[] }> {
@@ -825,7 +851,7 @@ async function idleLeadCheck($: $, state: State, lead: Agent, crew: Crew, all: r
   state.idlePrompted.add(lead.id)
   let next = nextCrew(crew.crew)
   try {
-    next = successorCrew(await planOf($, state), crew.crew)
+    next = successorCrew(await planWithin($, state, PLAN_READ_MS), crew.crew)
   } catch {
     // fails open: any error reading the plan gives the 0.2.1 name
   }
