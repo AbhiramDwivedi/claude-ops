@@ -195,4 +195,4 @@ Before anything leaves the machine, report:
 - the deferred items;
 - the high-impact files that changed, for the owner to read. List only those.
 
-Ask the owner before every push and before opening a PR, unless the owner has granted merge or push ownership for the project, in its CLAUDE.md or memory. Then you push, open the PR and merge it yourself once the integration judge passes. In `single` mode, the PR is one PR from the integration branch into the target. Production deploys always go to the owner.
+Ask the owner before every push and before opening a PR, unless the owner has granted merge or push ownership for the project, in its CLAUDE.md or memory. Then you push, open the PR and merge it yourself once the integration judge passes, or in sequential mode once the last crew has merged and its checks pass. In `single` mode, the PR is one PR from the integration branch into the target. Production deploys always go to the owner.
