@@ -1,6 +1,6 @@
 # infra pack
 
-Applies when the work touches infrastructure: cloud resources, networks, IAM, Kubernetes manifests, Helm charts, container images, or CI/CD pipelines. It assumes infrastructure is managed as code with a tool such as Terraform, Pulumi, CloudFormation or Kubernetes manifests, and that changes reach production through a pipeline.
+Applies when the work touches infrastructure: cloud resources, networks, IAM, Kubernetes manifests, Helm charts, container images, or CI/CD pipelines. It assumes infrastructure is managed as code with a tool such as Terraform, Pulumi, CloudFormation or Kubernetes manifests, and that changes reach production through a pipeline. It extends the core pack, and core's rules still apply.
 
 ## Rules
 

@@ -1,6 +1,6 @@
 # library pack
 
-Applies when the work touches code that other projects install and import: a published package, an SDK, or a shared module with its own version. It assumes the library declares its public API in one place (an entry file, an exports map or an `__all__` list) and releases versions that follow semver.
+Applies when the work touches code that other projects install and import: a published package, an SDK, or a shared module with its own version. It assumes the library declares its public API in one place (an entry file, an exports map or an `__all__` list) and releases versions that follow semver. It extends the core pack, and core's rules still apply.
 
 ## Rules
 

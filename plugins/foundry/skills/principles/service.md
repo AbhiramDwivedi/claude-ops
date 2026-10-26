@@ -1,6 +1,6 @@
 # service pack
 
-Applies when the work touches a long-running process that serves requests or consumes work: an HTTP or RPC service, a worker, or a queue consumer, and its deploy config. It follows the 12-factor app and assumes the service runs as one or more replaceable processes behind a load balancer or scheduler.
+Applies when the work touches a long-running process that serves requests or consumes work: an HTTP or RPC service, a worker, or a queue consumer, and its deploy config. It follows the 12-factor app and assumes the service runs as one or more replaceable processes behind a load balancer or scheduler. It extends the core pack, and core's rules still apply.
 
 ## Rules
 
@@ -25,7 +25,7 @@ Applies when the work touches a long-running process that serves requests or con
 10. One build artifact moves through every environment; only config changes between them.
    Test: the pipeline builds once and promotes the same image or package digest, and the diff adds no environment-specific build step.
 11. Dependencies are declared in a manifest and pinned by a lockfile.
-   Test: every new import resolves to a package in the manifest, and the lockfile changes in the same diff.
+   Test: every new import resolves to a package in the manifest; a diff that adds or bumps a manifest entry also changes the lockfile.
 12. Every outbound call to another service has a timeout, and retries use backoff with a cap.
    Test: each new HTTP, RPC or database client call in the diff sets a timeout, and any retry loop has a maximum attempt count and backoff.
 13. Admin and one-off tasks (migrations, backfills) run as separate commands from the same codebase and release.
