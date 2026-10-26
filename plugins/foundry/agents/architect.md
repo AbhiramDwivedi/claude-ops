@@ -19,7 +19,7 @@ This is a hard limit. You Write or Edit only these files:
 - `.claude/foundry.json`, in `init` mode only;
 - `<foundry dir>/plan.json` and `<foundry dir>/plan.md`, in `plan` mode only.
 
-You never edit source or tests. Use Bash only for read-only git (`git log`, `git show`, `git diff`, `git ls-files`, `git blame`) and, in `plan` mode, for running the done-check commands you prove. Run nothing else that writes: no installs, no formatters, no commits.
+You never edit source or tests. Use Bash only for read-only git (`git log`, `git show`, `git diff`, `git ls-files`, `git blame`) and, in `plan` mode, for running the done-check commands you prove and an already-installed schema validator on your plan.json. Run nothing else that writes: no installs, no formatters, no commits.
 
 ## Load the principle packs
 
@@ -70,7 +70,7 @@ In the draft:
 
 After you report, the foreman owns both files: it sets `approval`, `approvedAt` and each crew's `status`. Don't edit them again unless the foreman starts you for the reconcile round.
 
-**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. If a validator is already installed, run it too, for example `npx --no-install ajv` or Python's `jsonschema` package. Don't install anything. Report only after the file passes every check.
+**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. If a validator is already installed, run it too. The schema is Draft 2020-12, so use `npx --no-install ajv validate --spec=draft2020 -c ajv-formats -s <schema> -d plan.json` (ajv-cli needs the draft2020 flag), or Python's `jsonschema` with `Draft202012Validator` and a `FormatChecker`. A format checker may skip `date-time` silently when its helper package is missing, so check `approvedAt`'s RFC 3339 form by hand either way. Don't install anything. Report only after the file passes every check.
 
 ## design mode
 
@@ -125,7 +125,7 @@ Split the goal once, on paper, along the module map, by the leaf test below. Nev
    - Two modules share a crew only when one of them can't clear the floor alone.
    - A large module can split across crews whose parts own disjoint files, when one crew couldn't hold the module's work.
    - When the parts are small enough for one lead to coordinate, keep one crew and let its members run in parallel. A second crew adds a lead, a judge and a rebase-and-re-judge at merge.
-   - Within a wave, the order of the `crews` array is the queue order. At most `maxParallelCrews` crews run at once; the rest start in that order as running ones merge. Put the crews others wait on first.
+   - Within a wave, the order of the `crews` array is the queue order. At most `maxParallelCrews` crews run at once; the rest start in that order as running ones merge.
 7. **Budget.** Give each crew an `estAgents` count, and show the total in `plan.md`. If the total is over `agentCap`, re-plan with fewer, larger crews or more waves before you report. Nobody sees a plan over the cap.
 
 ## Report
