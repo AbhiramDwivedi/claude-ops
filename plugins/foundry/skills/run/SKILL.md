@@ -5,59 +5,98 @@ description: Runs a large goal as several crews of agents working in parallel, e
 
 # foundry run
 
-You are the foreman. You plan the crews, start their leads, carry questions between the leads and the person, and merge what the crews deliver. You are the only one who talks to the person.
+You plan the run, decide for it as its product owner, start the crews' leads and merge what the crews deliver. You shape the goal and decide what "right" means. The leads call you the foreman. The person who asked is the owner, and you are the only one who talks to the owner.
 
-Stay thin. You never do a crew's work yourself: no feature code, no conflict fixes, no member agents of your own. The one change you make to a branch is the fast-forward merge in `sequential` mode.
+Stay thin. Never do a crew's work yourself: no feature code, no conflict fixes, no member agents of your own. The one change you make to a branch is the fast-forward merge in `sequential` mode. Every Agent call you make sets `model` and `effort`.
 
-## 1. Find the agents you can use
+## Decisions and the decision log
 
-List the agent types this session can start. The Agent tool's listing names them all: the project's (`.claude/agents/*.md`), the person's (`~/.claude/agents/`) and plugin agents (such as `kit:builder` or `kit:reviewer`). For each type that could do crew work, note what it is for, whether it edits files, and its model if its definition fixes one.
+You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, production deploys, and every push or PR (the last only unless the project grants you merge ownership, section 10).
 
-If the project defines no agents, that is fine. Members then run as `general-purpose` with a role prompt the lead writes ("You are this crew's tester ..."). Say so in the plan.
+`<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
-## 2. Split the goal into crews
+Append one line per decision to `<foundry dir>/decisions.md`: time, decision, reason, the cynic's recommendation (or "none"), and "followed" or "overruled: <reason>".
+
+## The cynic
+
+Once the plan is approved, nothing goes to the owner before the cynic has seen it: questions, proposals, open questions from reports. The cynic advises on production promotions, pushes and PRs but never settles them; those reach the owner as section 10 says. Start a fresh cynic for each batch, numbered `cynic-1`, `cynic-2` and so on:
+
+```
+Agent({
+  subagent_type: "foundry:cynic",
+  name: "cynic-<n>",
+  model: "opus",
+  effort: "high",
+  description: "Rule on items for the owner",
+  prompt: "Items: <each item, with the crew that raised it>. Plan: <foundry dir>/plan.md. Decision log: <foundry dir>/decisions.md."
+})
+```
+
+For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. Clear a `BLOCKED:` yourself when you can inside frozen scope, for example from the plan, the decision log or something you know: a missing input, a collision with another crew. Every other `BLOCKED:` goes to the owner, and none is ever deferred. A production promotion, a change to frozen scope, and every push or PR (unless the project grants you merge ownership, section 10) go to the owner whatever the cynic recommends.
+
+## 1. Check the altitude
+
+Ask the owner once whether the goal is the end, or one step toward a bigger outcome. If it is a step, describe the bigger version in two or three sentences and what it would add to the plan. The owner picks one. Don't ask again.
+
+## 2. Run a short depth pass
+
+Before you split the work, answer four questions about the chosen goal, in a few lines each:
+
+- What would a top practitioner do here that wasn't asked for?
+- What is the rawest material: the real data, logs, users or system, not a summary of them?
+- Which tools would that practitioner use?
+- What besides a model verifies the result: a test suite, a benchmark, a real deploy, a person?
+
+Let the answers decide which crews exist. A crew that needs a verifier nobody has yet may start with a test-writer. Each lead runs a full pass for its own crew.
+
+## 3. Find the agents and skills you can use
+
+List the agent types this session can start: the project's (`.claude/agents/*.md`), the owner's (`~/.claude/agents/`) and plugin agents (such as `kit:builder` or `foundry:judge`). For each type that could do crew work, note what it does, whether it edits files, and its model if its definition fixes one. With no project agents, members run as `general-purpose` with a prompt that says what the job is ("Write tests for ..."). Say so in the plan.
+
+List the project's skills too (`.claude/skills/`, plugin skills in the Skill tool's listing), and match each useful one to the crews that need it. Leads pass them to members.
+
+## 4. Split the goal into crews
 
 A crew is one lead and the members it delegates to. Split the goal so that:
 
-- each crew owns a separate set of files or areas, and no two crews edit the same file. When two pieces of work must share files, put them in one crew, or run them as two crews one after the other;
-- each crew can be checked on its own, with a test, lint or build command that proves its part;
-- there are as few crews as the work allows, usually two to four. Every crew costs a lead running on Opus.
+- each crew owns a separate set of files, and no two crews edit the same file. Work that must share files goes in one crew, or in two crews run one after the other;
+- each crew has a done-check it can't game: code it doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
+- there are as few crews as the work allows, usually two to four. Every crew costs a lead on Opus.
 
 For each crew, decide:
 
-- **slug**: short, lowercase, hyphenated (`auth`, `billing-api`). It is the lead's name, the crew's name and the prefix of its members' names.
-- **goal**: one or two sentences, and what done means.
-- **members**: agent type and model per role. Use `opus` for judgment (design, debugging, review), `sonnet` for mechanical or well-specified work.
-- **owns**: the files, folders or areas the crew may edit.
+- **slug**: short, lowercase, hyphenated (`auth`, `billing-api`). It names the crew, its goal file and its first lead, and its members' names start with their lead's name.
+- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work; Opus builders start at `medium`. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. The plan's judge effort is a starting value: the lead may raise it as its builders climb the ladder, up to xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline.
+- **high-impact paths**: files under auth, money, migrations, CI or lockfiles. Suggest a red team (an Opus member whose job is to break the crew's work) for every crew that has any.
+- **resources**: a port range and a database or temp directory of its own, so parallel end-to-end tests don't collide.
 
-## 3. Show the plan and get approval
+## 5. Show the plan, get approval, freeze the scope
 
 Show the plan as a table before you start anything:
 
-| Crew | Goal | Members (type, model) | Owns | Done means |
-| --- | --- | --- | --- | --- |
-| `auth` | Session refresh on the API | `kit:builder` (sonnet), `kit:test-writer` (sonnet), `kit:reviewer` (opus) | `src/auth/**`, `tests/auth/**` | `npm test -- auth` passes |
+| Crew | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Resources (port range; DB or temp dir) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `auth` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | ports 4100-4109; temp dir `.tmp/auth` |
 
-Under it, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Ask the person to approve or change the plan. Start nothing until they approve.
+Under it, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Ask the owner two more things:
 
-## 4. Ask how to merge
-
-Ask the person two things:
-
-- **Merge mode.**
-  - `sequential`: crews merge into the target branch one at a time, each rebased on what merged before it. You get one reviewable merge per crew.
-  - `single`: all crew branches merge into one integration branch, and you open one PR for it. Use it when every merge to the target triggers something expensive, such as a Vercel deploy per merge.
+- **Merge mode.** `sequential`: crews merge into the target one at a time, each rebased on what merged before it, one reviewable merge per crew. `single`: all crew branches merge into one integration branch with one PR; use it when every merge to the target triggers something expensive, such as a deploy per merge.
 - **Target branch**: the branch the work lands on. Offer the current branch as the default.
 
-## 5. Start the leads
+Expand the scope here, once: the altitude, the depth pass and the red teams are where it grows. When the owner approves, write the plan to `<foundry dir>/plan.md`. The scope is now frozen. Start nothing before approval.
 
-Start every lead in one message, so they run in parallel. For each crew:
+## 6. Write the goal files and start the leads
+
+For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its done-check, the files it owns, and its high-impact paths. The lead re-reads it during the run.
+
+Start every lead in one message, so they run in parallel:
 
 ```
 Agent({
   subagent_type: "foundry:lead",
   name: "<slug>",
   model: "opus",
+  effort: "medium",
   run_in_background: true,
   isolation: "worktree",
   description: "<slug> crew lead",
@@ -65,59 +104,95 @@ Agent({
 })
 ```
 
-The brief carries everything the lead needs, because it can't see this conversation:
+The lead can't see this conversation, so the brief carries:
 
-- the crew's slug, goal and what done means;
-- the files it owns and the files it must not touch;
-- its members: role, agent type and model each;
-- the other crews: slug, what they own, and their lead's name (the slug), for collisions only;
-- the merge mode and target branch;
-- the check commands to run;
-- the decisions the person already made that bear on this crew.
+- the slug, the goal and the done-check, and the goal-file path;
+- the files it owns, the files it must not touch, and its high-impact paths;
+- its members (role, agent type, model, effort each), whether it gets a red team, a writer or devops, and the skills matched to it;
+- its resource slice;
+- the other crews: slug, what they own, and their lead's name, for collisions only;
+- the merge mode, the target branch and the check commands;
+- the owner's decisions that bear on this crew;
+- this rule, verbatim: "Be brave: take the hard path, keep going when it gets difficult, don't ask permission for anything in scope. Never be brave with the truth: proof or it didn't happen."
 
 Each Agent result carries a `[foundry]` note with the path where that lead's report will be saved. Keep it.
 
-## 6. Carry questions between the leads and the person
+## 7. Handle messages from leads
 
-Only leads can message you. A lead's question starts with `QUESTION:`. A member's question reaches you through its lead. Put each question to the person as it comes, naming the crew. Send the answer back with `SendMessage({ to: "<slug>", message: "<the answer>" })`. Answer a lead yourself only when the approved plan or an earlier answer from the person already settles it, and say which one.
+Only leads message you; a member's message reaches you through its lead. Reply with `SendMessage({ to: "<lead name>", message: "..." })`, where `<lead name>` is `<slug>` or a successor's `<slug>-<n>`. Each message starts with a tag:
 
-Never approve a permission, a push or a destructive step on the person's behalf.
+- `QUESTION:` the lead needs a decision. If the plan, the decision log or an earlier owner answer settles it, answer and say which. Otherwise decide it yourself and log it, unless it meets the bar for the owner; then it goes through the cynic first.
+- `BLOCKED:` the lead can't continue. Unblock it if it's within your power (a missing input, a collision with another crew). Otherwise put it to the owner with the crew name and what the lead tried, and run the cynic on it only for a suggested answer.
+- `PROPOSAL:` the lead wants more scope. The scope is frozen, so the answer defaults to no. It goes through the cynic, and you may overrule the cynic with a logged reason, as for any item. A yes changes frozen scope, so only the owner can give it. Log either way.
 
-`/foundry` shows each crew's status, its live members by model, and when it last reported or the question it is waiting on you for, with the folder its reports are in.
+When a lead asks, never approve a permission, a push or a destructive step on the owner's behalf. Your own push at the end follows section 10.
 
-## 7. Collect the reports
+The plugin also sends you prompts:
 
-A lead's final report has fixed sections: Summary, Branch, Changes, Checks run, Open questions. A message that starts with `QUESTION:` is a question, not a report. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<git common dir>/foundry/<session id>/reports/<slug>/`.
+- `[foundry] stalled:` an agent has had no activity for 15 minutes. Message its lead (or the lead itself, if the stalled agent is a lead) and ask for its state.
+- `[foundry] limit reset:` the 5-hour usage window has reset. Message each lead that hasn't sent its final report: "Usage limit reset. Resume from where you stopped."
 
-A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items as its goal and a fresh name: `<slug>-2`, then `<slug>-3`. Its reports go to their own folder, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
+`/foundry` shows each crew's status, its live members by model, and when it last reported or what it is waiting on you for, with its report folder.
 
-Put the leads' open questions to the person before you merge.
+## 8. Collect the reports
 
-## 8. Merge
+A lead's final report has these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. A first line of `QUESTION:`, `BLOCKED:`, `PROPOSAL:` or `CHECKPOINT:` marks a stop that isn't final. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<foundry dir>/reports/<lead name>/`.
 
-Merge only crews whose reported checks pass. Conflicts are resolved by agents, never in the main thread.
+A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items listed in its brief and a fresh name: `<slug>-2`, then `<slug>-3`. Its brief states its own name (`<slug>-<n>`, the name you start it with), keeps the original slug, and names the original crew's goal file, `<foundry dir>/goals/<slug>.md`; don't write a new one. That file stays the done-check. It also names the predecessor's branch, that branch's commit and the crew's original base commit; the new lead resets its worktree to that branch first. Its members and judges are named after it (`auth-2-judge`), its reports go to its own folder, `reports/<slug>-<n>/`, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
 
-**sequential**, one crew at a time, in the order of the plan, or the order the leads agreed if they messaged each other about it. For each crew:
+A final message that starts with `BLOCKED:`, `QUESTION:` or `PROPOSAL:` is handled as in section 7.
 
-1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks and send your final report." A lead that has ended is resumed by the message.
-2. Wait for its report. If the checks fail, send the failure back to it.
-3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch does not contain the target's head yet: go back to step 1.
+## 9. Merge
 
-**single**: start one integrator agent:
+Before you merge, give a cynic each crew's final report, with its open questions, and the plan, and ask it also to check for drift from the plan and overlap between crews. One cynic call can cover several crews.
+
+Merge a crew only when its latest judge file starts with `VERDICT: PASS`. It is `<foundry dir>/reports/<lead name>/<lead name>-judge*.md`, where `<lead name>` is the crew's newest lead, `<slug>` or its latest successor `<slug>-<n>`; the latest is the highest `-judge-<k>.md`, or `-judge.md` if there is none (for example `reports/auth-2/auth-2-judge.md`). Read the file yourself; a lead's summary of the verdict doesn't count. Check that the head SHA it states under `## Proof checked` is the crew branch head (`git rev-parse <crew branch>`); a verdict on another commit doesn't count. On `VERDICT: FAIL`, send the findings back to the lead. Agents resolve conflicts, never the main thread.
+
+**sequential**, one crew at a time, in the order of the plan, or the order the leads agreed between them. For each crew:
+
+1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch if its head moved, and send your final report on its PASS." A lead that has ended is resumed by the message.
+2. Wait for its report. The latest judge file's SHA under `## Proof checked` must be the rebased crew branch head; a PASS on any other SHA doesn't count. If either fails, send the failure back to the lead.
+3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch doesn't contain the target's head yet: go back to step 1.
+
+**single**: start one integrator:
 
 ```
 Agent({
   subagent_type: "general-purpose",
   name: "integrator",
   model: "opus",
+  effort: "high",
   isolation: "worktree",
   description: "Integrate crew branches",
   prompt: "<the brief below>"
 })
 ```
 
-Its brief names the target, the integration branch (`foundry/<short goal>`, from `<target>`), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves the conflicts from both sides' intent, runs the checks and reports in the lead's format. When the fix for a conflict is a crew's call, it says so under Open questions rather than guessing.
+Its brief names the target, the integration branch (`foundry-<short goal>`, from `<target>`; a `foundry/` prefix fails when a branch named `foundry` exists), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves conflicts from both sides' intent, runs the checks and reports with these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. When a conflict's fix is a crew's call, it says so under Open questions rather than guessing.
 
-## 9. Before anything leaves the machine
+Then have a judge rule on the integration branch:
 
-Report to the person: each crew's summary, what merged where, the checks and their results, and the open questions. Ask before every push and before opening a PR. In `single` mode, the PR is one PR from the integration branch into the target.
+```
+Agent({
+  subagent_type: "foundry:judge",
+  name: "integration-judge",
+  model: "opus",
+  effort: "xhigh",
+  description: "Judge the integration branch",
+  prompt: "Branch: <integration branch>. Checkout: <absolute path of the integrator's worktree>. Head SHA: <integration branch head>; state it under ## Proof checked. Plan: <foundry dir>/plan.md. Integrator report: <its hand-back, pasted>. High-impact paths: <all crews'>."
+})
+```
+
+The plugin doesn't save reports for agents you start outside a crew. Read its hand-back directly and copy its `VERDICT:` line into `decisions.md`. Report to the owner only on `VERDICT: PASS`; on `VERDICT: FAIL`, send the findings to the integrator and judge again with a fresh judge under the next unused name, `integration-judge-2`, then `-3`. Check the SHA it states against the integration branch head before you report.
+
+## 10. Report to the owner
+
+Before anything leaves the machine, report:
+
+- each crew's summary, and what merged where;
+- the checks and their results, and each judge's verdict;
+- the decisions you made (from the log), and every cynic overrule with its reason;
+- the deferred items;
+- the high-impact files that changed, for the owner to read. List only those.
+
+Ask the owner before every push and before opening a PR, unless the owner has granted merge or push ownership for the project, in its CLAUDE.md or memory. Then you push, open the PR and merge it yourself once the integration judge passes, or in sequential mode once the last crew has merged and its checks pass. In `single` mode, the PR is one PR from the integration branch into the target. Production deploys always go to the owner.
