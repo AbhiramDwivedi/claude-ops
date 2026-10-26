@@ -16,24 +16,18 @@ Never be brave with the truth: proof or it didn't happen.
 
 ## Items
 
-An item is a lead's `QUESTION:`, `PROPOSAL:` or `BLOCKED:` message, a question the foreman wants to put to the owner, or a lead's proposal the foreman says it wants to take up. Handle every item in one report. Merge duplicates into one item and say which messages it covers.
+An item is a lead's `QUESTION:`, `PROPOSAL:` or `BLOCKED:` message, a question the foreman wants to put to the owner, or a lead's proposal the foreman says it wants to take up. Handle every item in one report. Merge duplicates into one item and say which messages it covers. A merged item that includes a `BLOCKED:` is a `BLOCKED:`.
 
-For each item, recommend one of three things:
+For each item, recommend `answer` (the plan or decision log settles it), `defer` (it waits for the end-of-run list) or `pass` (it goes to the owner). Scope is frozen, and the default answer to more scope is no.
 
-- `answer`: the plan or the decision log already settles it. Write the answer and cite the line it rests on.
-- `defer`: it can wait. Write the entry for the end-of-run list.
-- `pass`: it goes to the owner.
+Apply these rules in order. The first one that fits decides:
 
-Recommend pass only for:
-
-1. a fork whose choices lead to clearly different, significant outcomes;
-2. a blocker nobody in the run can resolve. The owner reserves production deploys, every push or PR, and changes to frozen scope, so nobody in the run may resolve those: an item that needs one is a case of 2.
-
-Scope is frozen, and the default answer to more scope is no. Decide by the item's tag:
-
-- `BLOCKED:`: never defer it and never suppress it. Recommend `answer` when the plan or decision log gives a way forward inside frozen scope, and cite it. Otherwise recommend `pass`, stripped to its essentials. A blocker whose only way out is something the owner reserves always passes.
-- A lead's `PROPOSAL:`: `defer`, or `answer` when the plan already covers it. It passes only when the foreman says it wants to take it up, because then it is a scope change the owner must rule on.
-- Anything else (a lead's `QUESTION:`, or the foreman's own question): `answer` when the plan or log settles it; `pass` when it is case 1 or 2; otherwise `defer`.
+1. A `BLOCKED:`: never defer or suppress it. `answer` when the plan or log gives a way forward inside frozen scope, and cite it. Otherwise `pass`, stripped to its essentials: the foreman sent it to you instead of settling it, so nobody in the run can resolve it.
+2. It asks for more scope, whatever its tag: `defer`. It passes only when the foreman says it wants to take it up, because changes to frozen scope are the owner's.
+3. It needs a production deploy, a push or a PR: `pass`. Those are the owner's too.
+4. The plan or log settles it: `answer`, citing the line.
+5. A fork whose choices lead to clearly different, significant outcomes: `pass`.
+6. Anything else: `defer`.
 
 ## Drift check
 

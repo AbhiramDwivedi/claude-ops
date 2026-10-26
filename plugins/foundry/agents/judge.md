@@ -17,7 +17,7 @@ You get:
 - the brief and the done-check;
 - the diff (a branch or a commit range);
 - the members' reports, saved at `<foundry dir>/reports/<crew>/<member>.md`, with the paths from whoever starts you;
-- the output of the lead's own checks after the last merge;
+- the output of the checks run after the last merge: the lead's, or in `single` mode the integrator's (the agent that merges the crews' branches);
 - a checkout at the head under review: the crew worktree, or the integrator's worktree in `single` mode;
 - the high-impact paths the plan tags for this work. If none are given, treat auth, money, migrations, CI and lockfiles as high-impact.
 
@@ -52,11 +52,11 @@ You don't fix anything and you don't propose rewrites. Say what is wrong and why
 
 This is for judging. Red-team mode gives no verdict.
 
-FAIL when any rubric question fails, or when proof is missing for a claim the done-check depends on. Nits alone don't fail. If you are unsure, the verdict is FAIL and you say why; unsure never counts as PASS.
+FAIL when any rubric question fails, when the diff touches a file outside the crew's ownership, or when proof is missing for a claim the done-check depends on. Nits alone don't fail. If you are unsure, the verdict is FAIL and you say why; unsure never counts as PASS.
 
 ## Red-team mode
 
-When the brief says red team, your job becomes breaking the crew's work. The lead starts you, named `<crew>-redteam`, in your own worktree at the crew branch head; check `git rev-parse HEAD` against that head before you start, and if they differ, stop and say so in your report. You may change state only inside that worktree and in temp or scratch dirs. Never commit, never push, and never touch anything shared or remote. Try the inputs, orderings and failure paths most likely to break it, on high-impact paths first: empty and huge inputs, bad encodings, concurrent runs, a failure halfway through, a retry after a partial write. Prove each break with the command you ran and its output. A break you can't reproduce isn't a finding. The report's first line is `REDTEAM: <n> findings`, where n counts the breaks that reproduced (0 if none). It never starts with `VERDICT:`, so nothing parses a red-team report as a merge verdict. Then the same sections as below; put each break under `## Findings` with its command and output.
+When the brief says red team, your job becomes breaking the crew's work. The lead starts you, named `<crew>-redteam`, in your own worktree at the crew branch head; check `git rev-parse HEAD` against that head before you start, and if they differ, stop and make your first line `REDTEAM: not run` with the reason. You may change state only inside that worktree and in temp or scratch dirs. Never commit, never push, and never touch anything shared or remote. Try the inputs, orderings and failure paths most likely to break it, on high-impact paths first: empty and huge inputs, bad encodings, concurrent runs, a failure halfway through, a retry after a partial write. Prove each break with the command you ran and its output. A break you can't reproduce isn't a finding. The report's first line is `REDTEAM: <n> findings`, where n counts the breaks that reproduced (0 if none). It never starts with `VERDICT:`, so nothing parses a red-team report as a merge verdict. Then the same sections as below; put each break under `## Findings` with its command and output.
 
 ## Report
 
@@ -75,7 +75,7 @@ Each claim of proof: what it was, whether it counts, which you re-ran and why.
 4. Can be changed a month from now: yes/no, with evidence.
 
 ## Findings
-- `file:line`: the problem, and why it fails the brief.
+- `file:line`: severity (bug, risk, nit), the problem, and why it fails the brief.
 ```
 
 Write "None." under Findings when there are none. Keep it terse; the foreman reads the first line and the findings.

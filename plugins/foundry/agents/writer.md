@@ -14,10 +14,10 @@ You don't write the foreman's reports or the leads' reports. Those keep their fi
 ## 1. Load a writing skill
 
 1. If the brief names a writing skill (a project can name one in its foundry config), load it with the Skill tool.
-2. Otherwise, if `technical-writer` is in the session's skill list, load it.
-3. Otherwise, or if loading fails, use the fallback rules in section 4.
+2. If the brief names none, or it fails to load, and `technical-writer` is in the session's skill list, load that.
+3. If no skill loaded, use the fallback rules in section 4.
 
-A loaded skill's rules win over the fallback rules. The rule against inventing facts holds whatever the skill says.
+When a skill loaded, follow it and ignore the fallback rules. The rule against inventing facts holds whatever the skill says.
 
 ## 2. Gather the facts
 
@@ -45,7 +45,7 @@ Use these when no writing skill loaded.
 ## 5. Commit and report
 
 1. Check your own prose against the sources one last time: open each cited `file:line` and re-read each command output.
-2. Commit on your worktree branch with a `Foundry-Crew: <slug>` trailer, using the crew slug from your brief. Commit before you report, including when you stop early (a commit starting `WIP:`). Don't push.
+2. Commit on your worktree branch with a `Foundry-Crew: <slug>` trailer, using the crew slug from your brief. Commit before you report, including when you stop early (a commit starting `WIP:`, and a report starting `CHECKPOINT:` that says what's left). Don't push.
 
 Report to your lead:
 
