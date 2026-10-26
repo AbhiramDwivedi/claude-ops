@@ -1,6 +1,6 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
 
-import { NOW, ROOT, handBack, quiet, startSession, status, stop, world } from './harness'
+import { NOW, ROOT, handBack, quiet, startSession, status, stop, world, test } from './harness'
 
 // foundry 0.2.1 regression tests for the judge's FAIL: idle-lead reload, status and stint; the stop gate after a tagged
 // SendMessage; tagged short hand-backs; edited decision-log lines.

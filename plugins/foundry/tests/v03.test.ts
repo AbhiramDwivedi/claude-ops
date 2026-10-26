@@ -1,7 +1,7 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
 
 import { LEAD_TYPE } from '../hooks/register'
-import { ROOT, quiet, startSession, status, world } from './harness'
+import { ROOT, quiet, startSession, status, world, test } from './harness'
 
 // foundry 0.3.0: the plan gates on starting a lead, and the plan lines on /foundry (ADR-0001 s8-9, hooks-spec)
 

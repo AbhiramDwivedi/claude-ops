@@ -1,8 +1,8 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
 
 import * as foundry from '../hooks/register'
 import { HEARTBEAT_MS, LIMIT_RESET, RESET_GRACE_MS, STALL_MS, STALLED, stallText } from '../hooks/register'
-import { NOW, ROOT, agent, handBack, measure, quiet, startSession, status, stop, world } from './harness'
+import { NOW, ROOT, agent, handBack, measure, quiet, startSession, status, stop, world, test } from './harness'
 
 // foundry 0.2.1 (spec C1-C4, C6, C7). Names the spec leaves open, chosen here for the builder to match:
 //   IDLE_LEAD = '[foundry] idle lead:'               exported constant
