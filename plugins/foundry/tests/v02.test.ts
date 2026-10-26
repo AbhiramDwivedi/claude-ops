@@ -584,7 +584,7 @@ test('takes the rest of the first line, trimmed', async ($, on) => {
   expect(await judgeText($, w, { 'auth-judge.md': { text: '  VERDICT:   FAIL - missing tests  \nx', age: MIN } })).toContain('\n  judge: FAIL - missing tests\n')
 })
 
-test('takes the newest of several judge files by mtime', async ($, on) => {
+test('takes the highest-numbered of several judge files', async ($, on) => {
   const w = world($, on)
   const text = await judgeText($, w, {
     'auth-judge.md': { text: 'VERDICT: FAIL', age: 30 * MIN },
@@ -594,6 +594,17 @@ test('takes the newest of several judge files by mtime', async ($, on) => {
   expect(text).toContain('  judge: PASS')
   expect(text).not.toContain('judge: FAIL')
   expect(text).not.toContain('judge: REVISE')
+})
+
+test('takes the highest-numbered judge file even when an older-numbered one is newer by mtime', async ($, on) => {
+  const w = world($, on)
+  const text = await judgeText($, w, {
+    'auth-judge.md': { text: 'VERDICT: FAIL - bare', age: MIN },
+    'auth-judge-3.md': { text: 'VERDICT: PASS', age: 30 * MIN },
+    'auth-judge-2.md': { text: 'VERDICT: FAIL - two', age: 2 * MIN },
+  })
+  expect(text).toContain('  judge: PASS')
+  expect(text).not.toContain('judge: FAIL')
 })
 
 test('shows nothing when the newest judge file has no VERDICT line, even if an older one has', async ($, on) => {

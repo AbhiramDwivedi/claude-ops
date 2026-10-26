@@ -66,7 +66,7 @@ A crew is one lead and the members it delegates to. Split the goal so that:
 For each crew, decide:
 
 - **slug**: short, lowercase, hyphenated (`auth`, `billing-api`). It names the crew, its goal file and its first lead, and its members' names start with their lead's name.
-- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `medium`, and Opus builders start there. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline.
+- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work; Opus builders start at `medium`. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. The plan's judge effort is a starting value: the lead may raise it as its builders climb the ladder, up to xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline.
 - **high-impact paths**: files under auth, money, migrations, CI or lockfiles. Suggest a red team (an Opus member whose job is to break the crew's work) for every crew that has any.
 - **resources**: a port range and a database or temp directory of its own, so parallel end-to-end tests don't collide.
 
@@ -125,7 +125,7 @@ Only leads message you; a member's message reaches you through its lead. Reply w
 - `BLOCKED:` the lead can't continue. Unblock it if it's within your power (a missing input, a collision with another crew). Otherwise put it to the owner with the crew name and what the lead tried, and run the cynic on it only for a suggested answer.
 - `PROPOSAL:` the lead wants more scope. The scope is frozen, so the answer defaults to no. It goes through the cynic, and you may overrule the cynic with a logged reason, as for any item. A yes changes frozen scope, so only the owner can give it. Log either way.
 
-Never approve a permission, a push or a destructive step on the owner's behalf.
+When a lead asks, never approve a permission, a push or a destructive step on the owner's behalf. Your own push at the end follows section 10.
 
 The plugin also sends you prompts:
 
@@ -138,7 +138,7 @@ The plugin also sends you prompts:
 
 A lead's final report has these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. A first line of `QUESTION:`, `BLOCKED:` or `CHECKPOINT:` marks a stop that isn't final. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<foundry dir>/reports/<lead name>/`.
 
-A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items as its goal and a fresh name: `<slug>-2`, then `<slug>-3`. Its brief states its own name (`<slug>-<n>`, the name you start it with), keeps the original slug, and names the original crew's goal file, `<foundry dir>/goals/<slug>.md`; don't write a new one. It also names the predecessor's branch, that branch's commit and the crew's original base commit; the new lead resets its worktree to that branch first. Its members and judges are named after it (`auth-2-judge`), its reports go to its own folder, `reports/<slug>-<n>/`, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
+A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items listed in its brief and a fresh name: `<slug>-2`, then `<slug>-3`. Its brief states its own name (`<slug>-<n>`, the name you start it with), keeps the original slug, and names the original crew's goal file, `<foundry dir>/goals/<slug>.md`; don't write a new one. That file stays the done-check. It also names the predecessor's branch, that branch's commit and the crew's original base commit; the new lead resets its worktree to that branch first. Its members and judges are named after it (`auth-2-judge`), its reports go to its own folder, `reports/<slug>-<n>/`, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
 
 A final message that starts with `BLOCKED:` or `QUESTION:` is handled as in section 7.
 
@@ -168,7 +168,7 @@ Agent({
 })
 ```
 
-Its brief names the target, the integration branch (`foundry/<short goal>`, from `<target>`), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves conflicts from both sides' intent, runs the checks and reports with these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. When a conflict's fix is a crew's call, it says so under Open questions rather than guessing.
+Its brief names the target, the integration branch (`foundry-<short goal>`, from `<target>`; a `foundry/` prefix fails when a branch named `foundry` exists), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves conflicts from both sides' intent, runs the checks and reports with these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. When a conflict's fix is a crew's call, it says so under Open questions rather than guessing.
 
 Then have a judge rule on the integration branch:
 
@@ -195,4 +195,4 @@ Before anything leaves the machine, report:
 - the deferred items;
 - the high-impact files that changed, for the owner to read. List only those.
 
-Ask the owner before every push and before opening a PR, unless the project grants you merge ownership. In `single` mode, the PR is one PR from the integration branch into the target. Production deploys always go to the owner.
+Ask the owner before every push and before opening a PR, unless the owner has granted merge or push ownership for the project, in its CLAUDE.md or memory. Then you push, open the PR and merge it yourself once the integration judge passes, or in sequential mode once the last crew has merged and its checks pass. In `single` mode, the PR is one PR from the integration branch into the target. Production deploys always go to the owner.

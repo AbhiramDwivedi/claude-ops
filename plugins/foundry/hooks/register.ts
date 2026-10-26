@@ -494,16 +494,16 @@ async function lastModified($: $, dir: string): Promise<number | undefined> {
   return last
 }
 
-// the verdict on the first line of the crew's newest judge report, if it has one
+// the verdict on the first line of the crew's latest judge report (highest k in -judge-<k>.md; bare -judge.md is k=1), if it has one
 async function judgeOf($: $, dir: string, crew: string): Promise<string | undefined> {
   if (!(await $.fs.exists(dir))) return undefined
-  let newest: { name: string; mtimeMs: number } | undefined
+  let latest: { name: string; k: number } | undefined
   for (const f of await $.fs.list(dir)) {
     if (f.kind !== 'file' || !isJudgeFile(crew, f.name)) continue
-    const { mtimeMs } = await $.fs.stat(`${dir}/${f.name}`)
-    if (newest === undefined || mtimeMs > newest.mtimeMs) newest = { name: f.name, mtimeMs }
+    const k = Number(/-(\d+)\.md$/.exec(f.name)?.[1] ?? 1)
+    if (latest === undefined || k > latest.k) latest = { name: f.name, k }
   }
-  return newest === undefined ? undefined : verdictOf(String(await $.fs.read(`${dir}/${newest.name}`)))
+  return latest === undefined ? undefined : verdictOf(String(await $.fs.read(`${dir}/${latest.name}`)))
 }
 
 async function statusOf($: $, state: State): Promise<string> {
@@ -796,6 +796,10 @@ export const register: Register = on => {
   // every model request of an agent is activity; the stream passes untouched
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) noteActivity($, state, e.agentId)
+    return yield* next(e)
+  }).catch(async function* ($, e, next) {
+    // turn.step streams, so its catch is a generator: log as failOpen does, then let the stream go on
+    failOpen($, e, next)
     return yield* next(e)
   })
 
