@@ -116,7 +116,7 @@ Every hook fails open. If foundry's own code throws, the call goes on as if the 
 - The slash command is `/foundry`, not `/foundry:status`. A plugin registers its command under a bare name, and `/status` is built in.
 - A member is matched to its crew through the agents' parent ids. An agent that ended before the plugin loaded (a reload mid-session) resolves to no crew, and a message to it from a crew agent is refused.
 - A lead restarted with the same name shares the old lead's report folder. Start it as `<slug>-2` instead; the skill does.
-- No prompt in 0.2.0 (the skill or any of the five agents it had) has yet run as a live agent in a real run. 0.3.0 adds the architect, the sixth agent. TODO: confirm whether the 0.3.0 prompts, the architect's included, have run live. The hooks are covered by tests against a mock engine.
+- No prompt in 0.2.0 (the skill or any of the five agents it had) has yet run as a live agent in a real run. 0.3.0 adds the architect, the sixth agent. The hooks are covered by tests against a mock engine.
 - What status a lead shows after it ends its turn while its members still run hasn't been observed in a live session. `waiting on members` depends on it.
 - Capturing a report from the hand-back tool, through a `tool.call` hook on `SubagentHandback`, is covered by tests but not yet verified in a live session.
 - The limit-reset wake rests on three things a probe confirmed: `$.clock` timers run from `session.start`, a hot reload cancels them (so the wake is re-armed from plugin state), and `$.prompt.submit` wakes an idle session. Nobody has yet seen the wake fire after a real usage-limit stop.
