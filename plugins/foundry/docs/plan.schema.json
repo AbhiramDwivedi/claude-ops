@@ -30,7 +30,7 @@
       "minLength": 1
     },
     "approval": {
-      "description": "Set once, at plan time, by the foreman: \"owner\" exactly when the plan has a wave-0 crew, otherwise \"auto\". Mid-run design slices never change it. The schema checks only that \"owner\" implies a wave-0 crew, because the file can't show which crews a mid-run slice added.",
+      "description": "Set once, at plan time, by the architect's draft, and checked by the foreman: \"owner\" exactly when the plan has a wave-0 crew, otherwise \"auto\". Mid-run design slices never change it. The schema checks only that \"owner\" implies a wave-0 crew, because the file can't show which crews a mid-run slice added.",
       "enum": ["auto", "owner"]
     },
     "approvedAt": {

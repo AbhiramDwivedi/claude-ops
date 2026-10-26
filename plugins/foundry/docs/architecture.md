@@ -58,7 +58,7 @@ Only the foreman talks to the owner. Only leads message the foreman, so a member
 | Agent | Started by | Model and effort | Edits files |
 | --- | --- | --- | --- |
 | Foreman | You, with `/foundry:run` | The session's | Only `decisions.md`, `plan.md`, goal files, and the fast-forward in `sequential` mode; from 0.3.0, `plan.json` and `plan.md` once the architect has drafted them: it sets `approvedAt` and each crew's `status`, and for a mid-run design slice adds the crew, moves its dependants a wave later and sets `ownerApproval` |
-| Architect, 0.3.0 | `init`: the `foundry:init` skill, run by you as `/foundry:init` or by the foreman when a run finds no architecture doc. `plan`: the foreman, at the start of every run. `design`: the design crew's lead | Opus, `high` | Only the architecture doc and the ADR directory, plus `.claude/foundry.json` in `init` mode and `plan.json` and `plan.md` in `plan` mode; never source or tests |
+| Architect, 0.3.0 | `init`: the `foundry:init` skill, run by you as `/foundry:init` or by the foreman when a run finds no architecture doc. `plan`: the foreman, at the start of every run. `design`: the design crew's lead | Opus, `high` | Only the architecture doc and the ADR directory, plus `.claude/foundry.json` in `init` mode, `plan.json`, `plan.md` and `<foundry dir>/scratch/` in `plan` mode, and a contract artifact at a path the design crew owns in `design` mode; never source or tests |
 | Cynic, `cynic-<n>` | Foreman, fresh for each batch | Opus, `high` | No |
 | Lead, `<slug>` | Foreman, in the background, in a worktree | Opus, `medium` | Merges and rebases the crew branch; writes code only for conflicts and small fixes the checks demand |
 | Members, named after their lead | Lead | Set on every call; Sonnet for mechanical work, Opus for judgment | Yes, each in its own worktree |
@@ -71,9 +71,9 @@ The architect (0.3.0) is `agents/architect.md`. It loads the principle packs the
 
 - `init`: started by the `foundry:init` skill. Writes the project's architecture doc (principles, module map, ADRs for decisions already in the code) and `.claude/foundry.json`.
 - `plan`: started by the foreman at the start of every run, outside every crew, like the cynic. For a goal, gives each touched module an `extend` or `change` verdict and splits the work into crews and waves by the leaf test, as a draft `plan.json` plus a readable `plan.md`. The foreman owns both files after that.
-- `design`: a member of a wave-0 design crew, started by that crew's lead. Writes the ADR and architecture-doc change for each `change` verdict, and names the seams the crew's test-writer must pin with contract tests.
+- `design`: a member of a design crew, in wave 0 or a mid-run slice, started by that crew's lead. Writes the ADR and architecture-doc change for each `change` verdict, and names the seams the crew's test-writer must pin with contract tests.
 
-Its tools are Read, Grep, Glob, Bash (read-only git, plus the done-check commands it proves and an already-installed schema validator, both in `plan` mode), Skill, and Write and Edit for the files in the table above. Crews never edit the architecture doc or ADRs; a design change they need goes to the foreman as `PROPOSAL:`, which the foreman can take up as a mid-run design slice (lifecycle step 8).
+Its tools are Read, Grep, Glob, Bash (read-only git and read-only inspection, plus the done-check commands it proves and a schema validator fetched by `npx -y`, both in `plan` mode), Skill, and Write and Edit for the files in the table above. Crews never edit the architecture doc or ADRs; a design change they need goes to the foreman as `PROPOSAL:`, which the foreman can take up as a mid-run design slice (lifecycle step 8).
 
 A crew, as the hooks see it, is a `foundry:lead` with no parent (the main thread started it) and every agent whose parent chain reaches it. A `foundry:lead` started by some other agent is not a crew.
 

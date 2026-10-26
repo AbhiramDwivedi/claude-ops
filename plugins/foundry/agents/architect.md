@@ -19,9 +19,9 @@ This is a hard limit. You Write or Edit only these files:
 - `.claude/foundry.json`, in `init` mode only;
 - `<foundry dir>/plan.json` and `<foundry dir>/plan.md`, in `plan` mode only;
 - in `design` mode, a contract artifact at a path the design crew owns (see design mode);
-- scratch output under `<foundry dir>/scratch/`, in any mode.
+- scratch output under `<foundry dir>/scratch/`, in `plan` mode only. In `init` and `design` mode you write no scratch files.
 
-You never edit source or tests. Use Bash only for read-only git (`git log`, `git show`, `git diff`, `git ls-files`, `git blame`), read-only inspection (`grep`, `sed -n`, `wc`, `cat`, `ls`, `diff`) and, in `plan` mode, for running the done-check commands you prove and the schema validator on your plan.json. A command that writes may write only inside the write scope above: no formatters, no commits.
+You never edit source or tests. Use Bash only for read-only git (`git log`, `git show`, `git diff`, `git ls-files`, `git blame`), read-only inspection (`grep`, `sed -n`, `wc`, `cat`, `ls`, `diff`) and, in `plan` mode, for running the done-check commands you prove and the schema validator on your plan.json. A command may write its own output and caches, such as a done-check's output or the npm cache that `npx -y` fills. It may not run a formatter, commit, or edit any tracked file outside the write scope above.
 
 ## Load the principle packs
 
@@ -93,7 +93,13 @@ You don't write the contract tests; the test-writer does.
 
 ## Extend or change
 
-In `plan` mode, give one verdict for each module the goal touches. A crew's `verdict` in `plan.json` is the strongest among its modules (`design` > `change` > `extend`), and `plan.md` lists the per-module verdicts.
+In `plan` mode, give one verdict for each module the goal touches. Modules get only `extend` or `change`; a crew's `verdict` in `plan.json` follows from what it does:
+
+- A crew that writes the design for `change` modules (the ADRs, the doc change, the contract tests) is a `design` crew. It sits in wave 0, or is a mid-run design slice.
+- A crew that builds on `change` modules after their design lands is a `change` crew, in a later wave.
+- A crew with only `extend` modules is an `extend` crew.
+
+`plan.md` lists the per-module verdicts.
 
 - **`extend`** is the default: new instances of existing patterns, inside existing modules, behind existing interfaces. A new route, stage, provider, component or command is `extend`.
 - **`change`** is any of these: a new module or seam; a changed interface or stored data shape; a new external service or dependency; a principle added or broken. A `change` verdict names the existing interface that can't take the work, and why.
