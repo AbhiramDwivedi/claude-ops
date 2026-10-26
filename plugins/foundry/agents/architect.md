@@ -69,7 +69,7 @@ In the draft:
 
 `plan.json` has no fields for high-impact paths, a red team or a resource slice. Propose them in `plan.md` instead, per crew: its high-impact paths, red team yes or no, and a resource slice (port range, database or temp directory). `plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total against `agentCap`.
 
-After you report, the foreman owns both files: it sets `approval`, `approvedAt` and each crew's `status`. Don't edit them again unless the foreman starts you for the reconcile round.
+After you report, the foreman owns both files: it sets `approvedAt` and each crew's `status`. Don't edit them again unless the foreman starts you for the reconcile round.
 
 **Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. If a validator is already installed, run it too. The schema is Draft 2020-12, so use `npx --no-install ajv validate --spec=draft2020 -c ajv-formats -s <schema> -d plan.json` (ajv-cli needs the draft2020 flag), or Python's `jsonschema` with `Draft202012Validator` and a `FormatChecker`. A format checker may skip `date-time` silently when its helper package is missing, so check `approvedAt`'s RFC 3339 form by hand either way. Don't install anything. Report only after the file passes every check.
 
