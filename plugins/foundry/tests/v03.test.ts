@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { LEAD_TYPE } from '../hooks/register'
-import { ROOT, status, world } from './harness'
+import { ROOT, quiet, startSession, status, world } from './harness'
 
 // foundry 0.3.0: the plan gates on starting a lead, and the plan lines on /foundry (ADR-0001 s8-9, hooks-spec)
 
@@ -480,4 +480,107 @@ test('v03 amendment 1 control: a different running crew still fills the cap', as
   const w = world($, on)
   setPlan(w, [crew('a', 0, 'planned'), crew('x', 0, 'running')], { maxParallelCrews: 1 })
   await expectRefused(w, 'a', '1 crews running, the cap is 1; start a when one merges')
+})
+
+// ---- Amendment 2: the idle-lead prompt names a successor the plan gate maps to the same crew ----
+
+const IDLE = '[foundry] idle lead:'
+const MIN = 60_000
+
+// drives the real flow of the v021 C2 tests: lead L1, renamed to `lead`, goes running -> idle with no live
+// member and no report; returns the one idle prompt it gets after the 15-minute threshold
+const idlePrompt = async ($: Parameters<typeof status>[0], w: W, lead: string) => {
+  w.agents = w.agents.map(a => (a.id === 'L1' ? { ...a, name: lead } : a))
+  quiet(w)
+  await startSession($)
+  await w.clock.advance(2 * MIN)
+  w.agents = w.agents.map(a => (a.id === 'L1' ? { ...a, status: 'idle' } : a))
+  await w.clock.advance(17 * MIN)
+  const got = w.prompts.filter(p => p.startsWith(IDLE) && p.includes(` ${lead} in crew`))
+  expect(got.length).toBe(1)
+  return got[0]!
+}
+
+// the exact 0.2.1 prompt shape, with the minutes taken from the prompt itself
+const expectIdle = (prompt: string, lead: string, next: string) => {
+  const m = /no report for (\d+)m /.exec(prompt)
+  expect(m).not.toBeNull()
+  expect(prompt).toBe(
+    `[foundry] idle lead: ${lead} in crew ${lead}, no report for ${m![1]}m and no member at work. Read its last message and resume it with SendMessage, or start ${next} from its report.`,
+  )
+}
+
+// the name the prompt tells the foreman to start
+const suggested = (prompt: string) => /, or start (\S+) from its report\.$/.exec(prompt)?.[1] ?? ''
+
+const PHASES = [crew('phase-1', 0, 'running'), crew('phase-2', 1, 'planned')]
+
+test('v03 amendment 2: an idle plan lead phase-1 is told to start phase-1-2, not phase-2', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, PHASES)
+  expectIdle(await idlePrompt($, w, 'phase-1'), 'phase-1', 'phase-1-2')
+})
+
+test('v03 amendment 2: an idle plan lead gateway-3 is told to start gateway-3-2, not gateway-4', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('gateway-3', 0, 'running')])
+  expectIdle(await idlePrompt($, w, 'gateway-3'), 'gateway-3', 'gateway-3-2')
+})
+
+test('v03 amendment 2: an idle plan lead auth is told to start auth-2', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running')])
+  expectIdle(await idlePrompt($, w, 'auth'), 'auth', 'auth-2')
+})
+
+test('v03 amendment 2: an idle successor lead auth-2 (not a slug) is told to start auth-3', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running')])
+  expectIdle(await idlePrompt($, w, 'auth-2'), 'auth-2', 'auth-3')
+})
+
+test('v03 amendment 2: with no plan.json an idle lead phase-1 gets the 0.2.1 name phase-2', async ($, on) => {
+  const w = world($, on)
+  expectIdle(await idlePrompt($, w, 'phase-1'), 'phase-1', 'phase-2')
+})
+
+test('v03 amendment 2: an unreadable plan.json is the same as no plan', async ($, on) => {
+  const w = world($, on)
+  w.files.set(PLAN, '{"crews": [{"slug": "phase-1", "wave": 0')
+  expectIdle(await idlePrompt($, w, 'phase-1'), 'phase-1', 'phase-2')
+})
+
+test('v03 amendment 2: a lead not in the plan gets the 0.2.1 name', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running')])
+  expectIdle(await idlePrompt($, w, 'other-1'), 'other-1', 'other-2')
+})
+
+// cross-check: starting the suggested name as a foundry:lead is gated as the idle lead's own plan crew
+
+test('v03 amendment 2 cross-check: phase-1-2 is allowed where phase-2 is held by the wave gate', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, PHASES)
+  const next = suggested(await idlePrompt($, w, 'phase-1'))
+  expect(next).toBe('phase-1-2')
+  await expectAllowed(w, next)
+  await expectRefused(w, 'phase-2', `wave 0 isn't merged yet: phase-1`)
+})
+
+test('v03 amendment 2 cross-check: gateway-3-2 is gated as gateway-3, where gateway-4 is not in the plan', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('gateway-3', 0, 'running', { ownerApproval: 'pending' })])
+  const next = suggested(await idlePrompt($, w, 'gateway-3'))
+  expect(next).toBe('gateway-3-2')
+  await expectRefused(w, next, `gateway-3 waits for the owner's approval`)
+  await expectAllowed(w, 'gateway-4')
+})
+
+test('v03 amendment 2 cross-check: auth-2 and auth-3 are both gated as auth', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running', { ownerApproval: 'pending' })])
+  const next = suggested(await idlePrompt($, w, 'auth'))
+  expect(next).toBe('auth-2')
+  await expectRefused(w, next, `auth waits for the owner's approval`)
+  await expectRefused(w, 'auth-3', `auth waits for the owner's approval`)
 })
