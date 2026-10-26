@@ -229,11 +229,11 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const isWave = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
 // The plan, or undefined when the text is not one the gates can read: empty, not JSON, not an object, or with no
-// crews array. Undefined means no gate and no plan lines, as in 0.2.1.
+// crews array. Undefined means no gate and no plan lines, as in 0.2.1. A leading UTF-8 BOM is stripped first.
 export function parsePlan(text: string): Plan | undefined {
   let value: unknown
   try {
-    value = JSON.parse(text)
+    value = JSON.parse(text.startsWith('\uFEFF') ? text.slice(1) : text)
   } catch {
     return undefined
   }
@@ -256,18 +256,20 @@ export function planCrewFor(plan: Plan, name: string): { slug: string; crew: Pla
 }
 
 // Why the plan refuses starting the lead `name`, or undefined to let it start. The gates, first match wins: run-level
-// approval, crew-level approval, the wave gate, the parallel cap. The crew being started is not counted as running:
-// its own entry may already say running (a restart, or a successor gated as its base).
+// approval, crew-level approval, the wave gate, the parallel cap. The crew being started is every entry with the
+// target's slug (the schema allows duplicate slugs; wave and ownerApproval come from the first). None of them counts
+// as running, since its own entry may already say running (a restart, or a successor gated as its base), and none of
+// them is in the earlier-wave check, so a crew can't hold itself back.
 export function planVerdict(plan: Plan, name: string): { deny: string } | undefined {
   const target = planCrewFor(plan, name)
   if (target === undefined) return undefined
   const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
   if (plan.approval === 'owner' && plan.approvedAt === null) return refuse(`this run changes the design; get the owner's approval first`)
   if (target.crew.ownerApproval === 'pending') return refuse(`${target.slug} waits for the owner's approval`)
-  const crews = plan.crews.filter(isRecord)
+  const others = plan.crews.filter(isRecord).filter(c => c.slug !== target.slug)
   const wave = target.crew.wave
   if (isWave(wave)) {
-    const open = crews.filter(c => isWave(c.wave) && c.wave < wave && c.status !== 'merged' && c.status !== 'dropped')
+    const open = others.filter(c => isWave(c.wave) && c.wave < wave && c.status !== 'merged' && c.status !== 'dropped')
     if (open.length > 0) {
       const lowest = Math.min(...open.map(c => c.wave as number))
       const slugs = open.filter(c => c.wave === lowest).map(c => planField(c.slug))
@@ -276,7 +278,7 @@ export function planVerdict(plan: Plan, name: string): { deny: string } | undefi
   }
   const max = plan.maxParallelCrews
   const cap = typeof max === 'number' && Number.isInteger(max) && max >= 1 ? max : DEFAULT_CAP
-  const running = crews.filter(c => c !== target.crew && c.status === 'running').length
+  const running = others.filter(c => c.status === 'running').length
   if (running >= cap) return refuse(`${running} crews running, the cap is ${cap}; start ${target.slug} when one merges`)
   return undefined
 }
