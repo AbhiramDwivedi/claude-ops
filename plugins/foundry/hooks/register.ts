@@ -19,11 +19,14 @@ export const RESET_GRACE_MS = 2 * 60_000
 // most blocks per lead per stop streak
 export const LEAD_STOP_BLOCKS = 2
 export const STALLED = '[foundry] stalled:'
+export const IDLE_LEAD = '[foundry] idle lead:'
 export const LIMIT_RESET = '[foundry] limit reset:'
 // how a lead says it cannot go on without help, proposes a change, or stops part-way
 export const BLOCKED = 'BLOCKED:'
 export const PROPOSAL = 'PROPOSAL:'
 export const CHECKPOINT = 'CHECKPOINT:'
+// a hand-back shorter than this, once trimmed, is not a report
+export const HANDBACK_MIN = 40
 // the note the main session gets at its start, naming this session's foundry folder
 export const DIR_NOTE = '[foundry] dir:'
 // statuses of an agent that is still working or can still be woken
@@ -126,6 +129,15 @@ export function reportDir(dir: string, crew: string): string {
 
 export function reportPath(dir: string, crew: string, agent: string): string {
   return `${reportDir(dir, crew)}/${safeName(agent)}.md`
+}
+
+// where an interim stop's text goes, beside the report, so the report the foreman is told to read stays the last real one
+export function interimPath(dir: string, crew: string, agent: string): string {
+  return `${reportDir(dir, crew)}/${safeName(agent)}.interim.md`
+}
+
+export function isInterimFile(file: string): boolean {
+  return file.endsWith('.interim.md')
 }
 
 export function messagesPath(dir: string): string {
@@ -242,7 +254,70 @@ export function leadStopPasses(text: string): boolean {
 export const LEAD_STOP_REASON = `${MARK} Not done yet: finish with your report, in the sections Summary, Branch, Changes, Proof, Checks run and Open questions (each a "## " heading), or, if you cannot finish, start your final message with CHECKPOINT:, BLOCKED:, QUESTION: or PROPOSAL:.`
 
 export function stallText(label: string, crew: string, minutes: number): string {
-  return `${STALLED} ${label} in crew ${crew}, no activity for ${minutes}m. Check /foundry and message the ${crew} lead.`
+  return `${STALLED} ${label} in crew ${crew}, no activity for ${minutes}m. Check /foundry and message the ${crew} lead. Read its transcript tail before you stop it; a resumed agent may be compacting.`
+}
+
+// the name a successor crew takes: auth -> auth-2, gateway-3 -> gateway-4
+export function nextCrew(crew: string): string {
+  const m = /^(.*)-(\d+)$/.exec(crew)
+  return m?.[1] !== undefined && m[2] !== undefined ? `${m[1]}-${Number(m[2]) + 1}` : `${crew}-2`
+}
+
+export function idleLeadText(label: string, crew: string, minutes: number): string {
+  return `${IDLE_LEAD} ${label} in crew ${crew}, no report for ${minutes}m and no member at work. Read its last message and resume it with SendMessage, or start ${nextCrew(crew)} from its report.`
+}
+
+// A lead's captured report that ends its work: one with a Proof section, a checkpoint or a blocker. A question or a
+// proposal waits on the foreman instead, and shows as a waiting tag.
+export function isFinalReport(text: string): boolean {
+  const trimmed = text.trimStart()
+  return trimmed.startsWith(CHECKPOINT) || trimmed.startsWith(BLOCKED) || /^##\s+Proof\b/m.test(text)
+}
+
+export const HANDBACK_REFUSAL = `${MARK} Refused: that hand-back is too short to be a report. Hand back your real report: what you did, the branch, and proof.`
+
+// the stand-ins agents hand back instead of a report; named as well as caught by length, so a lower HANDBACK_MIN keeps them out
+const STAND_INS = new Set(['placeholder', 'todo', 'tbd'])
+
+const HAND_OFFS = [QUESTION, BLOCKED, PROPOSAL, CHECKPOINT]
+
+// A hand-back with nothing in it: a stand-in word, or under HANDBACK_MIN characters once trimmed. A tagged hand-off
+// may be short ("QUESTION: keep v1?"), but not empty or a stand-in after its tag.
+export function isEmptyHandBack(message: string): boolean {
+  const trimmed = message.trim()
+  const tag = HAND_OFFS.find(t => trimmed.startsWith(t))
+  if (tag !== undefined) {
+    const rest = trimmed.slice(tag.length).trim()
+    return rest === '' || STAND_INS.has(rest.toLowerCase())
+  }
+  return trimmed.length < HANDBACK_MIN || STAND_INS.has(trimmed.toLowerCase())
+}
+
+// `- HH:MM |` at the start of a decision-log line: the time the foreman typed, which the clock's replaces
+const DECISION_TIME = /^- (\d{1,2}:\d{2}) \|/
+
+// 10:04 for a clock reading, in the machine's local time
+export function localTime(ms: number): string {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// Every decision line of `text` whose time is on no decision line of `logged` gets `time`. A time `logged` already has
+// marks a line that was there before, perhaps reworded or with trailing space, and it keeps that time.
+export function stampDecisions(text: string, logged: string, time: string): string {
+  const old = new Set(logged.split('\n').flatMap(l => DECISION_TIME.exec(l)?.[1] ?? []))
+  return text
+    .split('\n')
+    .map(line => {
+      const typed = DECISION_TIME.exec(line)?.[1]
+      return typed === undefined || old.has(typed) ? line : line.replace(DECISION_TIME, `- ${time} |`)
+    })
+    .join('\n')
+}
+
+// the decision log of session `sessionId`, wherever its foundry folder is
+export function isDecisionLog(path: string, sessionId: string): boolean {
+  return slashed(path).endsWith(`/foundry/${safeName(sessionId)}/decisions.md`)
 }
 
 export function limitResetText(resetsAt: string): string {
@@ -285,6 +360,8 @@ export type CrewStatus = {
   stalled?: { label: string; minutes: number }[]
   judge?: string
   dir?: string
+  // the crew's live members, lead left out: what a waiting lead waits on
+  members?: { label: string; status: string; runningMs: number; model: string; lastActiveMs?: number }[]
 }
 
 export function statusText(crews: readonly CrewStatus[], now: number, messages?: string, root?: string): string {
@@ -309,6 +386,10 @@ export function statusText(crews: readonly CrewStatus[], now: number, messages?:
     for (const s of c.stalled ?? []) lines.push(`  ${s.label}: stalled ${s.minutes}m`)
     if (c.judge !== undefined) lines.push(`  judge: ${c.judge}`)
     if (c.dir !== undefined) lines.push(`  reports: ${c.dir}`)
+    for (const m of c.members ?? []) {
+      const last = m.lastActiveMs === undefined ? 'no activity seen' : `last activity ${ago(now - m.lastActiveMs)}`
+      lines.push(`  ${m.label} ${m.status} ${Math.floor(m.runningMs / 60_000)}m (${m.model}), ${last}`)
+    }
   }
   if (messages !== undefined) lines.push(`Messages between leads: ${messages}`)
   lines.push(...dirLine)
@@ -390,6 +471,23 @@ type State = {
   stalled: Set<string>
   // how many stops of each lead's current stop streak were blocked
   streaks: Map<string, number>
+  // when each agent was spawned, else when the mod first saw it: how long /foundry says it has been running
+  started: Map<string, number>
+  // each listed agent's status at the last heartbeat pass; undefined before the first, so no agent counts as resumed
+  lastPass?: Map<string, string>
+  // when each lead's current idle period began: the first pass that saw it not running with nothing at work
+  idleSince: Map<string, number>
+  // leads already prompted for in their current idle period
+  idlePrompted: Set<string>
+  // when each lead's latest final report was captured
+  finals: Map<string, number>
+  // when each agent's current stint began: the pass that saw it running again after one that didn't. None for an
+  // agent first seen running, whose stint began before the mod could tell
+  stints: Map<string, number>
+  // leads a pass saw go from running to stopped since they last ran: the only leads the idle check prompts for
+  stopped: Set<string>
+  // when the main session last made a tool call or a model request
+  mainActive?: number
   // this session's foundry folder, resolved once from the session's working directory
   root?: string
 }
@@ -441,6 +539,20 @@ function noteActivity($: $, state: State, id: string) {
   }
 }
 
+// the main session's tool call or model request, recorded as noteActivity records an agent's
+function noteMainActivity($: $, state: State) {
+  try {
+    void $.clock.now().then(
+      at => {
+        if (state.mainActive === undefined || at > state.mainActive) state.mainActive = at
+      },
+      () => undefined,
+    )
+  } catch {
+    // a clock that throws records nothing
+  }
+}
+
 // what the stop gate needs of a stopping agent: whether it is a lead the main thread started, and its descendants
 // as last listed. One not yet listed is taken at its event's type.
 async function stopperOf($: $, state: State, id: string, type: string | undefined): Promise<{ lead: boolean; descendants: Agent[] }> {
@@ -450,19 +562,24 @@ async function stopperOf($: $, state: State, id: string, type: string | undefine
   return { lead, descendants: lead ? descendantsOf(id, all) : [] }
 }
 
-// `tags` false: an interim stop's text is kept on disk but neither sets nor clears what /foundry shows
+// `tags` false: an interim stop's text goes to <label>.interim.md, leaving the report alone, and neither sets nor
+// clears what /foundry shows
 async function writeReport($: $, state: State, crew: Crew, id: string, text: string, tags = true) {
   const dir = await rootOf($, state)
   if (dir === undefined) return
   // an agent started before the mod loaded has no spawn name on record: its listed name, else its id
   const known = state.known.get(id)
-  await $.fs.write(reportPath(dir, crew.crew, state.labels.get(id) ?? (known === undefined ? id : labelOf(known))), text)
+  const label = state.labels.get(id) ?? (known === undefined ? id : labelOf(known))
+  await $.fs.write(tags ? reportPath(dir, crew.crew, label) : interimPath(dir, crew.crew, label), text)
+  if (!crew.isLead || !tags) return
   // a lead's captured text tells whether it stopped on a question, a blocker or a proposal
-  if (crew.isLead && tags) {
-    const tag = tagOf(text)
-    if (tag === undefined) state.waiting.delete(id)
-    else state.waiting.set(id, tag)
-  }
+  const tag = tagOf(text)
+  if (tag === undefined) state.waiting.delete(id)
+  else state.waiting.set(id, tag)
+  // a captured report ends the lead's idle period; a final one excuses it until the lead runs again
+  state.idleSince.delete(id)
+  state.idlePrompted.delete(id)
+  if (isFinalReport(text)) state.finals.set(id, await $.clock.now())
 }
 
 // one line onto the message log; past ROLL_BYTES the log moves to the next free messages.<n>.jsonl first
@@ -490,7 +607,8 @@ async function lastModified($: $, dir: string): Promise<number | undefined> {
   if (!(await $.fs.exists(dir))) return undefined
   let last: number | undefined
   for (const f of await $.fs.list(dir)) {
-    if (f.kind !== 'file') continue
+    // an interim note is not a report
+    if (f.kind !== 'file' || isInterimFile(f.name)) continue
     const { mtimeMs } = await $.fs.stat(`${dir}/${f.name}`)
     if (last === undefined || mtimeMs > last) last = mtimeMs
   }
@@ -502,7 +620,7 @@ async function judgeOf($: $, dir: string, crew: string): Promise<string | undefi
   if (!(await $.fs.exists(dir))) return undefined
   let latest: { name: string; k: number } | undefined
   for (const f of await $.fs.list(dir)) {
-    if (f.kind !== 'file' || !isJudgeFile(crew, f.name)) continue
+    if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew, f.name)) continue
     const k = Number(/-(\d+)\.md$/.exec(f.name)?.[1] ?? 1)
     if (latest === undefined || k > latest.k) latest = { name: f.name, k }
   }
@@ -520,6 +638,7 @@ async function statusOf($: $, state: State): Promise<string> {
     const crew = crewName(lead)
     const counts: Record<string, number> = {}
     const stalled: { label: string; minutes: number }[] = []
+    const members: NonNullable<CrewStatus['members']> = []
     for (const a of listed) {
       if (crewOf(a.id, all)?.leadId !== lead.id) continue
       const last = state.activity.get(a.id)
@@ -527,6 +646,10 @@ async function statusOf($: $, state: State): Promise<string> {
       if (a.id === lead.id || !LIVE.has(a.status)) continue
       const m = family(state.models.get(a.id))
       counts[m] = (counts[m] ?? 0) + 1
+      // an agent the mod never saw spawn counts from the first time it was seen
+      const since = state.started.get(a.id) ?? now
+      state.started.set(a.id, since)
+      members.push({ label: labelOf(a), status: a.status, runningMs: now - since, model: m, lastActiveMs: last })
     }
     const reports = dir === undefined ? undefined : reportDir(dir, crew)
     const lastReportMs = reports === undefined ? undefined : await lastModified($, reports)
@@ -542,22 +665,91 @@ async function statusOf($: $, state: State): Promise<string> {
       stalled,
       judge,
       dir: reports,
+      members,
     })
   }
   const log = dir === undefined ? undefined : messagesPath(dir)
   return statusText(crews, now, log !== undefined && (await $.fs.exists(log)) ? log : undefined, dir)
 }
 
+// Whether the lead's report on disk, written in its current stint, is final or tagged. It is what a reloaded mod has
+// in place of `finals` and `waiting`. A report it cannot read excuses the lead: a missed prompt beats a wrong one,
+// and the next pass reads again.
+async function excusedOnDisk($: $, state: State, lead: Agent, crew: Crew): Promise<boolean> {
+  const excused = await safely($, 'idle lead report', async () => {
+    const dir = await rootOf($, state)
+    if (dir === undefined) return false
+    const path = reportPath(dir, crew.crew, state.labels.get(lead.id) ?? labelOf(lead))
+    if (!(await $.fs.exists(path))) return false
+    const stint = state.stints.get(lead.id)
+    if (stint !== undefined && (await $.fs.stat(path)).mtimeMs < stint) return false
+    const text = String(await $.fs.read(path))
+    return isFinalReport(text) || tagOf(text) !== undefined
+  })
+  return excused !== false
+}
+
+// A lead a pass saw go from running to stopped, now `idle` (a normal end of turn: never waiting, killed, failed or
+// completed), with nothing of its crew at work, no waiting tag and no final report in its current stint, is prompted
+// for once per idle period, STALL_MS into it. Activity alone doesn't start a stint, so a sign-off after a final
+// hand-back doesn't undo it; a resume does. The heartbeat has no task list, so a member's background work counts
+// through the member's own entry in the agent list.
+async function idleLeadCheck($: $, state: State, lead: Agent, crew: Crew, all: readonly Agent[], now: number) {
+  const final = state.finals.get(lead.id)
+  const stint = state.stints.get(lead.id)
+  const excused =
+    !state.stopped.has(lead.id) ||
+    lead.status !== 'idle' ||
+    state.waiting.has(lead.id) ||
+    (final !== undefined && (stint === undefined || final >= stint)) ||
+    isInterimStop(descendantsOf(lead.id, all), undefined) ||
+    (await excusedOnDisk($, state, lead, crew))
+  if (excused) {
+    state.idleSince.delete(lead.id)
+    state.idlePrompted.delete(lead.id)
+    return
+  }
+  const since = state.idleSince.get(lead.id) ?? now
+  state.idleSince.set(lead.id, since)
+  if (state.idlePrompted.has(lead.id) || now - since < STALL_MS) return
+  // flagged before any await, so an overlapping check never prompts twice
+  state.idlePrompted.add(lead.id)
+  const text = idleLeadText(labelOf(lead), crew.crew, Math.floor((now - since) / 60_000))
+  await safely($, 'idle lead wake', () => $.prompt.submit({ text }))
+}
+
 // One pass of the heartbeat: every running crew agent idle STALL_MS or more is reported once, with a toast and a
-// prompt to the main session. An agent with nothing on record counts as active from now.
+// prompt to the main session, and every idle lead goes through idleLeadCheck. An agent with nothing on record
+// counts as active from now, and so does one that is running again after a pass that saw it stopped or unlisted.
 async function stallCheck($: $, state: State) {
   const now = await $.clock.now()
   const { all, listed } = await agentsOf($, state)
+  const before = state.lastPass
+  state.lastPass = new Map(listed.map(a => [a.id, a.status]))
   for (const a of listed) {
-    // running only: a listed agent that is idle, waiting or done is never stalled
-    if (a.status !== 'running') continue
+    if (!state.started.has(a.id)) state.started.set(a.id, now)
     const crew = crewOf(a.id, all)
     if (crew === undefined) continue
+    // a listed agent that is idle, waiting or done is never stalled; a lead may be idle with its report lost
+    if (a.status !== 'running') {
+      if (crew.isLead) {
+        if (before?.get(a.id) === 'running') state.stopped.add(a.id)
+        await idleLeadCheck($, state, a, crew, all, now)
+      }
+      continue
+    }
+    // running: any idle period of a lead is over
+    state.idleSince.delete(a.id)
+    state.idlePrompted.delete(a.id)
+    state.stopped.delete(a.id)
+    // resumed: a resumed agent may spend minutes compacting before its first tool call, so its clock starts now, and
+    // a new stint begins
+    if (before !== undefined && before.get(a.id) !== 'running') {
+      state.activity.set(a.id, now)
+      state.stints.set(a.id, now)
+      state.stalled.delete(a.id)
+      continue
+    }
     const last = state.activity.get(a.id)
     if (last === undefined) {
       state.activity.set(a.id, now)
@@ -617,7 +809,7 @@ async function firedFor($: $, resetsAt: string): Promise<{ fired: boolean; versi
 
 // The timer's resetsAt is the source of truth: the wake goes out once for it unless $.state positively says it
 // already went. The module guard stops a second run in this module; the $.state claim stops one after a reload.
-async function fireReset($: $, wakes: Wakes, resetsAt: string) {
+async function fireReset($: $, state: State, wakes: Wakes, resetsAt: string) {
   if (wakes.reset?.resetsAt === resetsAt) wakes.reset = undefined
   if (wakes.fired.has(resetsAt)) return
   wakes.fired.add(resetsAt)
@@ -631,16 +823,19 @@ async function fireReset($: $, wakes: Wakes, resetsAt: string) {
     // lost the claim: fire anyway unless whoever won says this reset has fired
     if (claimed !== undefined && !claimed.isSet && (await firedFor($, resetsAt)).fired) return
   }
+  // the main session already ran after the reset (Claude Code continues it on its own): the wake would only repeat
+  // that. Checked after the claim, so the reset stays marked fired and never wakes later.
+  if (state.mainActive !== undefined && state.mainActive > Date.parse(resetsAt)) return
   await $.prompt.submit({ text: limitResetText(resetsAt) })
 }
 
-async function scheduleReset($: $, wakes: Wakes, resetsAt: string) {
+async function scheduleReset($: $, state: State, wakes: Wakes, resetsAt: string) {
   const due = Date.parse(resetsAt)
   if (Number.isNaN(due)) return
   const now = await $.clock.now()
   wakes.reset?.timer.cancel()
   const timer = $.clock.after(Math.max(0, due + RESET_GRACE_MS - now), () => {
-    void safely($, 'limit reset wake', () => fireReset($, wakes, resetsAt))
+    void safely($, 'limit reset wake', () => fireReset($, state, wakes, resetsAt))
   })
   wakes.reset = { resetsAt, timer }
 }
@@ -657,13 +852,13 @@ async function armReset($: $, state: State, wakes: Wakes, resetsAt: string) {
   } else {
     await $.state.set(LIMIT_RESET_REF, { resetsAt, fired: false })
   }
-  await scheduleReset($, wakes, resetsAt)
+  await scheduleReset($, state, wakes, resetsAt)
 }
 
 // session.start: a reload took the limit-reset timer with the old module, so arm it again from $.state
-async function rearmReset($: $, wakes: Wakes) {
+async function rearmReset($: $, state: State, wakes: Wakes) {
   const held = await $.state.get(LIMIT_RESET_REF)
-  if (held.value !== undefined && !held.value.fired) await scheduleReset($, wakes, held.value.resetsAt)
+  if (held.value !== undefined && !held.value.fired) await scheduleReset($, state, wakes, held.value.resetsAt)
 }
 
 async function resetFromUsage($: $, state: State, wakes: Wakes) {
@@ -688,6 +883,12 @@ export const register: Register = on => {
     activity: new Map(),
     stalled: new Set(),
     streaks: new Map(),
+    started: new Map(),
+    idleSince: new Map(),
+    idlePrompted: new Set(),
+    finals: new Map(),
+    stints: new Map(),
+    stopped: new Set(),
   }
   const wakes: Wakes = { checking: false, fired: new Set(), work: Promise.resolve() }
   // appends to the messages log, one at a time
@@ -703,6 +904,13 @@ export const register: Register = on => {
     state.activity.clear()
     state.stalled.clear()
     state.streaks.clear()
+    state.started.clear()
+    state.lastPass = undefined
+    state.idleSince.clear()
+    state.idlePrompted.clear()
+    state.finals.clear()
+    state.stints.clear()
+    state.stopped.clear()
     state.root = undefined
     return next(e)
   })
@@ -715,6 +923,12 @@ export const register: Register = on => {
       state.labels.set(id, label)
       state.known.set(id, { id, type: e.subagentType, status: 'running', description: e.description, name: e.name, parentId: e.parentAgentId, label, live: true, seq: state.seq++ })
       state.models.set(id, started.model)
+      // a start is activity, and where the running time /foundry shows begins
+      await safely($, 'spawn time', async () => {
+        const at = await $.clock.now()
+        state.started.set(id, at)
+        touch(state, id, at)
+      })
     }
     return started
   }).catch(failOpen)
@@ -772,16 +986,25 @@ export const register: Register = on => {
     return note === undefined ? result : withNote(result, note)
   }).catch(failOpen)
 
-  // Every tool call of an agent is activity. A report sent through the hand-back tool is the agent's real report;
-  // its last message may be only a sign-off.
+  // Every tool call is activity, the main session's included. A report sent through the hand-back tool is the agent's
+  // real report; its last message may be only a sign-off. One with nothing in it, from inside a crew, is sent back.
   on('tool.call', async ($, e, next) => {
-    if (e.agentId === undefined) return next(e)
+    if (e.agentId === undefined) {
+      noteMainActivity($, state)
+      return next(e)
+    }
     const id = e.agentId
     noteActivity($, state, id)
     if ((e.tool as string) !== 'SubagentHandback') return next(e)
-    const message = (e as unknown as { message?: unknown }).message
-    if (typeof message === 'string' && message.trim() !== '') {
-      // marked before any await, so a stop that races this capture never overwrites it
+    const raw = (e as unknown as { message?: unknown }).message
+    const message = typeof raw === 'string' ? raw : ''
+    // outside every crew, or with the agent list down, an empty hand-back goes through
+    if (isEmptyHandBack(message)) {
+      const inCrew = await safely($, 'hand-back check', async () => crewOf(id, (await agentsOf($, state)).all) !== undefined)
+      if (inCrew === true) return { deny: HANDBACK_REFUSAL }
+    }
+    if (message.trim() !== '') {
+      // a real report is marked before any await, so a stop that races this capture never overwrites it
       state.handedBack.add(id)
       state.handBacks.set(id, message)
       await safely($, 'hand-back capture', async () => {
@@ -796,15 +1019,31 @@ export const register: Register = on => {
     return next(e)
   }).catch(failOpen)
 
-  // every model request of an agent is activity; the stream passes untouched
+  // every model request is activity, the main session's included; the stream passes untouched
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) noteActivity($, state, e.agentId)
+    else noteMainActivity($, state)
     return yield* next(e)
   }).catch(async function* ($, e, next) {
     // turn.step streams, so its catch is a generator: log as failOpen does, then let the stream go on
     failOpen($, e, next)
     return yield* next(e)
   })
+
+  // The decision log's times come from the clock: a `- HH:MM |` the foreman typed on a new line is replaced with the
+  // real local time before the write lands. Lines the log already holds keep theirs.
+  on('tool.call', { tool: ['Write', 'Edit'] }, async ($, e, next) => {
+    const stamped = await safely($, 'decision time', async () => {
+      if (!isDecisionLog(e.file_path, await $.session.id())) return undefined
+      const text = e.tool === 'Write' ? e.content : e.new_string
+      // what the call replaces: an Edit's old_string, a Write's file on disk
+      const logged = e.tool === 'Edit' ? e.old_string : (await $.fs.exists(e.file_path)) ? String(await $.fs.read(e.file_path)) : ''
+      const out = stampDecisions(text, logged, localTime(await $.clock.now()))
+      return out === text ? undefined : out
+    })
+    if (stamped === undefined) return next(e)
+    return e.tool === 'Write' ? next({ ...e, content: stamped }) : next({ ...e, new_string: stamped })
+  }).catch(failOpen)
 
   on('classic.SubagentStop', async ($, e, next) => {
     const result = await next(e)
@@ -820,6 +1059,12 @@ export const register: Register = on => {
       if (count >= LEAD_STOP_BLOCKS || leadStopPasses(text)) {
         state.streaks.delete(id)
         return { lead: true, interim: false }
+      }
+      // a lead whose tagged message to main is unanswered has asked through that one channel: its stop goes through
+      // as interim, so it neither needs a tagged hand-back too nor loses the tag /foundry shows
+      if (state.waiting.has(id)) {
+        state.streaks.delete(id)
+        return { lead: true, interim: true }
       }
       state.streaks.set(id, count + 1)
       return { lead: true, interim: false, block: LEAD_STOP_REASON }
@@ -880,7 +1125,7 @@ export const register: Register = on => {
       $.command.register({ name: 'foundry', description: 'Show the foundry crews in this session: status, live members by model, last report', argumentHint: '[status]' }),
     )
     await safely($, 'stall timer', async () => startHeartbeat($, state, wakes))
-    await queueLimit($, wakes, 'limit reset re-arm', () => rearmReset($, wakes))
+    await queueLimit($, wakes, 'limit reset re-arm', () => rearmReset($, state, wakes))
     return started
   })
 

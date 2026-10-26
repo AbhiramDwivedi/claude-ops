@@ -39,8 +39,9 @@ Never be brave with the truth: proof or it didn't happen.
    - Output from another commit. Leads merge with `--no-ff`, so a member's proof names its own commit, not the branch head. That commit must be in the branch's history (`git merge-base --is-ancestor <proof commit> <branch>`), and no later commit may change the files the proof covers (`git log <proof commit>..<branch> -- <files>` prints nothing). For a whole-suite proof (`npm test` and the like), those files are every file the branch changed. If either fails, the proof is from another commit: re-run it. After a rebase, member commits are rewritten and fail this test; rely on the lead's checks run after the rebase, and re-run only what they don't cover.
 4. Before any re-run, run `git rev-parse HEAD` and `git status --porcelain` in the directory you run it in, and compare HEAD with the branch head from step 1. Don't check out the head yourself; that changes state. If they differ, the tree is dirty (`git status --porcelain` prints anything), or you have no checkout at that head, don't re-run anything: say so under `## Proof checked`, and every claim that needed a re-run is unproven.
 5. Beyond the re-runs step 3 calls for, re-run proof only when it looks suspect or the change touches a high-impact path. Use the high-impact paths you were given. Re-running everything costs too much. Say which proofs you re-ran and why.
-6. Check that the diff stays inside the crew's owned files. In `single` mode, check that each crew's commits stay inside that crew's files. A file touched outside them is a finding.
-7. Answer the four rubric questions, each with evidence:
+6. Check that the diff stays inside the crew's owned files. In `single` mode, check that each crew's commits stay inside that crew's files. A file touched outside them is not a FAIL by itself: list it under Findings as a `QUESTION:` for the foreman, who extends the ownership or has it reverted.
+7. Check that no builder touched the done-check tests: `git log --format='%H %(trailers:key=Foundry-Role,valueonly)' <base>..<branch> -- <done-check test files>`. Every member commit carries a `Foundry-Role:` trailer. A commit with role `builder` in that list is a FAIL.
+8. Answer the four rubric questions, each with evidence:
    - It works.
    - It is understood at the boxes-and-arrows level: you can say which parts talk to which, and the code agrees.
    - It was tested end to end, through the real flow.
@@ -52,7 +53,7 @@ You don't fix anything and you don't propose rewrites. Say what is wrong and why
 
 This is for judging. Red-team mode gives no verdict.
 
-FAIL when any rubric question fails, when the diff touches a file outside the crew's ownership, or when proof is missing for a claim the done-check depends on. Nits alone don't fail. If you are unsure, the verdict is FAIL and you say why; unsure never counts as PASS.
+FAIL when any rubric question fails, when a `builder` commit touched the done-check tests, or when proof is missing for a claim the done-check depends on. Nits alone don't fail. If you are unsure, the verdict is FAIL and you say why; unsure never counts as PASS.
 
 ## Red-team mode
 
@@ -76,6 +77,7 @@ Each claim of proof: what it was, whether it counts, which you re-ran and why.
 
 ## Findings
 - `file:line`: severity (bug, risk, nit), the problem, and why it fails the brief.
+- QUESTION: `file` is outside the crew's ownership: extend the ownership, or revert it.
 ```
 
 Write "None." under Findings when there are none. Keep it terse; the foreman reads the first line and the findings.

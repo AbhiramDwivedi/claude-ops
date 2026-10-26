@@ -54,7 +54,7 @@ Every member's brief also carries:
 
 - the "be brave" sentence above, verbatim, for every builder;
 - the proof rule from section 5;
-- the commit trailer: every commit ends with a `Foundry-Crew: <slug>` line, the original slug even in a successor's crew;
+- the commit trailers: every commit ends with a `Foundry-Crew: <slug>` line, the original slug even in a successor's crew, and next to it a `Foundry-Role: <role>` line naming the member's role: `test-writer`, `builder`, `writer`, `devops` or `redteam`. The judge reads the role to check that no builder touched the done-check tests;
 - commit on its branch before reporting, and report the branch and commit.
 
 ## 4. Delegate
@@ -82,6 +82,8 @@ Send a report without proof back to its member before you integrate it.
 
 ## 6. Judge
 
+Before you start a judge, compare your diff with the files your crew owns. Ask main for any extension first, as a `QUESTION:`.
+
 After the last merge, a green run of the checks and, with a red team, its last report, start a judge as `foundry:judge`, named `<crew>-judge`. Every later judge is a fresh agent, never a resume, and takes the next unused name: `<crew>-judge-2` after `<crew>-judge`, then `<crew>-judge-3`. The judge is never a builder. It runs on Opus at one effort level above the strongest builder it judges, at least `high`, at most `xhigh`: a Sonnet or Opus-medium builder gets a `high` judge, an Opus-high or Opus-xhigh builder gets an `xhigh` judge.
 
 Give the judge the goal-file path, the absolute path of a checkout at the head under review (your crew worktree), the head SHA under review, the crew branch and its diff against the base commit, the high-impact paths, the members' proof, and the red team's last report if there was one. Ask it to state that SHA under `## Proof checked`. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
@@ -101,6 +103,8 @@ A member's report reaches you as a message when it finishes. Don't poll in a sle
 Reports sometimes get lost. When you start a member, the Agent result carries a `[foundry]` note with the path where its report will be saved, inside `<foundry dir>/reports/<crew>/`. If a member has stopped and its report never reached you, read that file.
 
 A report that starts with `CHECKPOINT:` means the member stopped with work left. Start a fresh member, under the next unused name, from its handoff note; don't resume the old one.
+
+When a `[foundry] stalled:` note arrives, or a member looks stuck, read its transcript tail before you act. Never call a member dead or stop it within 5 minutes of resuming it: a resumed agent may be compacting, and it looks idle while it does.
 
 ## 9. Integrate
 
@@ -128,7 +132,9 @@ Start every message to main with one of these tags:
 SendMessage({ to: "main", summary: "<5-10 words>", message: "QUESTION: <the question>\n<the options, and what you recommend>" })
 ```
 
-Then wait; the answer arrives as a message. After a `QUESTION:`, `/foundry` shows your crew as waiting until the foreman answers. If you have to end your run while waiting, start your last message with the same tag, so the foreman doesn't read it as your report.
+Then wait; the answer arrives as a message. After a `QUESTION:`, `/foundry` shows your crew as waiting until the foreman answers.
+
+Ask each question through exactly one channel, never both: a SendMessage to main, or a hand-back starting `QUESTION:`. The foreman would otherwise answer it twice. While a `QUESTION:`, `BLOCKED:` or `PROPOSAL:` you sent to main is unanswered, the plugin lets you end your turn with any message; it isn't read as your report.
 
 ## 12. When the foreman asks you to rebase
 
