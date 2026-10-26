@@ -232,13 +232,14 @@ export function tagOf(text: string): Tag | undefined {
   return undefined
 }
 
-// A lead's final text that may end its run: a checkpoint, a blocker or a question, or a report with a Proof section.
+// A lead's final text that may end its run: a checkpoint, a blocker, a question or a proposal, or a report with a
+// Proof section.
 export function leadStopPasses(text: string): boolean {
   const trimmed = text.trimStart()
-  return [CHECKPOINT, BLOCKED, QUESTION].some(p => trimmed.startsWith(p)) || /^##\s+Proof\b/m.test(text)
+  return [CHECKPOINT, BLOCKED, QUESTION, PROPOSAL].some(p => trimmed.startsWith(p)) || /^##\s+Proof\b/m.test(text)
 }
 
-export const LEAD_STOP_REASON = `${MARK} Not done yet: finish with your report, in the sections Summary, Branch, Changes, Proof, Checks run and Open questions (each a "## " heading), or, if you cannot finish, start your final message with CHECKPOINT:, BLOCKED: or QUESTION:.`
+export const LEAD_STOP_REASON = `${MARK} Not done yet: finish with your report, in the sections Summary, Branch, Changes, Proof, Checks run and Open questions (each a "## " heading), or, if you cannot finish, start your final message with CHECKPOINT:, BLOCKED:, QUESTION: or PROPOSAL:.`
 
 export function stallText(label: string, crew: string, minutes: number): string {
   return `${STALLED} ${label} in crew ${crew}, no activity for ${minutes}m. Check /foundry and message the ${crew} lead.`

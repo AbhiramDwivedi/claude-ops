@@ -136,11 +136,11 @@ The plugin also sends you prompts:
 
 ## 8. Collect the reports
 
-A lead's final report has these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. A first line of `QUESTION:`, `BLOCKED:` or `CHECKPOINT:` marks a stop that isn't final. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<foundry dir>/reports/<lead name>/`.
+A lead's final report has these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. A first line of `QUESTION:`, `BLOCKED:`, `PROPOSAL:` or `CHECKPOINT:` marks a stop that isn't final. If a lead has stopped and its report never reached you, read the file from its `[foundry]` note, under `<foundry dir>/reports/<lead name>/`.
 
 A report that starts with `CHECKPOINT:` means the lead stopped with work left. Start a fresh lead for that crew from its report, with the remaining items listed in its brief and a fresh name: `<slug>-2`, then `<slug>-3`. Its brief states its own name (`<slug>-<n>`, the name you start it with), keeps the original slug, and names the original crew's goal file, `<foundry dir>/goals/<slug>.md`; don't write a new one. That file stays the done-check. It also names the predecessor's branch, that branch's commit and the crew's original base commit; the new lead resets its worktree to that branch first. Its members and judges are named after it (`auth-2-judge`), its reports go to its own folder, `reports/<slug>-<n>/`, and `/foundry` lists it as a crew of its own. Tell the other leads the new name.
 
-A final message that starts with `BLOCKED:` or `QUESTION:` is handled as in section 7.
+A final message that starts with `BLOCKED:`, `QUESTION:` or `PROPOSAL:` is handled as in section 7.
 
 ## 9. Merge
 

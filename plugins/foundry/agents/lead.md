@@ -133,7 +133,7 @@ In `sequential` mode, the foreman merges the crews one at a time and asks each l
 
 ## 13. Final report
 
-Your last message is your report. Use exactly these sections, in this order. If you stop with work left, start the report with `CHECKPOINT:`, `BLOCKED:` or `QUESTION:` and say in Open questions what remains, as a numbered list naming files. The plugin blocks a stop whose last message has none of those markers and no `## Proof` section.
+Your last message is your report. Use exactly these sections, in this order. If you stop with work left, start the report with `CHECKPOINT:`, `BLOCKED:` or `QUESTION:` and say in Open questions what remains, as a numbered list naming files. The plugin blocks a stop whose last message has none of those markers, no `PROPOSAL:` (section 11) and no `## Proof` section.
 
 ```
 ## Summary

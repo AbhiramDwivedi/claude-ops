@@ -393,7 +393,7 @@ test('blocks a lead that stops without a report, with a [foundry] reason naming 
   const w = quiet(world($, on))
   const r = (await $.classic.SubagentStop(stop('L1', 'All done, merged everything.'))) as { block?: string }
   expect(r.block?.startsWith('[foundry]')).toBe(true)
-  for (const s of ['Summary', 'Branch', 'Changes', 'Proof', 'Checks run', 'Open questions', 'CHECKPOINT:', 'BLOCKED:', 'QUESTION:']) expect(r.block).toContain(s)
+  for (const s of ['Summary', 'Branch', 'Changes', 'Proof', 'Checks run', 'Open questions', 'CHECKPOINT:', 'BLOCKED:', 'QUESTION:', 'PROPOSAL:']) expect(r.block).toContain(s)
   expect(w.files.size).toBe(0)
 })
 
@@ -404,9 +404,15 @@ test('lets a lead stop when its message starts with CHECKPOINT, BLOCKED or QUEST
   }
 })
 
+test('lets a lead stop on a PROPOSAL, and /foundry shows its tag', async ($, on) => {
+  quiet(world($, on))
+  expect(((await $.classic.SubagentStop(stop('L1', 'PROPOSAL: merge early\nwhile I wait'))) as { block?: string }).block).toBeUndefined()
+  expect(await status($)).toContain('proposal: merge early')
+})
+
 test('does not take look-alikes for a report', async ($, on) => {
   quiet(world($, on))
-  for (const text of ['PROPOSAL: x', 'Summary: x\nsee CHECKPOINT: later', '## Proofs\nx', '### Proof\nx', 'The ## Proof is below', '']) {
+  for (const text of ['PROPOSALS: x', 'Summary: x\nsee PROPOSAL: later', '## Proofs\nx', '### Proof\nx', 'The ## Proof is below', '']) {
     expect(((await $.classic.SubagentStop(stop('L1', text))) as { block?: string }).block?.startsWith('[foundry]')).toBe(true)
   }
 })
