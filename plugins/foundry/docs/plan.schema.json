@@ -34,7 +34,7 @@
       "enum": ["auto", "owner"]
     },
     "approvedAt": {
-      "description": "Set by the foreman, as an RFC 3339 date-time with a time-zone offset (JSON Schema format date-time), for example 2026-10-26T14:05:00Z. An \"auto\" run gets the time the foreman logged the plan; an \"owner\" run gets the time the owner approved. Null only while a run waits for the owner; while approval is \"owner\" and this is null, the run-level approval gate refuses every lead in the plan.",
+      "description": "Set by the foreman, as an RFC 3339 date-time with a time-zone offset (JSON Schema format date-time), for example 2026-10-26T14:03:00+01:00 or 2026-10-26T13:03:00Z. A date-time with no offset is invalid. An \"auto\" run gets the time the foreman logged the plan; an \"owner\" run gets the time the owner approved. Null only while a run waits for the owner; while approval is \"owner\" and this is null, the run-level approval gate refuses every lead in the plan.",
       "type": ["string", "null"],
       "format": "date-time"
     },
@@ -103,9 +103,10 @@
       ],
       "properties": {
         "slug": {
-          "description": "The crew's name, and the name of its foundry:lead. Limited to the characters safeName in hooks/register.ts keeps, so report folders match the slug.",
+          "description": "The crew's name, and the name of its foundry:lead: lowercase letters and digits in words joined by single hyphens, never ending in -<digits>. The -<digits> ending is reserved because a successor lead is named <slug>-<n> and the hooks gate a successor as its base slug. safeName in hooks/register.ts leaves such a name of up to 100 characters unchanged, so report folders match the slug.",
           "type": "string",
-          "pattern": "^[A-Za-z0-9._-]{1,100}$"
+          "maxLength": 100,
+          "pattern": "^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$"
         },
         "wave": {
           "description": "The wave the crew runs in. Wave 0 holds the change work and merges before any other wave starts; each wave merges before the next starts. A mid-run design slice goes to the earliest wave that hasn't started yet, and the crews that depend on it move one wave later.",
