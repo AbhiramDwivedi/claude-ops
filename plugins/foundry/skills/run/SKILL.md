@@ -32,7 +32,7 @@ Agent({
 })
 ```
 
-For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. Clear a `BLOCKED:` yourself only when the plan or decision log gets past it inside frozen scope; every other `BLOCKED:` goes to the owner and is never deferred. A production promotion, a change to frozen scope, and every push or PR (unless the project grants you merge ownership, section 10) go to the owner whatever the cynic recommends.
+For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. Clear a `BLOCKED:` yourself when you can inside frozen scope, for example from the plan, the decision log or something you know: a missing input, a collision with another crew. Every other `BLOCKED:` goes to the owner, and none is ever deferred. A production promotion, a change to frozen scope, and every push or PR (unless the project grants you merge ownership, section 10) go to the owner whatever the cynic recommends.
 
 ## 1. Check the altitude
 
