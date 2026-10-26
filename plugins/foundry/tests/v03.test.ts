@@ -453,3 +453,31 @@ test('v03 example: the shipped plan.example.json refuses until approvedAt is set
   await expectAllowed(w, 'ratelimit-design')
   await expectRefused(w, 'quotas', `wave 0 isn't merged yet: ratelimit-design`)
 })
+
+// ---- Amendment 1: BOM and duplicate slugs ----
+
+test('v03 amendment 1: a BOM-prefixed plan still gates and still shows on /foundry', async ($, on) => {
+  const w = world($, on)
+  const base = await status($)
+  w.files.set(PLAN, `﻿${planText([crew('a', 0)], { approval: 'owner', approvedAt: null })}`)
+  await expectRefused(w, 'a', RUN)
+  expectPlanAbove(await status($), ['Plan (1 crews, approval owner, waiting for the owner):', '- wave 0: a, change, planned'], base)
+})
+
+test('v03 amendment 1: a duplicate of the started slug does not count toward the cap', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('a', 0, 'planned'), crew('a', 0, 'running')], { maxParallelCrews: 1 })
+  await expectAllowed(w, 'a')
+})
+
+test('v03 amendment 1: a duplicate of the started slug in an earlier wave does not hold it back', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('a', 1, 'planned'), crew('a', 0, 'running')])
+  await expectAllowed(w, 'a')
+})
+
+test('v03 amendment 1 control: a different running crew still fills the cap', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('a', 0, 'planned'), crew('x', 0, 'running')], { maxParallelCrews: 1 })
+  await expectRefused(w, 'a', '1 crews running, the cap is 1; start a when one merges')
+})
