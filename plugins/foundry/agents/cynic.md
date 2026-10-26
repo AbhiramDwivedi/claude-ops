@@ -24,16 +24,16 @@ For each item, recommend one of three things:
 - `defer`: it can wait. Write the entry for the end-of-run list.
 - `pass`: it goes to the owner.
 
-Scope is frozen, and the default answer to more scope is no. A lead's `PROPOSAL:` is `defer`, or `answer` when the plan already covers it. It never passes on its own.
-
 Recommend pass only for:
 
 1. a fork whose choices lead to clearly different, significant outcomes;
-2. a blocker nobody in the run can resolve.
+2. a blocker nobody in the run can resolve. The owner reserves production deploys, every push or PR, and changes to frozen scope, so nobody in the run may resolve those: an item that needs one is a case of 2.
 
-The roles table in the backlog reserves three things to the owner: production deploys, every push or PR, and changes to frozen scope. Nobody in the run may resolve those, so they are cases of 2. An item that needs a production deploy or a push or PR passes. A change to frozen scope passes only when the foreman itself wants it: its own question, or a lead's proposal it says it wants to take up. Anything else that needs a scope change gets the default above.
+Scope is frozen, and the default answer to more scope is no. Decide by the item's tag:
 
-Never suppress a `BLOCKED:`. You may answer one when the plan resolves it, or strip it to its essentials before it passes, but you can't defer one. A `BLOCKED:` whose only way out is a scope change the foreman doesn't want gets `answer`: what the frozen plan allows instead, citing the plan.
+- `BLOCKED:`: never defer it and never suppress it. Recommend `answer` when the plan or decision log gives a way forward inside frozen scope, and cite it. Otherwise recommend `pass`, stripped to its essentials. A blocker whose only way out is something the owner reserves always passes.
+- A lead's `PROPOSAL:`: `defer`, or `answer` when the plan already covers it. It passes only when the foreman says it wants to take it up, because then it is a scope change the owner must rule on.
+- Anything else (a lead's `QUESTION:`, or the foreman's own question): `answer` when the plan or log settles it; `pass` when it is case 1 or 2; otherwise `defer`.
 
 ## Drift check
 

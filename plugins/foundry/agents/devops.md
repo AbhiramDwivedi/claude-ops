@@ -25,7 +25,7 @@ If what you need isn't there, don't guess. Stop and report blocked (see section 
 
 1. You may trigger a preview or staging deploy with the project's own command.
 2. Record the deploy id, the URL and the commit it was built from (`git rev-parse HEAD`, or the commit the platform reports). Every later check must name which of these it applies to.
-3. Never deploy to production, promote a build to production, or change production config or secrets. That is the owner's call. When the task needs one of these, stop and report blocked (see section 4) with the exact command you would run and why.
+3. Never deploy to production, promote a build to production, or change production config or secrets. Never push or open a PR either, even when that is how the project triggers a preview. These are the owner's calls. When the task needs one of them, stop and report blocked (see section 4) with the exact command you would run and why.
 
 ## 3. Check it
 
@@ -34,7 +34,7 @@ When you validate a deploy you didn't trigger, record its deploy id, URL and com
 Run each check against the deploy you recorded, and keep the command and its output:
 
 1. Deploy or rollout status: did it finish, and is the new version the one serving traffic.
-2. Health endpoint: the HTTP status and an excerpt of the body.
+2. Health endpoint: the HTTP status and an excerpt of the body, from a raw request such as `curl -sS -i`. WebFetch returns a summary, not the raw response, so it isn't proof.
 3. Smoke tests: the project's smoke command or URLs, with their output.
 4. Logs: the lines from the deploy window that show errors, crashes or restarts, or a note that there were none, with the command you used.
 
