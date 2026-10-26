@@ -33,6 +33,10 @@ export type World = {
   toasts: string[]
   // $.state as the test stores it: "plugin/key" -> value
   stateValues: Map<string, unknown>
+  // each value's version: 0 unwritten, +1 per landed set
+  versions: Map<string, number>
+  // how many times $.agent.list() was asked
+  listCalls: number
   // what $.session.usage() answers as rate limits
   usageLimits: { kind: string; percentUsed: number; resetsAt?: string }[]
   send: (from: string | undefined, to: unknown, message?: string) => Promise<ToolCallResult>
@@ -64,6 +68,8 @@ export function world($: Engine, on: On, options: Options = {}): World {
     prompts: [],
     toasts: [],
     stateValues: new Map(),
+    versions: new Map(),
+    listCalls: 0,
     usageLimits: [],
     send: (from, to, message = 'm') => $.tool.call({ tool: 'SendMessage', to, message, summary: 'merge order', agentId: from } as never),
     agentCall: (from, input) => $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', agentId: from, ...input } as never),
@@ -74,6 +80,7 @@ export function world($: Engine, on: On, options: Options = {}): World {
     },
   }
   on('agent.list', async () => {
+    w.listCalls++
     if (options.listFails) throw new Error('agent list is down')
     return { value: w.agents }
   })
@@ -94,12 +101,17 @@ export function world($: Engine, on: On, options: Options = {}): World {
   on('state.get', async (_, e) => {
     if (options.stateFails) throw new Error('state is down')
     const k = key(e as never)
-    return { value: { value: w.stateValues.get(k), version: w.stateValues.has(k) ? 1 : 0 } } as never
+    return { value: { value: w.stateValues.get(k), version: w.versions.get(k) ?? 0 } } as never
   })
   on('state.set', async (_, e) => {
     if (options.stateFails) throw new Error('state is down')
-    w.stateValues.set(key(e as never), (e as { value: unknown }).value)
-    return { value: { isSet: true, version: 1 } } as never
+    const k = key(e as never)
+    const have = w.versions.get(k) ?? 0
+    const want = (e as { ifVersion?: number }).ifVersion
+    if (want !== undefined && want !== have) return { value: { isSet: false, version: have } } as never
+    w.stateValues.set(k, (e as { value: unknown }).value)
+    w.versions.set(k, have + 1)
+    return { value: { isSet: true, version: have + 1 } } as never
   })
   on('session.usage', async () => ({ value: { startedAt: NOW, context: {}, rateLimits: w.usageLimits } }) as never)
   on('session.id', async () => ({ value: 's1' }))
