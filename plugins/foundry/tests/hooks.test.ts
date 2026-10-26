@@ -196,7 +196,7 @@ test('rolls the message log once it passes the limit', async ($, on) => {
 test('refuses an Agent call without a model only from inside a crew', async ($, on) => {
   const w = world($, on)
   expect(await w.agentCall('A1', { subagent_type: 'Explore' })).toEqual({ deny: MODEL_REFUSAL })
-  expect((await w.agentCall('L1', { model: 'sonnet', name: 'auth-tester' })).deny).toBeUndefined()
+  expect((await w.agentCall('L1', { model: 'sonnet', effort: 'medium', name: 'auth-tester' })).deny).toBeUndefined()
   expect((await w.agentCall('X', {})).deny).toBeUndefined()
   expect((await w.agentCall(undefined, {})).deny).toBeUndefined()
   expect(w.ran.length).toBe(3)
@@ -204,7 +204,7 @@ test('refuses an Agent call without a model only from inside a crew', async ($, 
 
 test('tells a lead, and the main thread starting one, where a report will land', async ($, on) => {
   const w = world($, on)
-  const member = await w.agentCall('L1', { model: 'sonnet', name: 'auth-tester' })
+  const member = await w.agentCall('L1', { model: 'sonnet', effort: 'medium', name: 'auth-tester' })
   expect(member.context).toEqual([`[foundry] If auth-tester's report does not reach you, read ${ROOT}/reports/auth/auth-tester.md once it stops.`])
   const lead = await w.agentCall(undefined, { subagent_type: LEAD_TYPE, name: 'search', model: 'opus' })
   expect(lead.context?.[0]).toContain(`${ROOT}/reports/search/search.md`)
