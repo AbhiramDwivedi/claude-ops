@@ -497,12 +497,15 @@ test('a stopping agent not yet listed is gated by its event\'s agent_type', asyn
 
 test('a lead\'s hand-back the gate could send back is not written at hand-back time, only by the stop that goes through', async ($, on) => {
   const w = world($, on)
-  const path = `${ROOT}/reports/auth/auth.interim.md`
+  const path = `${ROOT}/reports/auth/auth.md`
+  const interim = `${ROOT}/reports/auth/auth.interim.md`
   await handBack($, 'L1', 'just a note on progress so far, more to come later on')
   expect(w.files.has(path)).toBe(false)
+  expect(w.files.has(interim)).toBe(false)
   // A1 is still running, so the stop is interim and goes through
   expect(((await $.classic.SubagentStop(stop('L1', 'Done.'))) as { block?: string }).block).toBeUndefined()
-  expect(w.files.get(path)).toBe('just a note on progress so far, more to come later on')
+  expect(w.files.get(interim)).toBe('just a note on progress so far, more to come later on')
+  expect(w.files.has(path)).toBe(false)
 })
 
 test('never gates a foundry:lead another agent started', async ($, on) => {
