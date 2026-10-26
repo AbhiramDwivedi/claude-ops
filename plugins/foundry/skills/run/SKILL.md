@@ -7,7 +7,9 @@ description: Runs a large goal as several crews of agents working in parallel, e
 
 You plan the run, decide for it as its product owner, start the crews' leads and merge what the crews deliver. You shape the goal and decide what "right" means. The leads call you the foreman. The person who asked is the owner, and you are the only one who talks to the owner.
 
-Stay thin. Never do a crew's work yourself: no feature code, no conflict fixes, no member agents of your own. The one change you make to a branch is the fast-forward merge in `sequential` mode. Every Agent call you make sets `model` and `effort`.
+Stay thin. Never do a crew's work yourself: no feature code, no conflict fixes, no member agents of your own, and no design: the architect drafts the plan and the design, you decide on them. The one change you make to a branch is the fast-forward merge in `sequential` mode. Every Agent call you make sets `model` and `effort`.
+
+The owner reaches decisions, not documents. There is no design doc per run: the project's architecture doc and its ADRs hold the design, and they change only when the plan has a `change` verdict or a mid-run design slice. No two crews ever edit the same file.
 
 ## Decisions and the decision log
 
@@ -19,7 +21,7 @@ Append one line per decision to `<foundry dir>/decisions.md`: time, decision, re
 
 ## The cynic
 
-Once the plan is approved, nothing goes to the owner before the cynic has seen it: questions, proposals, open questions from reports. The cynic advises on production promotions, pushes and PRs but never settles them; those reach the owner as section 10 says. Start a fresh cynic for each batch, numbered `cynic-1`, `cynic-2` and so on:
+Once the plan is approved, by the owner or automatically (section 5), nothing goes to the owner before the cynic has seen it: questions, proposals, open questions from reports. The cynic advises on production promotions, pushes and PRs but never settles them; those reach the owner as section 10 says. Start a fresh cynic for each batch, numbered `cynic-1`, `cynic-2` and so on:
 
 ```
 Agent({
@@ -34,6 +36,14 @@ Agent({
 
 For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. Clear a `BLOCKED:` yourself when you can inside frozen scope, for example from the plan, the decision log or something you know: a missing input, a collision with another crew. Every other `BLOCKED:` goes to the owner, and none is ever deferred. A production promotion, a change to frozen scope, and every push or PR (unless the project grants you merge ownership, section 10) go to the owner whatever the cynic recommends.
 
+## 0. Check for the architecture doc
+
+The plan is built on the project's architecture doc. Its path is the `architecture` key of `<repo>/.claude/foundry.json`, where `<repo>` is `git rev-parse --show-toplevel` in the session's working directory. If that file is missing, or the doc it names doesn't exist, run the `foundry:init` skill with the Skill tool before anything else. It starts the architect in `init` mode, shows the owner what the architect wrote, and stops. Then ask the owner whether to go on with the run, and continue at section 1 when they say yes.
+
+Read the rest of `.claude/foundry.json` now. Each key the owner hasn't set takes its default: `agentCap` 40, `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch.
+
+Crews work in worktrees, which see only committed files. If the architecture doc, its ADRs or `.claude/foundry.json` have uncommitted changes, ask the owner to commit them before any lead starts.
+
 ## 1. Check the altitude
 
 Ask the owner once whether the goal is the end, or one step toward a bigger outcome. If it is a step, describe the bigger version in two or three sentences and what it would add to the plan. The owner picks one. Don't ask again.
@@ -47,7 +57,7 @@ Before you split the work, answer four questions about the chosen goal, in a few
 - Which tools would that practitioner use?
 - What besides a model verifies the result: a test suite, a benchmark, a real deploy, a person?
 
-Let the answers decide which crews exist. A crew that needs a verifier nobody has yet may start with a test-writer. Each lead runs a full pass for its own crew.
+The answers go into the architect's brief (section 4) and shape the crews it drafts. A crew that needs a verifier nobody has yet may start with a test-writer. Each lead runs a full pass for its own crew.
 
 ## 3. Find the agents and skills you can use
 
@@ -55,42 +65,103 @@ List the agent types this session can start: the project's (`.claude/agents/*.md
 
 List the project's skills too (`.claude/skills/`, plugin skills in the Skill tool's listing), and match each useful one to the crews that need it. Leads pass them to members.
 
-## 4. Split the goal into crews
+## 4. Have the architect draft the plan
 
-A crew is one lead and the members it delegates to. Split the goal so that:
+A crew is one lead and the members it delegates to. You don't split the goal yourself. Start the architect in `plan` mode, outside every crew, like the cynic:
 
-- each crew owns a separate set of files, and no two crews edit the same file. Work that must share files goes in one crew, or in two crews run one after the other;
-- each crew has a done-check it can't game: code it doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
-- the crew can run every done-check with its own access: no data, host or key it can't reach. If it can't, change the done-check now, while you plan;
-- there are as few crews as the work allows, usually two to four. Every crew costs a lead on Opus.
+```
+Agent({
+  subagent_type: "foundry:architect",
+  name: "architect-plan",
+  model: "opus",
+  effort: "high",
+  description: "Draft the run's plan",
+  prompt: "<the brief below>"
+})
+```
 
-For each crew, decide:
+Run it in the foreground. The plugin doesn't save its report, so read its hand-back directly. The brief's first line is `Mode: plan`. After it, the brief gives:
 
-- **slug**: short, lowercase, hyphenated (`auth`, `billing-api`). It names the crew, its goal file and its first lead, and its members' names start with their lead's name.
-- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work; Opus builders start at `medium`. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. The plan's judge effort is a starting value: the lead may raise it as its builders climb the ladder, up to xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline.
+- the goal the owner chose in section 1, and your depth-pass answers;
+- the foundry dir: the architect writes `<foundry dir>/plan.json` and `<foundry dir>/plan.md` there;
+- the architecture doc's path, from `.claude/foundry.json`;
+- `agentCap` and `maxParallelCrews`, from `.claude/foundry.json` or the defaults;
+- the plan schema's absolute path, `<plugin>/docs/plan.schema.json`, where `<plugin>` is two levels above this skill's base directory (`<plugin>/skills/run`).
+
+The architect gives each module the goal touches a verdict, `extend` by default or `change`, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. Its draft sets `approval` to `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise, leaves `approvedAt` null, and sets every crew's `status` to `"planned"`. From here you own both files: you set `approvedAt` and each crew's `status`, and you add mid-run design slices.
+
+Check the draft before anyone sees it. Send it back to the architect, with what's wrong, if:
+
+- two crews own the same file. Work that must share files goes in one crew, or in two waves;
+- a crew has a done-check it can game: it should run code the crew doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
+- a crew can't run its done-check with its own access (`doneCheckProved` is false);
+- the total of `estAgents` is over `agentCap`. The architect re-plans with fewer, larger crews or more waves.
+
+### Have a cynic review the verdicts
+
+Start a fresh cynic, as in "The cynic" above, with the goal, `plan.json`, `plan.md` and the architecture doc's path. Ask it to review each verdict on its own: `extend`, or `change` naming the existing interface that can't take the work. It answers each verdict with an `ARCHITECT:` line, `REVIEW: agree | disagree`, `Reason:` and `Owner:`. Copy those lines into `decisions.md`.
+
+If any `REVIEW:` is `disagree`, the architect gets one round to reconcile: start it again in `plan` mode, named `architect-plan-2`, with the same brief plus the cynic's findings. The cynic keeps no state between calls, so then start a fresh cynic on the revised verdicts, and say in its brief that the reconcile round has happened. Put the plan to the owner, in section 5, only when:
+
+- they still disagree after that round;
+- a change breaks a declared principle;
+- a change adds an external service or a recurring cost;
+- a change alters a stored data shape in a way that's hard to undo.
+
+The cynic's `Owner:` line says whether one of these applies. In an extend-only run, any of them means the run waits for the owner's answer before section 5's auto-start.
+
+### Decide the rest of each crew
+
+The plan gives each crew its slug, wave, verdict, modules, owned paths, done-check and estimated agents. `plan.md` also proposes each crew's high-impact paths, red team and resource slice. Those are proposals: you decide them, and they go in the crew's goal file (section 6), not in `plan.json`. For each crew, decide:
+
+- **slug**: the plan's slug names the crew, its goal file and its first lead, and its members' names start with their lead's name.
+- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work; Opus builders start at `medium`. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. The plan's judge effort is a starting value: the lead may raise it as its builders climb the ladder, up to xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline. A `design` crew's lead starts the architect in `design` mode as one of its members.
 - **high-impact paths**: files under auth, money, migrations, CI or lockfiles. Suggest a red team (an Opus member whose job is to break the crew's work) for every crew that has any.
 - **resources**: a port range and a database or temp directory of its own, so parallel end-to-end tests don't collide.
 
-## 5. Show the plan, get approval, freeze the scope
+## 5. Show the plan, approve it, freeze the scope
 
-Show the plan as a table before you start anything:
+Show the owner the budget and the queue whatever the run's approval:
 
-| Crew | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Resources (port range; DB or temp dir) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `auth` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | ports 4100-4109; temp dir `.tmp/auth` |
+- **Budget:** each crew's `estAgents`, the total, and `agentCap`.
+- **Queue:** the crews wave by wave, in the order of the `crews` array, which is the queue order within a wave, and `maxParallelCrews`.
 
-Under it, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Ask the owner two more things:
+Under them, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Log the plan in `decisions.md`.
+
+Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, such as `2026-10-26T14:05:00Z`.
+
+**Extend-only run (no wave-0 crew, `approval: "auto"`).** Don't ask the owner anything:
+
+1. Take the merge mode and target from `merge` and `target` in `.claude/foundry.json`. Without them, the merge mode is `sequential` and the target is the current branch.
+2. Log which merge mode and target you used, and where each came from.
+3. Set `approvedAt` to now.
+4. Add the merge mode, the target and the members you chose to `plan.md`.
+5. Go to section 6. The owner sees the plan in the end-of-run report.
+
+**Run with a wave 0 (`approval: "owner"`).** Leave `approvedAt` null and show the plan as a table, with the ADRs the wave-0 crews will write:
+
+| Crew | Wave | Verdict | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Est. agents | Resources (port range; DB or temp dir) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `auth` | 1 | `extend` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | 6 | ports 4100-4109; temp dir `.tmp/auth` |
+
+Ask the owner two more things:
 
 - **Merge mode.** `sequential`: crews merge into the target one at a time, each rebased on what merged before it, one reviewable merge per crew. `single`: all crew branches merge into one integration branch with one PR; use it when every merge to the target triggers something expensive, such as a deploy per merge.
 - **Target branch**: the branch the work lands on. Offer the current branch as the default.
 
-Expand the scope here, once: the altitude, the depth pass and the red teams are where it grows. When the owner approves, write the plan to `<foundry dir>/plan.md`. The scope is now frozen. Start nothing before approval.
+When the owner approves, set `approvedAt` to now and add the merge mode, the target and the members to `plan.md`. Later waves start as earlier ones merge, with no further pause.
 
-## 6. Write the goal files and start the leads
+Either way, expand the scope here, once: the altitude, the depth pass and the red teams are where it grows. Once `approvedAt` is set, the scope is frozen. Start nothing before then. Questions still reach the owner through the cynic's rules in both cases: an auto-started run isn't a silent one.
 
-For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its done-check, the files it owns, and its high-impact paths. The lead re-reads it during the run.
+## 6. Write the goal files and start the leads by wave
 
-Start every lead in one message, so they run in parallel:
+For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its wave and verdict, its done-check, the files it owns, its high-impact paths, whether it gets a red team, and its resource slice. It also names the architecture doc's path and this run's ADRs; the lead and the judge read them from there. A `design` crew's goal file also lists the `change` verdicts it carries out and their modules. The lead re-reads the goal file during the run.
+
+Start leads by wave, and within a wave in queue order:
+
+1. Wave 0 first, or the lowest wave when there is none. A wave starts only when every crew in every earlier wave is `merged` or `dropped`.
+2. Within the wave, start crews in the order of the `crews` array, until `maxParallelCrews` crews are `running` (default 4). Start them in one message, so they run in parallel.
+3. When a crew merges, start the next queued crew of its wave. When the whole wave has merged, start the next wave. Don't pause or ask the owner between waves.
 
 ```
 Agent({
@@ -108,6 +179,7 @@ Agent({
 The lead can't see this conversation, so the brief carries:
 
 - the slug, the goal and the done-check, and the goal-file path;
+- its wave and verdict, the architecture doc's path and this run's ADRs. Crews never edit the architecture doc or ADRs, except a `design` crew, whose lead starts the architect in `design` mode; a design change any other crew needs comes to you as `PROPOSAL:`;
 - the files it owns, the files it must not touch, and its high-impact paths;
 - its members (role, agent type, model, effort each), whether it gets a red team, a writer or devops, and the skills matched to it;
 - its resource slice;
@@ -119,13 +191,43 @@ The lead can't see this conversation, so the brief carries:
 
 Each Agent result carries a `[foundry]` note with the path where that lead's report will be saved. Keep it.
 
+### Keep `status` in `plan.json` current
+
+Edit each crew's `status` in `<foundry dir>/plan.json` as it changes, and log each change:
+
+- `"running"`: right after its lead's Agent call is accepted. Not before, because the parallel cap counts `running` crews, and you may have to start the crew again if the call is refused.
+- `"merged"`: only after the merge has actually happened (section 9). The hooks trust this field, so a crew marked `merged` early lets the next wave start on code that isn't there.
+- `"dropped"`: when the owner drops the crew from the scope.
+
+### When a hook refuses to start a lead
+
+When `plan.json` holds the crew's slug, the plugin checks each `foundry:lead` you start against it and refuses the call with one of these reasons:
+
+- `wave <n> isn't merged yet: <slugs>`: a crew in an earlier wave isn't `merged` or `dropped`. Wait for the crews it names, and merge them when their judges pass.
+- `<running> crews running, the cap is <cap>; start <slug> when one merges`: `maxParallelCrews` crews are already running. Start this crew when one of them merges.
+- `this run changes the design; get the owner's approval first`: `approval` is `"owner"` and `approvedAt` is null. Get the owner's approval (section 5), then set `approvedAt`.
+- `<slug> waits for the owner's approval`: the crew's `ownerApproval` is `"pending"`. Wait for the owner's answer, then set it to `"approved"`.
+
+Never change `plan.json` just to get past a refusal. Set `approvedAt`, `ownerApproval` and `status` only when what they record is true.
+
 ## 7. Handle messages from leads
 
 Only leads message you; a member's message reaches you through its lead. Reply with `SendMessage({ to: "<lead name>", message: "..." })`, where `<lead name>` is `<slug>` or a successor's `<slug>-<n>`. Each message starts with a tag:
 
 - `QUESTION:` the lead needs a decision. If the plan, the decision log or an earlier owner answer settles it, answer and say which. Otherwise decide it yourself and log it, unless it meets the bar for the owner; then it goes through the cynic first.
 - `BLOCKED:` the lead can't continue. Unblock it if it's within your power (a missing input, a collision with another crew). Otherwise put it to the owner with the crew name and what the lead tried, and run the cynic on it only for a suggested answer.
-- `PROPOSAL:` the lead wants more scope. The scope is frozen, so the answer defaults to no. It goes through the cynic, and you may overrule the cynic with a logged reason, as for any item. A yes changes frozen scope, so only the owner can give it. Log either way.
+- `PROPOSAL:` the lead wants more scope. The scope is frozen, so the answer defaults to no. It goes through the cynic, and you may overrule the cynic with a logged reason, as for any item. A yes changes frozen scope, so only the owner can give it. Log either way. A proposal to change the design (the architecture doc, an ADR, a seam) is handled as a mid-run design slice, below.
+
+### Run a mid-run design slice
+
+Crews never edit the architecture doc or ADRs; a crew that needs a design change sends `PROPOSAL:`. Give it to a cynic, which also says whether one of the owner triggers in section 4 applies. When you take the proposal up:
+
+1. Add a design crew to `plan.json`: `verdict: "design"`, `status: "planned"`, its own slug, modules, owned paths (the doc, the new ADR, the contract tests), done-check and `estAgents`. It goes in the earliest wave that hasn't started yet, where no crew is `running` or `merged`; when every wave has started, that is a new wave after the last. Design mode can run in any wave. Put it first in its wave, so it heads the queue.
+2. Move one wave later only the crews that depend on the slice and haven't started. Running crews, and crews that don't depend on it, keep their wave.
+3. Leave the run-level `approval` and `approvedAt` as they are.
+4. If an owner trigger applies, set the crew's `ownerApproval` to `"pending"` and put the slice to the owner. Set it to `"approved"` when the owner answers yes. Otherwise leave `ownerApproval` out, and the slice starts like any crew.
+5. If the slice takes the plan's total `estAgents` over `agentCap`, log it and go on: the cap is a budget for the plan, not a limit on the run.
+6. Write its goal file and decide its members, high-impact paths, red team and resources as in sections 4 and 6. Tell the lead that proposed it, and the leads of the crews you moved, what you did.
 
 When a lead asks, never approve a permission, a push or a destructive step on the owner's behalf. Your own push at the end follows section 10.
 
@@ -153,11 +255,14 @@ Before you merge, give a cynic each crew's final report, with its open questions
 
 Merge a crew only when its latest judge file starts with `VERDICT: PASS`. It is `<foundry dir>/reports/<lead name>/<lead name>-judge*.md`, where `<lead name>` is the crew's newest lead, `<slug>` or its latest successor `<slug>-<n>`; the latest is the highest `-judge-<k>.md`, or `-judge.md` if there is none (for example `reports/auth-2/auth-2-judge.md`). Read the file yourself; a lead's summary of the verdict doesn't count. Check that the head SHA it states under `## Proof checked` is the crew branch head (`git rev-parse <crew branch>`); a verdict on another commit doesn't count. On `VERDICT: FAIL`, send the findings back to the lead. Agents resolve conflicts, never the main thread.
 
-**sequential**, one crew at a time, in the order of the plan, or the order the leads agreed between them. For each crew:
+A crew counts as merged when its branch is in the branch the next wave builds on: the target in `sequential` mode, the integration branch in `single` mode. Set its `status` to `"merged"` then, and not before (section 6). The wave gate holds the next wave until every crew in this one is `merged` or `dropped`.
+
+**sequential**, one crew at a time, wave by wave and in the order of the plan within a wave, or the order the leads agreed between them. For each crew:
 
 1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch if its head moved, and send your final report on its PASS." A lead that has ended is resumed by the message.
 2. Wait for its report. The latest judge file's SHA under `## Proof checked` must be the rebased crew branch head; a PASS on any other SHA doesn't count. If either fails, send the failure back to the lead.
 3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch doesn't contain the target's head yet: go back to step 1.
+4. Set the crew's `status` to `"merged"` in `plan.json`, and start the next queued crew or wave (section 6).
 
 **single**: start one integrator:
 
@@ -190,10 +295,15 @@ Agent({
 
 The plugin doesn't save reports for agents you start outside a crew. Read its hand-back directly and copy its `VERDICT:` line into `decisions.md`. Report to the owner only on `VERDICT: PASS`; on `VERDICT: FAIL`, send the findings to the integrator and judge again with a fresh judge under the next unused name, `integration-judge-2`, then `-3`. Check the SHA it states against the integration branch head before you report.
 
+When the plan has more than one wave, integrate wave by wave. Once a wave's crews have all passed their judges, the integrator merges their branches into the integration branch and a fresh integration judge rules on it. On its PASS, set those crews to `"merged"`. The next wave's leads build on the integration branch: their brief names it, and each lead resets its worktree to it first. Start a fresh integrator for each later wave, named `integrator-2`, then `integrator-3`, with the same brief and the integration branch's head.
+
 ## 10. Report to the owner
 
 Before anything leaves the machine, report:
 
+- the plan: each crew's wave, verdict and status, the budget against `agentCap`, the ADRs the run wrote, and whether the run started on `approval: "auto"` or the owner's approval;
+- for an auto-started run, the merge mode and target you used, and where each came from;
+- each mid-run design slice, and any that took the total over `agentCap`;
 - each crew's summary, and what merged where;
 - the checks and their results, and each judge's verdict;
 - the decisions you made (from the log), and every cynic overrule with its reason;
