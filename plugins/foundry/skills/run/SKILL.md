@@ -13,7 +13,7 @@ The owner reaches decisions, not documents. There is no design doc per run: the 
 
 ## Decisions and the decision log
 
-You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, production deploys, and every push or PR (the last only unless the project grants you merge ownership, section 10).
+You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, except a mid-run design slice, which reaches the owner only when one of the owner triggers in section 4 applies (section 7). The owner also always rules on production deploys, and every push or PR (the last only unless the project grants you merge ownership, section 10).
 
 `<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
@@ -92,6 +92,7 @@ The architect gives each module the goal touches a verdict, `extend` by default 
 
 Check the draft before anyone sees it. Send it back to the architect, with what's wrong, if:
 
+- `approval` is wrong: it must be `"owner"` when the plan has a wave-0 crew and `"auto"` when it has none. Only you check this, here at plan time; the hooks don't;
 - two crews own the same file. Work that must share files goes in one crew, or in two waves;
 - a crew has a done-check it can game: it should run code the crew doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
 - a crew can't run its done-check with its own access (`doneCheckProved` is false);
@@ -128,7 +129,7 @@ Show the owner the budget and the queue whatever the run's approval:
 
 Under them, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Log the plan in `decisions.md`.
 
-Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, such as `2026-10-26T14:05:00Z`.
+Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, such as `2026-10-26T14:05:00Z`. Read the time from your own clock, for example with `date -u +%Y-%m-%dT%H:%M:%SZ`: the plugin stamps the time only on `decisions.md` lines, never in `plan.json`.
 
 **Extend-only run (no wave-0 crew, `approval: "auto"`).** Don't ask the owner anything:
 
@@ -160,7 +161,7 @@ For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its wave 
 Start leads by wave, and within a wave in queue order:
 
 1. Wave 0 first, or the lowest wave when there is none. A wave starts only when every crew in every earlier wave is `merged` or `dropped`.
-2. Within the wave, start crews in the order of the `crews` array, until `maxParallelCrews` crews are `running` (default 4). Start them in one message, so they run in parallel.
+2. Within the wave, start crews in the order of the `crews` array. Start them in one message, so they run in parallel. Never put more crews in that message than `maxParallelCrews` (default 4) minus the crews already `running`. Before you send it, set each of those crews' `status` to `"running"` in `plan.json`.
 3. When a crew merges, start the next queued crew of its wave. When the whole wave has merged, start the next wave. Don't pause or ask the owner between waves.
 
 ```
@@ -195,7 +196,7 @@ Each Agent result carries a `[foundry]` note with the path where that lead's rep
 
 Edit each crew's `status` in `<foundry dir>/plan.json` as it changes, and log each change:
 
-- `"running"`: right after its lead's Agent call is accepted. Not before, because the parallel cap counts `running` crews, and you may have to start the crew again if the call is refused.
+- `"running"`: before the message that starts its lead. The cap hook counts only the other crews whose `status` is `running`, so crews started in one message see each other only if you mark them all first. If the hook refuses a lead's call, set that crew back to `"planned"`.
 - `"merged"`: only after the merge has actually happened (section 9). The hooks trust this field, so a crew marked `merged` early lets the next wave start on code that isn't there.
 - `"dropped"`: when the owner drops the crew from the scope.
 
