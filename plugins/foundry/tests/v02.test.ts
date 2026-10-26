@@ -721,7 +721,7 @@ test('a live descendant at any depth, in any live status, allows the stop', asyn
   w.agents = w.agents.map(a => (a.id === 'A1' ? { ...a, status: 'completed' } : a))
   // only the grandchild A2 is live
   expect(await blockOf($, 'L1', 'chatter', false)).toBeUndefined()
-  for (const s of ['pending', 'waiting', 'idle', 'running']) {
+  for (const s of ['pending', 'waiting', 'idle', 'running'] as const) {
     w.agents = w.agents.map(a => (a.id === 'A2' ? { ...a, status: s } : a))
     expect(await blockOf($, 'L1', 'chatter', false)).toBeUndefined()
   }
