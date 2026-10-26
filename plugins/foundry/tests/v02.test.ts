@@ -368,6 +368,20 @@ test('a rate_limit StopFailure reads the window from session usage and arms the 
   expect(resets(w.prompts)).toEqual([`[foundry] limit reset: the five-hour usage window reset at ${at}. Check /foundry and message each lead whose crew isn't done to resume.`])
 })
 
+test('a rate_limit StopFailure arms only when the five-hour window is at 100 percent', async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  w.usageLimits = limit(resetAt(30 * MIN), 99)
+  await $.classic.StopFailure({ error: 'rate_limit' } as never)
+  await w.clock.advance(60 * MIN)
+  expect(resets(w.prompts)).toEqual([])
+  const at = resetAt(90 * MIN)
+  w.usageLimits = limit(at, 100)
+  await $.classic.StopFailure({ error: 'rate_limit' } as never)
+  await w.clock.advance(30 * MIN + RESET_GRACE_MS)
+  expect(resets(w.prompts)).toEqual([`[foundry] limit reset: the five-hour usage window reset at ${at}. Check /foundry and message each lead whose crew isn't done to resume.`])
+})
+
 test('a StopFailure with another error arms nothing', async ($, on) => {
   const w = world($, on)
   await startSession($)

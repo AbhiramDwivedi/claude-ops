@@ -667,7 +667,7 @@ async function rearmReset($: $, wakes: Wakes) {
 }
 
 async function resetFromUsage($: $, state: State, wakes: Wakes) {
-  const resetsAt = (await $.session.usage()).rateLimits.find(l => l.kind === 'five_hour' && typeof l.resetsAt === 'string')?.resetsAt
+  const resetsAt = (await $.session.usage()).rateLimits.find(l => l.kind === 'five_hour' && l.percentUsed >= 100 && typeof l.resetsAt === 'string')?.resetsAt
   if (resetsAt !== undefined) await armReset($, state, wakes, resetsAt)
 }
 
