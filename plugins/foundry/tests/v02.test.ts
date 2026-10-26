@@ -115,7 +115,7 @@ test('flags a running crew member idle for STALL_MS once, with the exact prompt 
   expect(w.prompts.filter(p => p.startsWith(STALLED))).toEqual([])
   await w.clock.advance(HEARTBEAT_MS)
   expect(w.prompts.filter(p => p.startsWith(STALLED))).toEqual([
-    '[foundry] stalled: auth-builder in crew auth, no activity for 15m. Check /foundry and message the auth lead.',
+    '[foundry] stalled: auth-builder in crew auth, no activity for 15m. Check /foundry and message the auth lead. Read its transcript tail before you stop it; a resumed agent may be compacting.',
   ])
   expect(w.toasts.filter(t => t.includes('auth-builder')).length).toBe(1)
 })
@@ -127,7 +127,7 @@ test('reports whole minutes idle, rounded down', async ($, on) => {
   await w.activity('A1')
   await w.clock.advance(STALL_MS + HEARTBEAT_MS)
   expect(w.prompts.filter(p => p.startsWith(STALLED) && p.includes('auth-builder'))).toEqual([
-    '[foundry] stalled: auth-builder in crew auth, no activity for 15m. Check /foundry and message the auth lead.',
+    '[foundry] stalled: auth-builder in crew auth, no activity for 15m. Check /foundry and message the auth lead. Read its transcript tail before you stop it; a resumed agent may be compacting.',
   ])
 })
 
@@ -136,7 +136,7 @@ test('flags a stalled lead too', async ($, on) => {
   await startSession($)
   await w.activity('L2')
   await w.clock.advance(STALL_MS + HEARTBEAT_MS)
-  expect(w.prompts).toContain('[foundry] stalled: billing in crew billing, no activity for 15m. Check /foundry and message the billing lead.')
+  expect(w.prompts).toContain('[foundry] stalled: billing in crew billing, no activity for 15m. Check /foundry and message the billing lead. Read its transcript tail before you stop it; a resumed agent may be compacting.')
 })
 
 test('does not re-flag a stalled agent until it has new activity, then flags again', async ($, on) => {
@@ -497,12 +497,12 @@ test('a stopping agent not yet listed is gated by its event\'s agent_type', asyn
 
 test('a lead\'s hand-back the gate could send back is not written at hand-back time, only by the stop that goes through', async ($, on) => {
   const w = world($, on)
-  const path = `${ROOT}/reports/auth/auth.md`
-  await handBack($, 'L1', 'just a note')
+  const path = `${ROOT}/reports/auth/auth.interim.md`
+  await handBack($, 'L1', 'just a note on progress so far, more to come later on')
   expect(w.files.has(path)).toBe(false)
   // A1 is still running, so the stop is interim and goes through
   expect(((await $.classic.SubagentStop(stop('L1', 'Done.'))) as { block?: string }).block).toBeUndefined()
-  expect(w.files.get(path)).toBe('just a note')
+  expect(w.files.get(path)).toBe('just a note on progress so far, more to come later on')
 })
 
 test('never gates a foundry:lead another agent started', async ($, on) => {
@@ -514,9 +514,9 @@ test('never gates a foundry:lead another agent started', async ($, on) => {
 test('a foundry:lead a crew member started is a member: never gated, its hand-back captured', async ($, on) => {
   const w = quiet(world($, on))
   w.agents.push(agent('N2', LEAD_TYPE, 'sub', 'A1'))
-  await handBack($, 'N2', 'just a note')
+  await handBack($, 'N2', 'just a note on progress so far, more to come later on')
   expect(((await $.classic.SubagentStop(stop('N2', 'Done.', false, undefined, LEAD_TYPE))) as { block?: string }).block).toBeUndefined()
-  expect(w.files.get(`${ROOT}/reports/auth/sub.md`)).toBe('just a note')
+  expect(w.files.get(`${ROOT}/reports/auth/sub.md`)).toBe('just a note on progress so far, more to come later on')
 })
 
 test('a blocked stop is not captured; the stop that goes through is', async ($, on) => {
@@ -548,14 +548,14 @@ test('a blocked stop neither sets nor clears the waiting state', async ($, on) =
 
 test('checks the hand-back text, not the sign-off, when the lead handed back', async ($, on) => {
   const w = world($, on)
-  await handBack($, 'L1', 'Summary: s\n## Proof\nran the checks')
+  await handBack($, 'L1', 'Summary: s\n## Proof\nran the checks, 131 pass and 0 fail')
   expect(((await $.classic.SubagentStop(stop('L1', 'Done.'))) as { block?: string }).block).toBeUndefined()
-  expect(w.files.get(`${ROOT}/reports/auth/auth.md`)).toBe('Summary: s\n## Proof\nran the checks')
+  expect(w.files.get(`${ROOT}/reports/auth/auth.md`)).toBe('Summary: s\n## Proof\nran the checks, 131 pass and 0 fail')
 })
 
 test('blocks a lead whose hand-back lacks the report even if the sign-off has a Proof heading', async ($, on) => {
   const w = quiet(world($, on))
-  await handBack($, 'L1', 'just a note')
+  await handBack($, 'L1', 'just a note on progress so far, more to come later on')
   const r = (await $.classic.SubagentStop(stop('L1', '## Proof\nlooks fine'))) as { block?: string }
   expect(r.block?.startsWith('[foundry]')).toBe(true)
   expect(w.files.get(`${ROOT}/reports/auth/auth.md`)).not.toBe('## Proof\nlooks fine')
@@ -564,11 +564,12 @@ test('blocks a lead whose hand-back lacks the report even if the sign-off has a 
 test('a hand-back report is not overwritten by the sign-off, and the next stop captures again', async ($, on) => {
   const w = world($, on)
   const path = `${ROOT}/reports/auth/auth.md`
-  await handBack($, 'L1', 'CHECKPOINT: handed back')
+  await handBack($, 'L1', 'CHECKPOINT: handed back, two slices merged, one left')
   await $.classic.SubagentStop(stop('L1', 'Done.'))
-  expect(w.files.get(path)).toBe('CHECKPOINT: handed back')
+  expect(w.files.get(path)).toBe('CHECKPOINT: handed back, two slices merged, one left')
   await $.classic.SubagentStop(stop('L1', 'CHECKPOINT: second run'))
-  expect(w.files.get(path)).toBe('CHECKPOINT: second run')
+  expect(w.files.get(`${ROOT}/reports/auth/auth.interim.md`)).toBe('CHECKPOINT: second run')
+  expect(w.files.get(path)).toBe('CHECKPOINT: handed back, two slices merged, one left')
 })
 
 // ---------- 5. tags ----------

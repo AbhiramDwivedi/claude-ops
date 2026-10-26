@@ -105,7 +105,7 @@ test('captures to the home folder outside git', async ($, on) => {
   const w = world($, on, { inRepo: false })
   on('classic.SubagentStop', async () => ({}))
   await $.classic.SubagentStop(stop('L2', 'CHECKPOINT: half'))
-  expect(w.files.get('C:/Users/me/.claude/foundry/s1/reports/billing/billing.md')).toBe('CHECKPOINT: half')
+  expect(w.files.get('C:/Users/me/.claude/foundry/s1/reports/billing/billing.interim.md')).toBe('CHECKPOINT: half')
 })
 
 test('captures nothing for an agent outside every crew', async ($, on) => {
@@ -118,10 +118,10 @@ test('captures nothing for an agent outside every crew', async ($, on) => {
 test('keeps a hand-back report over the sign-off that follows, then captures the next stop again', async ($, on) => {
   const w = world($, on)
   on('classic.SubagentStop', async () => ({}))
-  await handBack($, 'A1', 'Summary: full report')
+  await handBack($, 'A1', 'Summary: full report, branch auth-tests, proof: 12 pass')
   await $.classic.SubagentStop(stop('A1', 'Done.'))
   const path = `${ROOT}/reports/auth/auth-builder.md`
-  expect(w.files.get(path)).toBe('Summary: full report')
+  expect(w.files.get(path)).toBe('Summary: full report, branch auth-tests, proof: 12 pass')
   // resumed and stopped again, with no hand-back this time
   await $.classic.SubagentStop(stop('A1', 'Summary: second run'))
   expect(w.files.get(path)).toBe('Summary: second run')
@@ -130,8 +130,8 @@ test('keeps a hand-back report over the sign-off that follows, then captures the
 test('a stop racing the hand-back never overwrites it', async ($, on) => {
   const w = world($, on)
   on('classic.SubagentStop', async () => ({}))
-  await Promise.all([handBack($, 'A1', 'Summary: full report'), $.classic.SubagentStop(stop('A1', 'Done.'))])
-  expect(w.files.get(`${ROOT}/reports/auth/auth-builder.md`)).toBe('Summary: full report')
+  await Promise.all([handBack($, 'A1', 'Summary: full report, branch auth-tests, proof: 12 pass'), $.classic.SubagentStop(stop('A1', 'Done.'))])
+  expect(w.files.get(`${ROOT}/reports/auth/auth-builder.md`)).toBe('Summary: full report, branch auth-tests, proof: 12 pass')
 })
 
 test('names the report file from the spawn name, in the note and on disk alike', async ($, on) => {
