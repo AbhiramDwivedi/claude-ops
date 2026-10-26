@@ -584,3 +584,79 @@ test('v03 amendment 2 cross-check: auth-2 and auth-3 are both gated as auth', as
   await expectRefused(w, next, `auth waits for the owner's approval`)
   await expectRefused(w, 'auth-3', `auth waits for the owner's approval`)
 })
+
+// ---- Amendment 3: the successor skips names that are plan slugs, n+1 is exact, the plan read is bounded ----
+
+test('v03 amendment 3: plan [auth, auth-2]: an idle auth is told auth-3, gated as auth while auth-2 is its own crew', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running', { ownerApproval: 'pending' }), crew('auth-2', 1, 'planned')])
+  const prompt = await idlePrompt($, w, 'auth')
+  expectIdle(prompt, 'auth', 'auth-3')
+  await expectRefused(w, suggested(prompt), `auth waits for the owner's approval`)
+  await expectRefused(w, 'auth-2', `wave 0 isn't merged yet: auth`)
+})
+
+test('v03 amendment 3: plan [auth, auth-2, auth-3]: an idle auth is told auth-4', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running'), crew('auth-2', 1, 'planned'), crew('auth-3', 1, 'planned')])
+  expectIdle(await idlePrompt($, w, 'auth'), 'auth', 'auth-4')
+})
+
+test('v03 amendment 3: plan [api, api-3]: an idle successor api-2 is told api-4, gated as api', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('api', 0, 'running', { ownerApproval: 'pending' }), crew('api-3', 1, 'planned')])
+  const prompt = await idlePrompt($, w, 'api-2')
+  expectIdle(prompt, 'api-2', 'api-4')
+  await expectRefused(w, suggested(prompt), `api waits for the owner's approval`)
+})
+
+test('v03 amendment 3: a huge n is incremented exactly: auth-1000000000000000000000 -> auth-1000000000000000000001, gated as auth', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running', { ownerApproval: 'pending' })])
+  const lead = 'auth-1000000000000000000000'
+  const prompt = await idlePrompt($, w, lead)
+  expectIdle(prompt, lead, 'auth-1000000000000000000001')
+  await expectRefused(w, suggested(prompt), `auth waits for the owner's approval`)
+})
+
+test('v03 amendment 3: n past 2^53 is incremented exactly: auth-9007199254740992 -> auth-9007199254740993', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, [crew('auth', 0, 'running')])
+  expectIdle(await idlePrompt($, w, 'auth-9007199254740992'), 'auth-9007199254740992', 'auth-9007199254740993')
+})
+
+const LATE = { id: 'N1', type: 'kit:builder', name: 'late-member', parentId: 'L2', status: 'running', description: 'N1' }
+const lateStalls = (w: W) => w.prompts.filter(p => p.startsWith('[foundry] stalled: late-member in crew billing'))
+
+test('v03 amendment 3: a plan read that never settles gives one idle prompt with the 0.2.1 name, and a later stall still prompts', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, PHASES)
+  // plan.json reads hang for the rest of the test
+  w.holds.set(PLAN, new Promise<void>(() => {}))
+  w.agents = w.agents.map(a => (a.id === 'L1' ? { ...a, name: 'phase-1' } : a))
+  quiet(w)
+  await startSession($)
+  await w.clock.advance(2 * MIN)
+  w.agents = w.agents.map(a => (a.id === 'L1' ? { ...a, status: 'idle' } : a))
+  await w.clock.advance(17 * MIN)
+  // the 2000 ms bound may run on the engine clock (crossed above) or on a real timer: give a real one time to fire
+  const realTimer = (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => unknown }).setTimeout
+  await new Promise<void>(r => realTimer(r, 2100))
+  await w.clock.advance(1 * MIN)
+  const idle = () => w.prompts.filter(p => p.startsWith(IDLE) && p.includes(' phase-1 in crew'))
+  expect(idle().length).toBe(1)
+  expectIdle(idle()[0]!, 'phase-1', 'phase-2')
+  // a member that starts after the hung read and then goes quiet still gets its stall prompt
+  w.agents = [...w.agents, LATE as never]
+  await w.clock.advance(40 * MIN)
+  expect(lateStalls(w).length).toBeGreaterThan(0)
+  expect(idle().length).toBe(1)
+})
+
+test('v03 amendment 3 control: with no plan, the same late member gets its stall prompt', async ($, on) => {
+  const w = world($, on)
+  expectIdle(await idlePrompt($, w, 'phase-1'), 'phase-1', 'phase-2')
+  w.agents = [...w.agents, LATE as never]
+  await w.clock.advance(40 * MIN)
+  expect(lateStalls(w).length).toBeGreaterThan(0)
+})
