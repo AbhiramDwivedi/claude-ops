@@ -13,7 +13,7 @@ Stay thin. Never do a crew's work yourself: no feature code, no conflict fixes, 
 
 You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, production deploys, and every push or PR.
 
-`<foundry dir>` is `<git common dir>/foundry/<session id>/` (outside git, `~/.claude/foundry/<session id>/`). Get the git common dir with `git rev-parse --path-format=absolute --git-common-dir`. Your session id is the name of this session's transcript, the newest `.jsonl` under `~/.claude/projects/<this project>/`. Check the path against the first `[foundry]` note you get, and move your files there if it differs.
+`<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
 Append one line per decision to `<foundry dir>/decisions.md`: time, decision, reason, the cynic's recommendation (or "none"), and "followed" or "overruled: <reason>".
 
@@ -32,7 +32,7 @@ Agent({
 })
 ```
 
-For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. A `BLOCKED:` goes to the owner whatever the cynic says.
+For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. A `BLOCKED:` goes to the owner whatever the cynic says.
 
 ## 1. Check the altitude
 
@@ -183,7 +183,7 @@ Agent({
 })
 ```
 
-Read its report file. Report to the owner only on `VERDICT: PASS`; on `VERDICT: FAIL`, send the findings to the integrator and judge again as `integration-judge-2`.
+The plugin doesn't save reports for agents you start outside a crew. Read its hand-back directly and copy its `VERDICT:` line into `decisions.md`. Report to the owner only on `VERDICT: PASS`; on `VERDICT: FAIL`, send the findings to the integrator and judge again as `integration-judge-2`.
 
 ## 10. Report to the owner
 
