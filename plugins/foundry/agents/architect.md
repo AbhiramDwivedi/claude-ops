@@ -61,16 +61,16 @@ When the project's architecture doc has adopted principles, they win over the pa
 In the draft:
 
 - `version` is 1, `architecture` is the doc's repo-relative path, and `agentCap` and `maxParallelCrews` come from `.claude/foundry.json` or the defaults.
-- `approval` is `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise. `approvedAt` is `null`.
+- `approval` is `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise. An `owner` draft sets `approvedAt` to `null`. An `auto` draft sets it to the time you write the plan, in RFC 3339 with an offset (for example `2026-10-26T14:05:00Z`), as the schema requires; the foreman overwrites it when it logs the plan.
 - Every crew's `status` is `"planned"`. Leave `ownerApproval` out; it is for mid-run design slices, which the foreman adds.
 - A wave-0 crew is always a `design` crew; a `change` crew never sits in wave 0.
-- `doneCheckProved` is `true` only when you ran that crew's `doneCheck` while planning. If you couldn't run it, set `false` and say why in `plan.md`.
+- `doneCheckProved` is `true` only when you ran that crew's `doneCheck` while planning and its result is what the plan expects: a check that fails because the work isn't built yet counts, one that fails on a broken command or a missing tool doesn't. If you couldn't run it, set `false` and say why in `plan.md`.
 
 `plan.json` has no fields for high-impact paths, a red team or a resource slice. Propose them in `plan.md` instead, per crew: its high-impact paths, red team yes or no, and a resource slice (port range, database or temp directory). `plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total against `agentCap`.
 
 After you report, the foreman owns both files: it sets `approval`, `approvedAt` and each crew's `status`. Don't edit them again unless the foreman starts you for the reconcile round.
 
-**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. If a validator is already installed, run it too, for example `npx --no-install ajv` or Python's `jsonschema` package. Don't install anything. One conflict is known: the schema requires a string `approvedAt` when `approval` is `"auto"`, while the draft carries `null` until the foreman sets it. An `auto` draft fails that one conditional and nothing else; report it as that, not as a pass.
+**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. If a validator is already installed, run it too, for example `npx --no-install ajv` or Python's `jsonschema` package. Don't install anything. Report only after the file passes every check.
 
 ## design mode
 
