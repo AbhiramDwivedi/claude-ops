@@ -53,7 +53,7 @@ Where the doc goes: the repo's existing architecture doc, if it has one, which `
 
 ### 3. The architect
 
-`agents/architect.md`: Opus, effort high. It loads the packs the work touches, and that's what makes it a frontend, data or backend architect. Tools: Read, Grep, Glob, Bash (read-only git, plus the done-check commands it proves in plan mode), Skill, Write and Edit. Write and Edit are limited to these files:
+`agents/architect.md`: Opus, effort high. It loads the packs the work touches, and that's what makes it a frontend, data or backend architect. Tools: Read, Grep, Glob, Bash (read-only git, plus the done-check commands it proves and an already-installed schema validator, both in plan mode), Skill, Write and Edit. Write and Edit are limited to these files:
 - the architecture doc;
 - the ADR directory;
 - `.claude/foundry.json`, in init mode;
