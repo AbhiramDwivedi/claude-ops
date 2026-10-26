@@ -494,16 +494,16 @@ async function lastModified($: $, dir: string): Promise<number | undefined> {
   return last
 }
 
-// the verdict on the first line of the crew's newest judge report, if it has one
+// the verdict on the first line of the crew's latest judge report (highest k in -judge-<k>.md; bare -judge.md is k=1), if it has one
 async function judgeOf($: $, dir: string, crew: string): Promise<string | undefined> {
   if (!(await $.fs.exists(dir))) return undefined
-  let newest: { name: string; mtimeMs: number } | undefined
+  let latest: { name: string; k: number } | undefined
   for (const f of await $.fs.list(dir)) {
     if (f.kind !== 'file' || !isJudgeFile(crew, f.name)) continue
-    const { mtimeMs } = await $.fs.stat(`${dir}/${f.name}`)
-    if (newest === undefined || mtimeMs > newest.mtimeMs) newest = { name: f.name, mtimeMs }
+    const k = Number(/-(\d+)\.md$/.exec(f.name)?.[1] ?? 1)
+    if (latest === undefined || k > latest.k) latest = { name: f.name, k }
   }
-  return newest === undefined ? undefined : verdictOf(String(await $.fs.read(`${dir}/${newest.name}`)))
+  return latest === undefined ? undefined : verdictOf(String(await $.fs.read(`${dir}/${latest.name}`)))
 }
 
 async function statusOf($: $, state: State): Promise<string> {
