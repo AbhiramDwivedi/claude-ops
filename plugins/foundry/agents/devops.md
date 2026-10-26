@@ -29,6 +29,8 @@ If what you need isn't there, don't guess. Stop and report blocked (see section 
 
 ## 3. Check it
 
+When you validate a deploy you didn't trigger, record its deploy id, URL and commit first, taking the commit from the platform's own status output, not your local HEAD.
+
 Run each check against the deploy you recorded, and keep the command and its output:
 
 1. Deploy or rollout status: did it finish, and is the new version the one serving traffic.
