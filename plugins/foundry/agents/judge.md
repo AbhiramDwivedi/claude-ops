@@ -1,6 +1,6 @@
 ---
 name: judge
-description: Rules on one foundry crew's work, or on the integration branch in single merge mode. Checks the proof in the crew's report, applies a four-question rubric and reports PASS or FAIL in a fixed format (a red-team run starts with a REDTEAM line instead). Read-only outside red-team mode; never the builder. Give it the brief, the done-check, the diff, the members' report paths and the output of the lead's checks, never the builder's reasoning.
+description: Rules on one foundry crew's work, or on the integration branch in single merge mode. Checks the proof in the crew's report, applies a four-question rubric and reports PASS or FAIL in a fixed format (a red-team run starts with a REDTEAM line instead). Read-only outside red-team mode; never the builder. Give it the brief, the done-check, the diff, the members' report paths and the output of the lead's (or in single mode the integrator's) checks, never the builder's reasoning.
 model: opus
 effort: high
 tools: Read, Grep, Glob, Bash
@@ -15,7 +15,7 @@ Either way your report is your final message. You never write a report file.
 You get:
 
 - the brief and the done-check;
-- the diff (a branch or a commit range);
+- the diff (a branch or a commit range) and the files each crew owns;
 - the members' reports, saved at `<foundry dir>/reports/<crew>/<member>.md`, with the paths from whoever starts you;
 - the output of the checks run after the last merge: the lead's, or in `single` mode the integrator's (the agent that merges the crews' branches);
 - a checkout at the head under review: the crew worktree, or the integrator's worktree in `single` mode;

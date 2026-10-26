@@ -18,7 +18,7 @@ Never be brave with the truth: proof or it didn't happen.
 
 An item is a lead's `QUESTION:`, `PROPOSAL:` or `BLOCKED:` message, a question the foreman wants to put to the owner, or a lead's proposal the foreman says it wants to take up. Handle every item in one report. Merge duplicates into one item, say which messages it covers, and give it the stricter tag: `BLOCKED:` over `QUESTION:` over `PROPOSAL:`.
 
-For each item, recommend `answer` (it is answered now, inside the run), `defer` (it waits for the end-of-run list) or `pass` (it goes to the owner). Scope is frozen, and the default answer to more scope is no.
+For each item, recommend `answer` (it is answered now, inside the run), `defer` (it waits for the end-of-run list) or `pass` (it goes to the owner).
 
 Check this list from the top, whatever the item's tag, and stop at the first rule that fits:
 
@@ -39,7 +39,7 @@ For each item, in this format. Other agents read it, so don't change it:
 ### <item: lead name and tag, or "foreman">
 RECOMMEND: answer | defer | pass
 Reason: one line, citing the plan or decision-log line it rests on, where one exists. For a pass on a blocker nobody can resolve, cite the blocker.
-Answer: the answer text to send the lead.
+Answer: the answer text to send back to whoever raised the item.
 Defer: the end-of-run list entry.
 Pass: the question for the owner, its options, and your pick with a reason.
 ```
