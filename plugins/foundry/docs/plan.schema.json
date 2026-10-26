@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "foundry plan.json, version 1",
+  "description": "<foundry dir>/plan.json: the seam between the architect, the foreman and the hooks. The architect drafts it in plan mode; the foreman owns it after that; the hooks treat it as read-only. See adr/0001-design-phase.md, section 8.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "goal",
+    "architecture",
+    "approval",
+    "approvedAt",
+    "agentCap",
+    "maxParallelCrews",
+    "crews"
+  ],
+  "properties": {
+    "version": {
+      "description": "Plan file format version. It goes up whenever a field is added.",
+      "const": 1
+    },
+    "goal": {
+      "description": "The run's goal, as the owner gave it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "architecture": {
+      "description": "Repo-relative path of the architecture doc, as recorded in <repo>/.claude/foundry.json.",
+      "type": "string",
+      "minLength": 1
+    },
+    "approval": {
+      "description": "Set once, at plan time, by the architect's draft, and checked by the foreman: \"owner\" exactly when the plan has a wave-0 crew, otherwise \"auto\". Mid-run design slices never change it. The schema checks only that \"owner\" implies a wave-0 crew, because the file can't show which crews a mid-run slice added.",
+      "enum": ["auto", "owner"]
+    },
+    "approvedAt": {
+      "description": "Set by the foreman, as an RFC 3339 date-time with a time-zone offset (JSON Schema format date-time), for example 2026-10-26T14:03:00+01:00 or 2026-10-26T13:03:00Z. A date-time with no offset is invalid. An \"auto\" run gets the time the foreman logged the plan; an \"owner\" run gets the time the owner approved. Null only while a run waits for the owner; while approval is \"owner\" and this is null, the run-level approval gate refuses every lead in the plan.",
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "agentCap": {
+      "description": "The most agents the plan may estimate in total; a plan over it is re-planned. The total is the sum of the crews' estAgents and isn't stored. Default 40, from agentCap in <repo>/.claude/foundry.json.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "maxParallelCrews": {
+      "description": "The most crews that may be running at once; extra crews in a wave queue. Default 4, from maxParallelCrews in <repo>/.claude/foundry.json.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "crews": {
+      "description": "One entry per crew. Within a wave, the order of this array is the queue order: crews beyond maxParallelCrews start in this order as running ones merge. The agent total is the sum of estAgents; it isn't stored.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/crew" }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "approval \"owner\" implies a wave-0 crew (ADR-0001 section 8). The reverse holds at plan time only, so it isn't checked.",
+      "if": {
+        "properties": { "approval": { "const": "owner" } },
+        "required": ["approval"]
+      },
+      "then": {
+        "properties": {
+          "crews": {
+            "type": "array",
+            "contains": {
+              "type": "object",
+              "properties": { "wave": { "const": 0 } },
+              "required": ["wave"]
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "approvedAt is null only while a run waits for the owner, and an auto run never waits (ADR-0001 section 6).",
+      "if": {
+        "properties": { "approval": { "const": "auto" } },
+        "required": ["approval"]
+      },
+      "then": {
+        "properties": { "approvedAt": { "type": "string" } }
+      }
+    }
+  ],
+  "$defs": {
+    "crew": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slug",
+        "wave",
+        "verdict",
+        "modules",
+        "owns",
+        "doneCheck",
+        "doneCheckProved",
+        "estAgents",
+        "status"
+      ],
+      "properties": {
+        "slug": {
+          "description": "The crew's name, and the name of its foundry:lead: lowercase letters and digits in words joined by single hyphens, never ending in -<digits>. The -<digits> ending is reserved because a successor lead is named <slug>-<n> and the hooks gate a successor as its base slug. safeName in hooks/register.ts leaves such a name of up to 100 characters unchanged, so report folders match the slug.",
+          "type": "string",
+          "maxLength": 100,
+          "pattern": "^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "wave": {
+          "description": "The wave the crew runs in. Wave 0 holds the change work and merges before any other wave starts; each wave merges before the next starts. A mid-run design slice goes to the earliest wave that hasn't started yet, and the crews that depend on it move one wave later.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "verdict": {
+          "description": "What kind of crew this is. \"design\": writes ADRs and contract tests (a wave-0 crew, or a mid-run design slice). \"change\": a build crew whose module's design changed, so it runs after the design crew. \"extend\": a build crew working inside the existing design.",
+          "enum": ["extend", "change", "design"]
+        },
+        "modules": {
+          "description": "Module names from the architecture doc's module map.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "owns": {
+          "description": "Path globs the crew owns. No two crews may own the same file.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "doneCheck": {
+          "description": "The command that proves the crew is done, runnable with the crew's own access.",
+          "type": "string",
+          "minLength": 1
+        },
+        "doneCheckProved": {
+          "description": "Whether the architect ran doneCheck once while planning.",
+          "type": "boolean"
+        },
+        "estAgents": {
+          "description": "Estimated agent count for the crew. The plan's agent total is the sum of these and isn't stored.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "ownerApproval": {
+          "description": "Optional; mid-run design slices only. The foreman sets \"pending\" when the slice must wait for the owner (one of the owner triggers in ADR-0001 section 4 applies), and \"approved\" when the owner answers. While it is \"pending\", the crew-level approval gate refuses this crew's lead. Absent on every other crew.",
+          "enum": ["pending", "approved"]
+        },
+        "status": {
+          "description": "Set by the foreman as crews start and merge. The hooks only read it.",
+          "enum": ["planned", "running", "merged", "dropped"]
+        }
+      },
+      "allOf": [
+        {
+          "$comment": "Wave 0 holds the change work: ADRs, the architecture-doc change and the contract tests (ADR-0001 section 5), which is what a design crew does (section 8). A change crew runs after the design crew, so it can't be in wave 0. A design crew may sit in a later wave: a mid-run slice goes to the earliest wave that hasn't started (section 7).",
+          "if": {
+            "properties": { "wave": { "const": 0 } },
+            "required": ["wave"]
+          },
+          "then": {
+            "properties": { "verdict": { "const": "design" } }
+          }
+        },
+        {
+          "$comment": "ownerApproval is for mid-run design slices only (ADR-0001 sections 7 and 8).",
+          "if": { "required": ["ownerApproval"] },
+          "then": {
+            "properties": { "verdict": { "const": "design" } }
+          }
+        }
+      ]
+    }
+  }
+}

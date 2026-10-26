@@ -1,4 +1,4 @@
-import { expect, test } from 'claude-code/testing'
+import { expect } from 'claude-code/testing'
 
 import {
   BLOCKED,
@@ -17,7 +17,7 @@ import {
   agentVerdict,
   effortVerdict,
 } from '../hooks/register'
-import { NOW, ROOT, agent, handBack, measure, quiet, startSession, status, stop, world } from './harness'
+import { NOW, ROOT, agent, handBack, measure, quiet, startSession, status, stop, world, test } from './harness'
 
 const MIN = 60_000
 

@@ -215,6 +215,94 @@ export function effortVerdict(callerId: string | undefined, effort: unknown, age
   return typeof effort === 'string' && EFFORTS.includes(effort) ? undefined : { deny: EFFORT_REFUSAL }
 }
 
+// plan.json as the hooks read it (ADR-0001 s8): only the fields the gates and /foundry use, each left unchecked
+export type Plan = { approval: unknown; approvedAt: unknown; maxParallelCrews: unknown; crews: unknown[] }
+type PlanCrew = Record<string, unknown>
+
+const DEFAULT_CAP = 4
+
+export function planPath(dir: string): string {
+  return `${dir}/plan.json`
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isWave = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+// The plan, or undefined when the text is not one the gates can read: empty, not JSON, not an object, or with no
+// crews array. Undefined means no gate and no plan lines, as in 0.2.1. A leading UTF-8 BOM is stripped first.
+export function parsePlan(text: string): Plan | undefined {
+  let value: unknown
+  try {
+    value = JSON.parse(text.startsWith('\uFEFF') ? text.slice(1) : text)
+  } catch {
+    return undefined
+  }
+  if (!isRecord(value) || !Array.isArray(value.crews)) return undefined
+  return { approval: value.approval, approvedAt: value.approvedAt, maxParallelCrews: value.maxParallelCrews, crews: value.crews }
+}
+
+// The plan entry a lead's name is gated as. A name that is a plan slug is that crew. Otherwise the successor rule: a
+// name `<base>-<n>`, n an integer >= 2, whose base is a plan slug, is gated as that base crew, so restarting a crew
+// under a fresh name can't slip past its gates. That holds for the name successorCrew suggests; plain nextCrew can
+// slip (phase-1 -> phase-2 is another crew's slug), so the idle prompt uses successorCrew. One suffix only is
+// stripped, and a name that is itself a slug never is. Undefined: no gate.
+export function planCrewFor(plan: Plan, name: string): { slug: string; crew: PlanCrew } | undefined {
+  const find = (slug: string) => plan.crews.find((c): c is PlanCrew => isRecord(c) && c.slug === slug)
+  const own = find(name)
+  if (own !== undefined) return { slug: name, crew: own }
+  const m = /^(.+)-([0-9]+)$/.exec(name)
+  if (m?.[1] === undefined || m[2] === undefined || Number(m[2]) < 2) return undefined
+  const base = find(m[1])
+  return base === undefined ? undefined : { slug: m[1], crew: base }
+}
+
+// Why the plan refuses starting the lead `name`, or undefined to let it start. The gates, first match wins: run-level
+// approval, crew-level approval, the wave gate, the parallel cap. The crew being started is every entry with the
+// target's slug (the schema allows duplicate slugs; wave and ownerApproval come from the first). None of them counts
+// as running, since its own entry may already say running (a restart, or a successor gated as its base), and none of
+// them is in the earlier-wave check, so a crew can't hold itself back.
+export function planVerdict(plan: Plan, name: string): { deny: string } | undefined {
+  const target = planCrewFor(plan, name)
+  if (target === undefined) return undefined
+  const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
+  if (plan.approval === 'owner' && plan.approvedAt === null) return refuse(`this run changes the design; get the owner's approval first`)
+  if (target.crew.ownerApproval === 'pending') return refuse(`${target.slug} waits for the owner's approval`)
+  const others = plan.crews.filter(isRecord).filter(c => c.slug !== target.slug)
+  const wave = target.crew.wave
+  if (isWave(wave)) {
+    const open = others.filter(c => isWave(c.wave) && c.wave < wave && c.status !== 'merged' && c.status !== 'dropped')
+    if (open.length > 0) {
+      const lowest = Math.min(...open.map(c => c.wave as number))
+      const slugs = open.filter(c => c.wave === lowest).map(c => planField(c.slug))
+      return refuse(`wave ${lowest} isn't merged yet: ${slugs.join(', ')}`)
+    }
+  }
+  const max = plan.maxParallelCrews
+  const cap = typeof max === 'number' && Number.isInteger(max) && max >= 1 ? max : DEFAULT_CAP
+  const running = others.filter(c => c.status === 'running').length
+  if (running >= cap) return refuse(`${running} crews running, the cap is ${cap}; start ${target.slug} when one merges`)
+  return undefined
+}
+
+// a plan field as /foundry prints it: a string or a number as is, anything else (missing included) as ?
+function planField(v: unknown): string {
+  return typeof v === 'string' || isWave(v) ? String(v) : '?'
+}
+
+// the lines /foundry shows above the 0.2.1 output: one per crew, by wave, ties in the plan's queue order
+export function planLines(plan: Plan): string[] {
+  const waiting = plan.approval === 'owner' && plan.approvedAt === null ? ', waiting for the owner' : ''
+  const lines = [`Plan (${plan.crews.length} crews, approval ${planField(plan.approval)}${waiting}):`]
+  const order = (c: unknown) => (isRecord(c) && isWave(c.wave) ? c.wave : Number.POSITIVE_INFINITY)
+  const sorted = plan.crews.map((c, i) => ({ c, i })).sort((a, b) => order(a.c) - order(b.c) || a.i - b.i)
+  for (const { c } of sorted) {
+    const crew = isRecord(c) ? c : {}
+    const pending = crew.ownerApproval === 'pending' ? `, waits for the owner's approval` : ''
+    lines.push(`- wave ${planField(crew.wave)}: ${planField(crew.slug)}, ${planField(crew.verdict)}, ${planField(crew.status)}${pending}`)
+  }
+  return lines
+}
+
 export function reportNote(who: string, path: string): string {
   return `${MARK} If ${who}'s report does not reach you, read ${path} once it stops.`
 }
@@ -263,8 +351,22 @@ export function nextCrew(crew: string): string {
   return m?.[1] !== undefined && m[2] !== undefined ? `${m[1]}-${Number(m[2]) + 1}` : `${crew}-2`
 }
 
-export function idleLeadText(label: string, crew: string, minutes: number): string {
-  return `${IDLE_LEAD} ${label} in crew ${crew}, no report for ${minutes}m and no member at work. Read its last message and resume it with SendMessage, or start ${nextCrew(crew)} from its report.`
+// The successor name the idle prompt suggests, one the plan gate maps back to the same plan crew: a plan slug C starts
+// at C-2 (never an incremented C, which may be another crew), a successor B-<n> of plan slug B starts at B-<n+1>. A
+// candidate that is itself a plan slug is another crew, so k counts on past it: plan [auth, auth-2] gives auth-3. n+1
+// is BigInt arithmetic on the digit string, so the name is always plain digits, however large n is. No plan, or a crew
+// not in it: nextCrew, as in 0.2.1.
+export function successorCrew(plan: Plan | undefined, crew: string): string {
+  const target = plan === undefined ? undefined : planCrewFor(plan, crew)
+  if (plan === undefined || target === undefined) return nextCrew(crew)
+  const isSlug = (name: string) => planCrewFor(plan, name)?.slug === name
+  let k = target.slug === crew ? 2n : BigInt(crew.slice(target.slug.length + 1)) + 1n
+  while (isSlug(`${target.slug}-${k}`)) k += 1n
+  return `${target.slug}-${k}`
+}
+
+export function idleLeadText(label: string, crew: string, minutes: number, next: string = nextCrew(crew)): string {
+  return `${IDLE_LEAD} ${label} in crew ${crew}, no report for ${minutes}m and no member at work. Read its last message and resume it with SendMessage, or start ${next} from its report.`
 }
 
 // A lead's captured report that ends its work: one with a Proof section, a checkpoint or a blocker. A question or a
@@ -503,6 +605,36 @@ async function rootOf($: $, state: State): Promise<string | undefined> {
   return root
 }
 
+// The session's plan, read fresh on every call so the foreman's edits count at once; never written here. Undefined
+// when there is no foundry dir or no readable plan.
+async function planOf($: $, state: State): Promise<Plan | undefined> {
+  const dir = await rootOf($, state)
+  if (dir === undefined || !(await $.fs.exists(planPath(dir)))) return undefined
+  return parsePlan(String(await $.fs.read(planPath(dir))))
+}
+
+// how long the idle prompt waits on the plan read before it names the 0.2.1 successor instead
+const PLAN_READ_MS = 2000
+
+// The plan as planOf reads it, or undefined when the read hasn't settled within `ms` on the engine clock, so a hung
+// read never holds up the heartbeat pass that awaits it. The timer is cancelled once the read settles; a read that
+// settles after the bound is dropped. A read that throws rejects, as planOf does.
+function planWithin($: $, state: State, ms: number): Promise<Plan | undefined> {
+  return new Promise((resolve, reject) => {
+    const timer = $.clock.after(ms, () => resolve(undefined))
+    planOf($, state).then(
+      plan => {
+        timer.cancel()
+        resolve(plan)
+      },
+      (err: unknown) => {
+        timer.cancel()
+        reject(err)
+      },
+    )
+  })
+}
+
 // the agent list, merged into what was seen before. `listed` is every agent the list returned, whatever its
 // status (a completed or killed agent can still be listed); test isLive for an agent that is still at work.
 async function agentsOf($: $, state: State): Promise<{ all: Agent[]; listed: Agent[] }> {
@@ -669,7 +801,10 @@ async function statusOf($: $, state: State): Promise<string> {
     })
   }
   const log = dir === undefined ? undefined : messagesPath(dir)
-  return statusText(crews, now, log !== undefined && (await $.fs.exists(log)) ? log : undefined, dir)
+  const text = statusText(crews, now, log !== undefined && (await $.fs.exists(log)) ? log : undefined, dir)
+  // the plan's crews go above the 0.2.1 lines; with no readable plan the output is exactly 0.2.1's
+  const plan = await safely($, 'plan lines', () => planOf($, state))
+  return plan === undefined ? text : [...planLines(plan), text].join('\n')
 }
 
 // Whether the lead's report on disk, written in its current stint, is final or tagged. It is what a reloaded mod has
@@ -714,7 +849,13 @@ async function idleLeadCheck($: $, state: State, lead: Agent, crew: Crew, all: r
   if (state.idlePrompted.has(lead.id) || now - since < STALL_MS) return
   // flagged before any await, so an overlapping check never prompts twice
   state.idlePrompted.add(lead.id)
-  const text = idleLeadText(labelOf(lead), crew.crew, Math.floor((now - since) / 60_000))
+  let next = nextCrew(crew.crew)
+  try {
+    next = successorCrew(await planWithin($, state, PLAN_READ_MS), crew.crew)
+  } catch {
+    // fails open: any error reading the plan gives the 0.2.1 name
+  }
+  const text = idleLeadText(labelOf(lead), crew.crew, Math.floor((now - since) / 60_000), next)
   await safely($, 'idle lead wake', () => $.prompt.submit({ text }))
 }
 
@@ -972,8 +1113,17 @@ export const register: Register = on => {
       return { crew: crewOf(e.agentId, all), refused: agentVerdict(e.agentId, e.model, all) ?? effortVerdict(e.agentId, e.effort, all) }
     })
     if (caller?.refused !== undefined) return caller.refused
-    const result = await next(e)
     const startsLead = e.agentId === undefined && e.subagent_type === LEAD_TYPE
+    // the plan gates (ADR-0001 s9): only the main thread starting a named lead; any failure lets the call through
+    const gated = !startsLead || typeof e.name !== 'string' || e.name === '' ? undefined : e.name
+    if (gated !== undefined) {
+      const refused = await safely($, 'plan gate', async () => {
+        const plan = await planOf($, state)
+        return plan === undefined ? undefined : planVerdict(plan, gated)
+      })
+      if (refused !== undefined) return refused
+    }
+    const result = await next(e)
     if (result.deny !== undefined || (caller?.crew === undefined && !startsLead)) return result
     const note = await safely($, 'report note', async () => {
       const dir = await rootOf($, state)

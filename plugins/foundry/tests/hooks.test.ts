@@ -1,6 +1,7 @@
 import type { AgentInfo, On, ToolCallResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
+import { test } from './harness'
 
 import { LEAD_TYPE, MODEL_REFUSAL, ROLL_BYTES } from '../hooks/register'
 
