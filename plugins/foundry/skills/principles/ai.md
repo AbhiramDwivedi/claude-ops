@@ -4,8 +4,8 @@ Use this pack for any change that calls a language model or another learned mode
 
 ## Rules
 
-1. A change to a prompt, model, model parameter or retrieval setup lands with an eval run against the current baseline.
-   Test: the PR shows eval scores for the old and new version on the same eval set.
+1. A change to a prompt, model, model parameter or retrieval setup lands with an eval run against the current baseline, and its results are checked in.
+   Test: a diff that changes a prompt, model name, model parameter or retrieval setting also adds or updates an eval results file with scores for the old and new version on the same eval set.
 2. The eval set is checked into the repo with expected outputs or grading criteria, and each fixed production failure adds a case.
    Test: an eval dataset file exists in the repo, and a diff that fixes a reported bad output adds an eval case for it.
 3. Graders are deterministic code where possible; a model grader is pinned to a fixed model and prompt and checked against human labels.

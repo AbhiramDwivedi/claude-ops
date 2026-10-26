@@ -30,8 +30,8 @@ Use this pack for any change that touches code running in a browser or another U
    Test: the CI config runs an accessibility checker such as axe over the pages the diff touches, and the step fails the build on any violation.
 13. Each route has a performance budget in a checked-in config, and CI fails the build when a route exceeds it.
    Test: a budget file (bundle size per route, or Core Web Vitals thresholds) exists in the repo and a CI step reads it.
-14. A new client-side dependency states its gzipped size in the PR, and code not needed for the first screen loads through a dynamic import.
-   Test: each dependency added to the client lockfile in the diff has its size in the PR description, and new routes and dialogs sit behind a dynamic import.
+14. A new client-side dependency fits the route budgets from rule 13, and code not needed for the first screen loads through a dynamic import.
+   Test: a diff that adds a dependency to the client lockfile raises no limit in the budget file, and each route and dialog the diff adds loads through a dynamic `import()`.
 
 ## Notes
 

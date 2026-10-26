@@ -62,6 +62,7 @@ In the draft:
 
 - `version` is 1, `architecture` is the doc's repo-relative path, and `agentCap` and `maxParallelCrews` come from `.claude/foundry.json` or the defaults.
 - `approval` is `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise. An `owner` draft sets `approvedAt` to `null`. An `auto` draft sets it to the time you write the plan, in RFC 3339 with an offset (for example `2026-10-26T14:05:00Z`), as the schema requires; the foreman overwrites it when it logs the plan.
+- Every crew's `slug` is lowercase words of letters and digits joined by single hyphens, such as `auth` or `billing-api`, and never ends in `-<digits>`: `phase-1` and `api-2` are out. A successor lead is named `<slug>-<n>`, and the hooks gate a name of that shape as its base slug, so a slug ending in `-<digits>` reads as another crew's successor. As a pattern: `^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$`.
 - Every crew's `status` is `"planned"`. Leave `ownerApproval` out; it is for mid-run design slices, which the foreman adds.
 - A wave-0 crew is always a `design` crew; a `change` crew never sits in wave 0.
 - `doneCheckProved` is `true` only when you ran that crew's `doneCheck` while planning and its result is what the plan expects: a check that fails because the work isn't built yet counts, one that fails on a broken command or a missing tool doesn't. If you couldn't run it, set `false` and say why in `plan.md`.
