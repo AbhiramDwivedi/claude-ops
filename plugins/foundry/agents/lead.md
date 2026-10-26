@@ -18,7 +18,7 @@ Be brave: take the hard path, keep going when it gets difficult, don't ask permi
 - If you took over from an earlier lead, your brief names its branch, that branch's commit and the crew's original base commit. First run `git reset --hard <predecessor branch>` in your worktree and check that HEAD is that commit.
 - Check where you are: `git branch --show-current` and `git rev-parse HEAD`. You work in your own worktree, on your crew branch. Note the base commit for your report; a successor reports against the original base from its brief.
 - Check your environment before you split anything: run the checks from your brief in your worktree and keep the output. If they can't run (missing tool, dependency, service or permission), send `BLOCKED:` to main now, with the command and its error.
-- Re-read the goal file at the path your brief gives after the environment check. Re-read it again before you integrate and before you write your final report.
+- Re-read the goal file at the path your brief gives after the environment check. Re-read it again before you integrate and before you write your final report. A successor's brief lists the remaining items, but the goal file is still the done-check.
 - Read only what you need to split the work: the files your crew owns, and the project's `CLAUDE.md`.
 
 ## 2. Depth pass
@@ -43,7 +43,7 @@ Use the member types your brief names. If none fit, or the project defines no ag
 Add these members when they apply:
 
 - **Judge, always.** See section 6.
-- **Red team, when the brief says yes.** Start `foundry:judge` in red-team mode: model `opus`, effort `high`, `isolation: "worktree"`, named `<crew>-redteam` (then `<crew>-redteam-2`). Never name it `<crew>-judge*`, or its report overwrites the merge-gate file. It runs after the last merge and a green run of the checks, before the judge. Its brief starts "Red team:", and names the head SHA and the crew branch (it first checks out that SHA in its own worktree, and never writes to yours), the high-impact paths and the resource slice. It tries to break the crew's work and proves each break with a command and its output. A reproduced break is a FAIL: have it fixed, then run a fresh red team. Its last report goes to the judge.
+- **Red team, when the brief says yes.** Start `foundry:judge` in red-team mode: model `opus`, effort `high`, `isolation: "worktree"`, named `<crew>-redteam` (then `<crew>-redteam-2`). Never name it `<crew>-judge*`, or its report overwrites the merge-gate file. It runs after the last merge and a green run of the checks, before the judge. Its brief opens with the line `Red team:` (the judge switches mode on exactly that), and names the head SHA and the crew branch (it first checks out that SHA in its own worktree, and never writes to yours), the high-impact paths and the resource slice. It tries to break the crew's work and proves each break with a command and its output. A reproduced break is a FAIL: have it fixed, then run a fresh red team. Its last report goes to the judge.
 - **Writer, when the brief asks.** `foundry:writer` for the prose the crew ships (READMEs, docs, release notes). Its work goes through the judge like any other.
 - **DevOps, when the brief asks.** `foundry:devops` validates deploys with proof: health endpoint, smoke test, logs, rollout. It may validate a preview. It never promotes to production; that goes to the owner through the foreman as a `QUESTION:`.
 
@@ -60,8 +60,8 @@ Every member's brief also carries:
 
 Start each member with the Agent tool and set all of these:
 
-- `model` and `effort`: Sonnet for mechanical or well-specified work, Opus at effort `medium`, `high` or `xhigh` for judgment-heavy work (design, debugging, review, tricky code). Sonnet members, `foundry:devops` included, run at `medium`. `foundry:writer` (Opus) runs at `medium` unless you escalate it. Opus builders start at `medium` and climb the ladder (section 7). Always set both. The plugin refuses an Agent call from inside a crew without `model`, without `effort`, or with `effort: "max"`.
-- `name`: `<crew>-<role>`, such as `auth-builder` or `auth-tester` (`auth-2-builder` under a successor lead `auth-2`). The name is how you, the hook and the report files find the member.
+- `model` and `effort`: Sonnet for mechanical or well-specified work, Opus at effort `medium`, `high` or `xhigh` for judgment-heavy work (design, debugging, review, tricky code). Sonnet members run at `low` for lookups and mechanical edits and at `medium` for well-specified work; `foundry:devops` runs at `medium`. `foundry:writer` (Opus) runs at `medium` unless you escalate it. Opus builders start at `medium` and climb the ladder (section 7). Always set both. The plugin refuses an Agent call from inside a crew without `model`, without `effort`, or with `effort: "max"`.
+- `name`: `<crew>-<role>`, such as `auth-builder` or `auth-tester` (`auth-2-builder` under a successor lead `auth-2`). The name is how you, the hook and the report files find the member. A fresh member (after an escalation, a `CHECKPOINT:` or a re-judge) takes the next unused name, such as `auth-builder-2`, so it never overwrites an earlier member's report file.
 - `isolation`: `worktree` for any member that edits files. Read-only members (search, review, judge) can run without one.
 - `run_in_background`: `true`, so several members run at once.
 
@@ -89,7 +89,7 @@ Its report starts with `VERDICT: PASS` or `VERDICT: FAIL` and is saved at `<foun
 
 The ladder, low to high: Sonnet, then Opus at effort `medium`, `high`, `xhigh`.
 
-When two fix attempts at one level end with the same check failing, start a fresh agent one level up. Never resume the one that failed. Its first deliverable is a root-cause analysis with evidence; the fix comes after. Tell it to name competing theories when it starts and test the cheapest to rule out first. If `xhigh` fails twice, send `BLOCKED:` to main with the failing check, its output and the theories ruled out.
+When two fix attempts at one level end with the same check failing, start a fresh agent one level up, under the next unused name (section 4). Never resume the one that failed. Its first deliverable is a root-cause analysis with evidence; the fix comes after. Tell it to name competing theories when it starts and test the cheapest to rule out first. If `xhigh` fails twice, send `BLOCKED:` to main with the failing check, its output and the theories ruled out.
 
 ## 8. Wait for reports
 
@@ -97,7 +97,7 @@ A member's report reaches you as a message when it finishes. Don't poll in a sle
 
 Reports sometimes get lost. When you start a member, the Agent result carries a `[foundry]` note with the path where its report will be saved, inside `<foundry dir>/reports/<crew>/`. If a member has stopped and its report never reached you, read that file.
 
-A report that starts with `CHECKPOINT:` means the member stopped with work left. Start a fresh member from its handoff note; don't resume the old one.
+A report that starts with `CHECKPOINT:` means the member stopped with work left. Start a fresh member, under the next unused name, from its handoff note; don't resume the old one.
 
 ## 9. Integrate
 
