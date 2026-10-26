@@ -42,7 +42,7 @@ Use the member types your brief names. If none fit, or the project defines no ag
 Add these members when they apply:
 
 - **Judge, always.** See section 6.
-- **Red team, when the brief says yes.** An Opus member whose job is to break the crew's work: find inputs, orders and states that make it fail, on the high-impact paths first. It reports what it broke, with proof.
+- **Red team, when the brief says yes.** Start `foundry:judge` in red-team mode: model `opus`, effort `high`, `isolation: "worktree"`, named `<crew>-redteam` (then `<crew>-redteam-2`). Never name it `<crew>-judge*`, or its report overwrites the merge-gate file. Its brief starts "Red team:", and names the crew branch, the high-impact paths and the resource slice. It tries to break the crew's work and proves each break with a command and its output. A reproduced break is a FAIL: fix it, then run a fresh red team.
 - **Writer, when the brief asks.** `foundry:writer` for the prose the crew ships (READMEs, docs, release notes). Its work goes through the judge like any other.
 - **DevOps, when the brief asks.** `foundry:devops` validates deploys with proof: health endpoint, smoke test, logs, rollout. It may validate a preview. It never promotes to production; that goes to the owner through the foreman as a `QUESTION:`.
 
@@ -80,7 +80,7 @@ Send a report without proof back to its member before you integrate it.
 
 After the last merge and a green run of the checks, start a judge as `foundry:judge`, named `<crew>-judge`. Re-judgements are fresh agents named `<crew>-judge-2`, `<crew>-judge-3`, and so on, never a resume. The judge is never a builder. It runs on Opus at one effort level above the strongest builder it judges, at least `high`, at most `xhigh`: a Sonnet or Opus-medium builder gets a `high` judge, an Opus-high or Opus-xhigh builder gets an `xhigh` judge.
 
-Give the judge the goal-file path, the crew branch and its diff against the base commit, the high-impact paths, and the members' proof. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
+Give the judge the goal-file path, the absolute path of a checkout at the head under review (your crew worktree), the crew branch and its diff against the base commit, the high-impact paths, and the members' proof. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
 
 Its report starts with `VERDICT: PASS` or `VERDICT: FAIL` and is saved at `<foundry dir>/reports/<crew>/<crew>-judge.md` (`-judge-2.md`, and so on). You write your final report only after a `VERDICT: PASS`. On a FAIL, send the findings to a builder, or escalate (section 7), then judge again with a fresh judge.
 

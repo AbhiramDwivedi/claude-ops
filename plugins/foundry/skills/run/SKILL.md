@@ -76,7 +76,7 @@ Show the plan as a table before you start anything:
 
 | Crew | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Resources (port range; DB or temp dir) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `auth` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `general-purpose` (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | ports 4100-4109; temp dir `.tmp/auth` |
+| `auth` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | ports 4100-4109; temp dir `.tmp/auth` |
 
 Under it, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Ask the owner two more things:
 
@@ -179,7 +179,7 @@ Agent({
   model: "opus",
   effort: "xhigh",
   description: "Judge the integration branch",
-  prompt: "Branch: <integration branch>. Plan: <foundry dir>/plan.md. Integrator report: <its report path>. High-impact paths: <all crews'>."
+  prompt: "Branch: <integration branch>. Checkout: <absolute path of the integrator's worktree>. Plan: <foundry dir>/plan.md. Integrator report: <its hand-back, pasted>. High-impact paths: <all crews'>."
 })
 ```
 
