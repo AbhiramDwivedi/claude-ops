@@ -367,7 +367,6 @@ function withNote(result: ToolCallResult, note: string): ToolCallResult {
   return { ...result, context: [...(result.context ?? []), note] }
 }
 
-// what the mod keeps for the session; a reload or /clear starts it over
 // what the mod keeps for the session; a reload or /clear starts it over (the armed limit reset lives in $.state)
 type State = {
   // every agent seen this session, so a member whose lead has ended still resolves to its crew
@@ -405,20 +404,21 @@ async function rootOf($: $, state: State): Promise<string | undefined> {
   return root
 }
 
-// the live list, merged into what was seen before
-async function agentsOf($: $, state: State): Promise<{ all: Agent[]; live: Agent[] }> {
-  const listed = await $.agent.list()
-  const ids = new Set(listed.map(a => a.id))
+// the agent list, merged into what was seen before. `listed` is every agent the list returned, whatever its
+// status (a completed or killed agent can still be listed); test isLive for an agent that is still at work.
+async function agentsOf($: $, state: State): Promise<{ all: Agent[]; listed: Agent[] }> {
+  const answer = await $.agent.list()
+  const ids = new Set(answer.map(a => a.id))
   for (const a of state.known.values()) if (!ids.has(a.id)) a.live = false
-  const live: Agent[] = []
-  for (const a of listed) {
+  const listed: Agent[] = []
+  for (const a of answer) {
     const before = state.known.get(a.id)
     const seq = before?.seq ?? state.seq++
     const agent: Agent = { id: a.id, type: a.type, status: a.status, description: a.description, name: a.name, parentId: a.parentId, label: state.labels.get(a.id), live: LIVE.has(a.status), seq }
     state.known.set(a.id, agent)
-    live.push(agent)
+    listed.push(agent)
   }
-  return { all: [...state.known.values()], live }
+  return { all: [...state.known.values()], listed }
 }
 
 // an agent did something: it is not stalled, whatever it was before
@@ -507,8 +507,9 @@ async function judgeOf($: $, dir: string, crew: string): Promise<string | undefi
 }
 
 async function statusOf($: $, state: State): Promise<string> {
-  const { all, live } = await agentsOf($, state)
-  const liveIds = new Set(live.map(a => a.id))
+  const { all, listed } = await agentsOf($, state)
+  // a listed lead shows its own status, completed or killed included; one the list dropped shows as ended
+  const listedIds = new Set(listed.map(a => a.id))
   const dir = await rootOf($, state)
   const now = await $.clock.now()
   const crews: CrewStatus[] = []
@@ -516,7 +517,7 @@ async function statusOf($: $, state: State): Promise<string> {
     const crew = crewName(lead)
     const counts: Record<string, number> = {}
     const stalled: { label: string; minutes: number }[] = []
-    for (const a of live) {
+    for (const a of listed) {
       if (crewOf(a.id, all)?.leadId !== lead.id) continue
       const last = state.activity.get(a.id)
       if (state.stalled.has(a.id) && a.status === 'running' && last !== undefined) stalled.push({ label: labelOf(a), minutes: Math.floor((now - last) / 60_000) })
@@ -529,11 +530,11 @@ async function statusOf($: $, state: State): Promise<string> {
     const judge = reports === undefined ? undefined : await safely($, 'judge verdict', () => judgeOf($, reports, crew))
     crews.push({
       crew,
-      status: liveIds.has(lead.id) ? lead.status : 'ended',
+      status: listedIds.has(lead.id) ? lead.status : 'ended',
       live: counts,
       lastReportMs,
       tag: state.waiting.get(lead.id),
-      waitingOnMembers: !(liveIds.has(lead.id) && lead.status === 'running') && descendantsOf(lead.id, all).some(isLive),
+      waitingOnMembers: !(listedIds.has(lead.id) && lead.status === 'running') && descendantsOf(lead.id, all).some(isLive),
       lastActiveMs: state.activity.get(lead.id),
       stalled,
       judge,
@@ -548,8 +549,9 @@ async function statusOf($: $, state: State): Promise<string> {
 // prompt to the main session. An agent with nothing on record counts as active from now.
 async function stallCheck($: $, state: State) {
   const now = await $.clock.now()
-  const { all, live } = await agentsOf($, state)
-  for (const a of live) {
+  const { all, listed } = await agentsOf($, state)
+  for (const a of listed) {
+    // running only: a listed agent that is idle, waiting or done is never stalled
     if (a.status !== 'running') continue
     const crew = crewOf(a.id, all)
     if (crew === undefined) continue
@@ -582,6 +584,8 @@ type Wakes = {
   checking: boolean
   // the limit-reset timer and the resetsAt it is for
   reset?: { resetsAt: string; timer: Timer }
+  // the resetsAt values this module has woken the foreman for
+  fired: Set<string>
   // limit-reset work runs one step at a time, so two triggers for one reset never both arm
   work: Promise<unknown>
 }
@@ -597,13 +601,33 @@ function startHeartbeat($: $, state: State, wakes: Wakes) {
   })
 }
 
+// does $.state say positively that this resetsAt's wake has gone out? An unreadable or stale state says no.
+async function firedFor($: $, resetsAt: string): Promise<{ fired: boolean; version?: number; ours: boolean }> {
+  try {
+    const held = await $.state.get(LIMIT_RESET_REF)
+    const ours = held.value?.resetsAt === resetsAt
+    return { fired: ours && held.value?.fired === true, version: held.version, ours: ours || held.value === undefined }
+  } catch {
+    return { fired: false, ours: false }
+  }
+}
+
+// The timer's resetsAt is the source of truth: the wake goes out once for it unless $.state positively says it
+// already went. The module guard stops a second run in this module; the $.state claim stops one after a reload.
 async function fireReset($: $, wakes: Wakes, resetsAt: string) {
   if (wakes.reset?.resetsAt === resetsAt) wakes.reset = undefined
-  const held = await $.state.get(LIMIT_RESET_REF)
-  if (held.value === undefined || held.value.resetsAt !== resetsAt || held.value.fired) return
-  // claimed before the prompt goes out, so a wake that somehow ran twice finds it fired
-  const claimed = await $.state.set(LIMIT_RESET_REF, { resetsAt, fired: true }, { ifVersion: held.version })
-  if (!claimed.isSet) return
+  if (wakes.fired.has(resetsAt)) return
+  wakes.fired.add(resetsAt)
+  const before = await firedFor($, resetsAt)
+  if (before.fired) return
+  // claimed before the prompt goes out; a state holding another window's reset is left alone
+  if (before.ours) {
+    const claimed = await $.state
+      .set(LIMIT_RESET_REF, { resetsAt, fired: true }, before.version === undefined ? undefined : { ifVersion: before.version })
+      .catch(() => undefined)
+    // lost the claim: fire anyway unless whoever won says this reset has fired
+    if (claimed !== undefined && !claimed.isSet && (await firedFor($, resetsAt)).fired) return
+  }
   await $.prompt.submit({ text: limitResetText(resetsAt) })
 }
 
@@ -621,7 +645,8 @@ async function scheduleReset($: $, wakes: Wakes, resetsAt: string) {
 // a five-hour window at its limit while a crew is live: wake the foreman once it resets, once per resetsAt
 async function armReset($: $, state: State, wakes: Wakes, resetsAt: string) {
   if (Number.isNaN(Date.parse(resetsAt))) return
-  if (!(await agentsOf($, state)).live.some(isLead)) return
+  // a lead still at work, not one that is listed but completed, failed or killed
+  if (!(await agentsOf($, state)).listed.some(a => isLead(a) && isLive(a))) return
   const held = await $.state.get(LIMIT_RESET_REF)
   if (held.value?.resetsAt === resetsAt) {
     // fired already, or a timer is running; one a reload took is armed again by session.start
@@ -661,7 +686,7 @@ export const register: Register = on => {
     stalled: new Set(),
     streaks: new Map(),
   }
-  const wakes: Wakes = { checking: false, work: Promise.resolve() }
+  const wakes: Wakes = { checking: false, fired: new Set(), work: Promise.resolve() }
   // appends to the messages log, one at a time
   let appending: Promise<unknown> = Promise.resolve()
 
