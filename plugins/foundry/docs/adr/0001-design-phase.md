@@ -22,7 +22,20 @@ Each project has one architecture doc. Foundry's `init` writes it when it's miss
 - **Module map:** each module, the paths it owns, what it's responsible for, and its seams (the interfaces other modules use).
 - **Decisions:** ADRs for the decisions already visible in the code, then one per design change.
 
-Where the doc goes: the repo's existing architecture doc, if it has one, which `init` extends rather than replaces. Otherwise `docs/architecture.md`, with ADRs in `docs/adr/`. The doc's path is recorded in `<repo>/.claude/foundry.json` as `{ "architecture": "<path>", "adr": "<dir>" }`, and this file is the only config `init` writes.
+Where the doc goes: the repo's existing architecture doc, if it has one, which `init` extends rather than replaces. Otherwise `docs/architecture.md`, with ADRs in `docs/adr/`. The doc's path is recorded in `<repo>/.claude/foundry.json`. `init` writes only `architecture` and `adr`. The owner can add the optional keys by hand; each has a default:
+
+```json
+{
+  "architecture": "docs/architecture.md",
+  "adr": "docs/adr",
+  "agentCap": 40,
+  "maxParallelCrews": 4,
+  "merge": "sequential",
+  "target": "<current branch>"
+}
+```
+
+`merge` and `target` apply to auto-started runs (section 6).
 
 ### 2. Principle packs ship with foundry, as a skill
 
@@ -40,11 +53,24 @@ Where the doc goes: the repo's existing architecture doc, if it has one, which `
 
 ### 3. The architect
 
-`agents/architect.md`: Opus, effort high. It loads the packs the work touches, and that's what makes it a frontend, data or backend architect. Tools: Read, Grep, Glob, Bash (read-only git), Skill, Write and Edit for the architecture doc and ADRs only. It never edits source or tests. It runs in three modes.
+`agents/architect.md`: Opus, effort high. It loads the packs the work touches, and that's what makes it a frontend, data or backend architect. Tools: Read, Grep, Glob, Bash (read-only git, plus the done-check commands it proves in plan mode), Skill, Write and Edit. Write and Edit are limited to these files:
+- the architecture doc;
+- the ADR directory;
+- `.claude/foundry.json`, in init mode;
+- `<foundry dir>/plan.json` and `plan.md`, in plan mode.
 
-- **init:** writes the architecture doc, module map and existing-decision ADRs, plus `.claude/foundry.json`.
-- **plan:** for a goal, produces the verdicts and the work breakdown (sections 4 and 5) as `<foundry dir>/plan.json` and a readable `plan.md`.
-- **design:** in wave 0, writes the ADR and the architecture-doc change for each `change` verdict, and names the seams the contract tests must pin.
+It never edits source or tests. It runs in three modes.
+
+- **init:**
+  - Started by the `foundry:init` skill. That's the owner running `/foundry:init`, or the foreman when a run finds no architecture doc.
+  - It writes the architecture doc, the module map, the ADRs for decisions already in the code, and `.claude/foundry.json`.
+- **plan:**
+  - Started by the foreman at the start of every run, outside every crew, like the cynic.
+  - For a goal, it writes the verdicts and the work breakdown (sections 4 and 5) as a draft `plan.json` plus a readable `plan.md`.
+  - The foreman owns both files after that: it sets `approval` and `approvedAt`, and updates `status`.
+- **design:**
+  - A member of a wave-0 design crew, started by that crew's lead.
+  - It writes the ADR and the architecture-doc change for each `change` verdict, and names the seams the crew's test-writer must pin with contract tests.
 
 ### 4. Extend or change, decided by Opus
 
@@ -97,14 +123,27 @@ The architect splits the goal once, on paper, along the module map. Agents never
 
 ### 6. Approval only when the design changes
 
-- **Extend-only run, no wave 0:** the foreman logs the plan and starts the crews without asking. The owner sees the plan in the end-of-run report.
-- **Run with a wave 0:** the foreman shows the plan table with the ADRs and pauses for the owner's approval before wave 0 starts. After approval, later waves start as earlier ones merge, with no further pause.
+- **Extend-only run, no wave 0:**
+  - The foreman logs the plan, sets `approval: "auto"` and `approvedAt` to now, and starts the crews without asking.
+  - Merge mode and target come from `.claude/foundry.json`. Without them, the merge mode is `sequential` and the target is the current branch. The foreman logs which it used.
+  - The owner sees the plan in the end-of-run report.
+- **Run with a wave 0:**
+  - The foreman sets `approval: "owner"`, leaves `approvedAt` null, shows the plan table with the ADRs, and asks for the merge mode and target as in 0.2.1.
+  - It sets `approvedAt` when the owner approves.
+  - Later waves start as earlier ones merge, with no further pause.
+  - `approvedAt` is null only while a run waits for the owner.
 - **Questions still reach the owner** through the cynic's escalation rules in either case: a wave doesn't make the run silent.
 
 ### 7. Conformance
 
 - The judge adds one rubric question: does the diff conform to the architecture doc's principles and module map, and to this run's ADRs? A violation that doesn't affect the done-check is a QUESTION. One that breaks a declared principle is a FAIL.
-- Crews never edit the architecture doc or ADRs. A needed design change goes to the foreman as `PROPOSAL:`. The foreman starts a design crew for it as a new wave 0 slice, and the dependent crews wait for it.
+- Crews never edit the architecture doc or ADRs. A needed design change goes to the foreman as `PROPOSAL:`.
+- **Mid-run design slice:** when the foreman takes up a design proposal, it handles it like this.
+  - It adds a design crew (`verdict: "design"`) to the earliest wave that hasn't started yet.
+  - It moves only the crews that depend on the slice, and haven't started, one wave later. Running crews and crews that don't depend on it keep their wave.
+  - The run-level `approval` and `approvedAt` don't change.
+  - The slice waits for the owner only when one of section 4's triggers applies. Then the foreman sets the crew's `ownerApproval` to `"pending"`, and to `"approved"` when the owner answers.
+  - Otherwise the slice starts like any crew.
 
 ### 8. The plan file contract
 
@@ -129,22 +168,30 @@ The architect splits the goal once, on paper, along the module map. Agents never
       "doneCheck": "pnpm test -- auth",
       "doneCheckProved": true,
       "estAgents": 6,
+      "ownerApproval": "pending | approved (optional; mid-run design slices only)",
       "status": "planned | running | merged | dropped"
     }
   ]
 }
 ```
 
-- `verdict: "design"` marks a wave-0 design crew.
-- `approval` is `owner` exactly when any crew is in wave 0.
+- `verdict` describes a crew:
+  - `design` is a crew that writes ADRs and contract tests;
+  - `change` is a build crew whose module's design changed, so it runs after the design crew;
+  - `extend` is a build crew working inside the existing design.
+- `approval` is set once, at plan time. It's `owner` exactly when the plan has a wave-0 crew; mid-run slices never change it.
+- Within a wave, the order of the `crews` array is the queue order.
+- The agent total is the sum of `estAgents`, so it isn't stored.
+- `version` goes up whenever a field is added; the schema allows no other properties.
 - The foreman updates `status` as crews start and merge.
 - The hooks treat the file as read-only.
 
 ### 9. Hooks
 
 - **Wave gate:** an Agent call starting a `foundry:lead` whose slug is in `plan.json` is refused while any crew in an earlier wave isn't `merged` or `dropped`. Reason: `wave <n> isn't merged yet: <slugs>`.
-- **Parallel cap:** starting a lead is also refused while `maxParallelCrews` crews are already `running`. Reason: `<n> crews running, the cap is <n>; start <slug> when one merges`.
-- **Approval gate:** when `approval` is `owner` and `approvedAt` is null, starting any lead is refused. Reason: `this run changes the design; get the owner's approval first`.
+- **Parallel cap:** starting a lead is also refused while `maxParallelCrews` crews are already `running`. Reason: `<running> crews running, the cap is <cap>; start <slug> when one merges`.
+- **Approval gate, run level:** when `approval` is `owner` and `approvedAt` is null, starting any lead in the plan is refused. Reason: `this run changes the design; get the owner's approval first`.
+- **Approval gate, crew level:** a crew whose `ownerApproval` is `pending` is refused on its own. Reason: `<slug> waits for the owner's approval`.
 - **No plan file, or a slug not in it:** no gate. 0.2.1 runs keep working.
 - **`/foundry`** shows each crew's wave, verdict and status from `plan.json`, then the 0.2.1 member lines.
 - **Failure:** the hooks fail open, like every other foundry hook.
