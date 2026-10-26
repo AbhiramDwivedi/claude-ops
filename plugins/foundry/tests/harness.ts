@@ -145,8 +145,16 @@ export function world($: Engine, on: On, options: Options = {}): World {
   return w
 }
 
-export const stop = (id: string, text: string, active = false) =>
-  ({ hook_event_name: 'SubagentStop', session_id: 's1', cwd: 'C:/r/.claude/worktrees/x', agent_id: id, agent_type: 'x', agent_transcript_path: '', stop_hook_active: active, last_assistant_message: text, transcript_path: '' }) as never
+export type Task = { id: string; type: string; status: string; description: string }
+
+// a world whose crews have no live descendants: every non-lead agent has finished
+export const quiet = (w: World): World => {
+  w.agents = w.agents.map(a => (a.type === LEAD_TYPE || a.id === 'X' || a.id === 'C1' ? a : { ...a, status: 'completed' }))
+  return w
+}
+
+export const stop = (id: string, text: string, active = false, tasks?: Task[]) =>
+  ({ background_tasks: tasks, hook_event_name: 'SubagentStop', session_id: 's1', cwd: 'C:/r/.claude/worktrees/x', agent_id: id, agent_type: 'x', agent_transcript_path: '', stop_hook_active: active, last_assistant_message: text, transcript_path: '' }) as never
 
 export const handBack = ($: Engine, id: string, message: string) => $.tool.call({ tool: 'SubagentHandback', message, agentId: id } as never)
 
