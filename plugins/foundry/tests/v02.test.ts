@@ -293,6 +293,17 @@ test('arms once per resetsAt however often the limit is reported', async ($, on)
   expect(resets(w.prompts).length).toBe(1)
 })
 
+test('the module guard wakes once when $.state never records the fire and the limit keeps being reported', async ($, on) => {
+  const w = world($, on, { fireRecordFails: true })
+  await startSession($)
+  const at = resetAt(30 * MIN)
+  for (let i = 0; i < 3; i++) {
+    await measure($, limit(at))
+    await w.clock.advance(30 * MIN + RESET_GRACE_MS)
+  }
+  expect(resets(w.prompts).length).toBe(1)
+})
+
 test('a later resetsAt arms a new wake', async ($, on) => {
   const w = world($, on)
   await startSession($)
@@ -476,6 +487,22 @@ test('never gates an agent outside every crew', async ($, on) => {
   world($, on)
   expect(((await $.classic.SubagentStop(stop('X', 'chatter'))) as { block?: string }).block).toBeUndefined()
   expect(((await $.classic.SubagentStop(stop('C1', 'chatter'))) as { block?: string }).block).toBeUndefined()
+})
+
+test('a stopping agent not yet listed is gated by its event\'s agent_type', async ($, on) => {
+  quiet(world($, on))
+  expect(((await $.classic.SubagentStop(stop('U1', 'chatter', false, undefined, LEAD_TYPE))) as { block?: string }).block?.startsWith('[foundry]')).toBe(true)
+  expect(((await $.classic.SubagentStop(stop('U2', 'chatter'))) as { block?: string }).block).toBeUndefined()
+})
+
+test('a lead\'s hand-back the gate could send back is not written at hand-back time, only by the stop that goes through', async ($, on) => {
+  const w = world($, on)
+  const path = `${ROOT}/reports/auth/auth.md`
+  await handBack($, 'L1', 'just a note')
+  expect(w.files.has(path)).toBe(false)
+  // A1 is still running, so the stop is interim and goes through
+  expect(((await $.classic.SubagentStop(stop('L1', 'Done.'))) as { block?: string }).block).toBeUndefined()
+  expect(w.files.get(path)).toBe('just a note')
 })
 
 test('never gates a foundry:lead another agent started', async ($, on) => {

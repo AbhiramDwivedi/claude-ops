@@ -15,6 +15,8 @@ export type Options = {
   listFails?: boolean
   writeFails?: boolean
   stateFails?: boolean
+  // a $.state write that records a limit reset as fired throws
+  fireRecordFails?: boolean
   submitFails?: boolean
   dirFails?: boolean
   // what the settings hooks beneath add to a SessionStart
@@ -105,6 +107,7 @@ export function world($: Engine, on: On, options: Options = {}): World {
   })
   on('state.set', async (_, e) => {
     if (options.stateFails) throw new Error('state is down')
+    if (options.fireRecordFails && (e as { value?: { fired?: unknown } }).value?.fired === true) throw new Error('state write lost')
     const k = key(e as never)
     const have = w.versions.get(k) ?? 0
     const want = (e as { ifVersion?: number }).ifVersion
