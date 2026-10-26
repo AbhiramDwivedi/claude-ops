@@ -123,7 +123,7 @@ Every hook fails open. If foundry's own code throws, the call goes on as if the 
 - Where an organization manages Claude Code, `SubagentStop` hooks run only in plugins it lists. There, reports are captured only from the hand-back tool. The lead stop gate is a `SubagentStop` hook too, so it shouldn't run there either; that is inferred from the code, not seen.
 - `agents/lead.md` tells a lead to load `subagent-limits:split-work`, a skill from the [subagent-limits](../subagent-limits) plugin, when it is available. A run without that plugin hasn't been tested.
 - The plan gates trust the foreman's `status` field. A foreman that marks a crew `merged` too early lets the next wave start on code that isn't there. The gates guard against forgetting, not against lying; the judge-gated merge is still the real control.
-- TODO: say whether the 0.3.0 prompts (the architect, `/foundry:init`, the plan flow) and the plan gates have run in a live run. Nothing in the repo records it.
+- No 0.3.0 prompt (the architect, `/foundry:init`, the plan flow) or plan gate has run in a live run yet.
 - The gate's two-block bound relies on Claude Code sending `stop_hook_active` on the stop after a block, which hasn't been seen live; Claude Code lets a stop through itself after 8 consecutive blocks.
 
 ## Install
