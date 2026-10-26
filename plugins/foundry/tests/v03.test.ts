@@ -185,7 +185,7 @@ test('v03 allow: ownerApproval approved', async ($, on) => {
 
 test('v03 allow: a crew already merged, dropped or running is not refused for that alone', async ($, on) => {
   const w = world($, on)
-  setPlan(w, [crew('m', 0, 'merged'), crew('d', 0, 'dropped'), crew('r', 0, 'running')], { maxParallelCrews: 1 })
+  setPlan(w, [crew('m', 0, 'merged'), crew('d', 0, 'dropped'), crew('r', 0, 'running')], { maxParallelCrews: 3 })
   await expectAllowed(w, 'm')
   await expectAllowed(w, 'd')
   await expectAllowed(w, 'r')
