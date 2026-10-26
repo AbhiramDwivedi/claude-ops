@@ -88,7 +88,7 @@ Run it in the foreground. The plugin doesn't save its report, so read its hand-b
 - `agentCap` and `maxParallelCrews`, from `.claude/foundry.json` or the defaults;
 - the plan schema's absolute path, `<plugin>/docs/plan.schema.json`, where `<plugin>` is two levels above this skill's base directory (`<plugin>/skills/run`).
 
-The architect gives each module the goal touches a verdict, `extend` by default or `change`, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. Its draft sets `approval` to `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise, leaves `approvedAt` null, and sets every crew's `status` to `"planned"`. From here you own both files: you set `approvedAt` and each crew's `status`, and you add mid-run design slices.
+The architect gives each module the goal touches a verdict, `extend` by default or `change`, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. Its draft sets `approval` to `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise, and sets every crew's `status` to `"planned"`. An owner draft leaves `approvedAt` null; an auto draft carries the architect's write time there, because `plan.schema.json` requires a date-time when `approval` is `"auto"`. That time isn't an approval: you overwrite it with your own log time when you auto-start. From here you own both files: you set `approvedAt` and each crew's `status`, and you add mid-run design slices.
 
 Check the draft before anyone sees it. Send it back to the architect, with what's wrong, if:
 
@@ -134,7 +134,7 @@ Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, 
 
 1. Take the merge mode and target from `merge` and `target` in `.claude/foundry.json`. Without them, the merge mode is `sequential` and the target is the current branch.
 2. Log which merge mode and target you used, and where each came from.
-3. Set `approvedAt` to now.
+3. Overwrite the architect's `approvedAt` with now, the time of the log line in step 2.
 4. Add the merge mode, the target and the members you chose to `plan.md`.
 5. Go to section 6. The owner sees the plan in the end-of-run report.
 
@@ -151,7 +151,7 @@ Ask the owner two more things:
 
 When the owner approves, set `approvedAt` to now and add the merge mode, the target and the members to `plan.md`. Later waves start as earlier ones merge, with no further pause.
 
-Either way, expand the scope here, once: the altitude, the depth pass and the red teams are where it grows. Once `approvedAt` is set, the scope is frozen. Start nothing before then. Questions still reach the owner through the cynic's rules in both cases: an auto-started run isn't a silent one.
+Either way, expand the scope here, once: the altitude, the depth pass and the red teams are where it grows. Once you set `approvedAt`, the scope is frozen. Start nothing before then; an auto draft's own `approvedAt` doesn't count. Questions still reach the owner through the cynic's rules in both cases: an auto-started run isn't a silent one.
 
 ## 6. Write the goal files and start the leads by wave
 
