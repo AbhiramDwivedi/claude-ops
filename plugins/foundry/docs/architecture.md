@@ -255,7 +255,7 @@ One file lives in the project repo, not the foundry folder:
 <repo>/.claude/foundry.json  0.3.0: the project's foundry config
 ```
 
-`init` writes `architecture` and `adr`; from 0.4.0 it also proposes `roles`, `deploy`, `writingSkill` and `promptOverrides`, and writes those the owner approves. The owner can add any key by hand; each but the first two has a default. The contract is [`foundry-config.schema.json`](foundry-config.schema.json) ([ADR-0002](adr/0002-kit-manifest-and-config.md)); a key it doesn't declare is reported and ignored:
+`init` writes `architecture` and `adr`; from 0.4.0 it also proposes `roles`, `deploy`, `writingSkill` and `promptOverrides`, and writes those the owner approves. The owner can add any key by hand; each but the first two has a default. The contract is [`foundry-config.schema.json`](foundry-config.schema.json) ([ADR-0002](adr/0002-kit-manifest-and-config.md)). A key it doesn't declare, at any depth, is reported and ignored; a declared key whose value it rejects is reported and treated as unset. When init writes, errors in what the owner wrote are reported by path and kept, and only an error in what init itself is writing stops the write:
 
 | Key | Written by | Default | Used for |
 | --- | --- | --- | --- |

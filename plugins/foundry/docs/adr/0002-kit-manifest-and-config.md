@@ -29,7 +29,7 @@ The judge and cynic are the declared types because both are `tools: Read, Grep, 
 
 ### 2. New foundry.json keys
 
-The contract is [`foundry-config.schema.json`](../foundry-config.schema.json), which also declares the 0.3.0 keys. Every new key is optional, and leaving it out keeps 0.3.0 behaviour (P9). The file has no `version`: its keys are only ever added, and a reader reports an undeclared key to the owner and ignores it.
+The contract is [`foundry-config.schema.json`](../foundry-config.schema.json), which also declares the 0.3.0 keys. Every new key is optional, and leaving it out keeps 0.3.0 behaviour (P9). The file has no `version`: its keys are only ever added. A reader reports an undeclared key, at any depth, to the owner and ignores it, and treats a value that fails the schema as unset (below).
 
 | Key | Shape | Default | Read by |
 | --- | --- | --- | --- |
@@ -38,9 +38,14 @@ The contract is [`foundry-config.schema.json`](../foundry-config.schema.json), w
 | `writingSkill` | a skill name, such as `technical-writer` | none | the writer's brief: load it when listed, else say so |
 | `promptOverrides` | foundry role (`lead`, `judge`, `cynic`, `writer`, `devops`, `architect`) to `.claude/foundry/prompts/<name>.md` | none | briefs (below) |
 
-init proposes these from the manifest and the repo. `roles` comes from the manifest's agents, for example `build: kit:builder`, `test: kit:test-writer`, `review: kit:reviewer`, `search: kit:scout`; `deploy` from what the repo shows. init shows the owner the proposed keys and writes only the approved ones. It writes only keys the schema declares, keeps every key already in the file, and validates the result with `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats -s <foundry-config.schema.json> -d .claude/foundry.json`, as the architect does for `plan.json`.
+init proposes these from the manifest and the repo. `roles` comes from the manifest's agents, for example `build: kit:builder`, `test: kit:test-writer`, `review: kit:reviewer`, `search: kit:scout`; `deploy` from what the repo shows. init shows the owner the proposed keys and writes only the approved ones. It writes only keys the schema declares and keeps every key and value already in the file, at any depth.
 
-The schema is closed (`additionalProperties: false`), so a top-level key the owner added by hand that the schema doesn't declare fails that validation. init doesn't treat that failure as fatal. It names each such key to the owner as undeclared and ignored by foundry, keeps it in the file unchanged, and carries on: it never deletes or rewrites the owner's key. Any other validation error is on a key init wrote. init then puts the file back as it was before its write, reports the error, and writes nothing.
+**Validation, and what init does with errors it didn't cause.** The schema is closed at the top level and inside `roles`, `deploy` and `promptOverrides` (`additionalProperties: false`), and its enums and patterns also apply to keys the owner wrote by hand. So a file can fail validation for reasons init had no part in: a stray key at any depth, or a bad owner value such as an out-of-enum `merge`. init builds the file it would write (the current file plus the approved values) as a candidate outside the repo, `<foundry dir>/scratch/foundry.candidate.json`, and validates the candidate with `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats --all-errors --errors=json -s <foundry-config.schema.json> -d <candidate>`, as the architect does for `plan.json`. It then sorts each error by its path: the error's `instancePath`, plus `/<params.additionalProperty>` for an `additionalProperties` error or `/<params.missingProperty>` for a `required` one. So a hand-written `roles.judge` is `/roles/judge`, and a `deploy` without `production` is `/deploy/production`.
+
+- **An error at a path init did not write in this run** (owner-written, at any depth) is not fatal. init reports it to the owner by path (for example `/merge: must be equal to one of the allowed values` or `/roles/judge: undeclared, ignored`), keeps it unchanged, and carries on: it still writes its approved values. It never deletes, rewrites or "fixes" what the owner wrote.
+- **An error at a path init is writing in this run**, or inside one, stops the write. init writes nothing, `.claude/foundry.json` stays exactly as it was, and init reports the error with its path.
+
+Readers (the run skill, the foreman's briefs) treat the file the same way. An undeclared key, at any depth, is reported once and ignored. A declared key whose value fails the schema is reported once and treated as unset, so its default applies.
 
 ### 3. Prompt overrides name files, and the briefs carry them
 
