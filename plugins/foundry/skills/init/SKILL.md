@@ -84,7 +84,7 @@ Show the owner each proposed key with its value and where it came from, and ask 
 ## 7. Validate, then write
 
 1. Find the foundry dir from the `[foundry] dir: <path>` note the plugin adds at session start, or the `Foundry dir:` line `/foundry` prints. Don't derive it. If neither is there, tell the owner the foundry plugin isn't loaded, write nothing, and go to step 8.
-2. Build the candidate: the current `.claude/foundry.json` with every key and value kept, plus the approved values. Keep the file's key order, put new keys at the end, and indent by two spaces. Write it to `<foundry dir>/scratch/foundry.candidate.json`. In the main session use the Write tool. An agent isolated in a worktree is refused Write and Edit outside its worktree, and a heredoc there; it writes the file with plain Bash instead: `mkdir -p <foundry dir>/scratch`, then `printf '%s' '<the JSON>' > <foundry dir>/scratch/foundry.candidate.json`, with each `'` in the JSON written as `'\''`.
+2. Build the candidate: the current `.claude/foundry.json` with every key and value kept, plus the approved values. Keep the file's key order, put new keys at the end, and indent by two spaces. Write it to `<foundry dir>/scratch/foundry.candidate.json`. Write it with the Write tool. If the write is refused, whether by worktree isolation or by a declined approval, write nothing: say the write was refused, name the path, say init must run in the main session with that write allowed, and go to step 8. Never route around a refusal with another tool.
 3. Validate it:
 
    ```
@@ -97,7 +97,7 @@ Show the owner each proposed key with its value and where it came from, and ask 
    - **At a path you write:** write nothing. `.claude/foundry.json` stays exactly as it was. Report the error with its path, and go to step 8.
    - **At a proper ancestor of a path you write** (the owner's value there can't hold your key, such as `roles: "x"` when you'd add `/roles/build`): drop every path you planned under it, keep the owner's value, and report both, as in `/roles: must be object; skipped /roles/build, /roles/test`. Build the candidate again without them and validate again from step 2. The root is an ancestor of every path, so a file that isn't a JSON object gets nothing written.
    - **Anywhere else:** it's the owner's (an unrelated key, or a sibling of yours such as a hand-written `/roles/judge` next to your `/roles/build`). Report it once by path, for example `/merge: must be equal to one of the allowed values` or `/roles/judge: undeclared, ignored`, keep it unchanged, and carry on. Never delete, rewrite or "fix" what the owner wrote.
-6. When no errors are left but the owner's, and you still have paths to write, copy the candidate over the file in one step: `cp <foundry dir>/scratch/foundry.candidate.json <repo>/.claude/foundry.json`. Tell the owner each path you wrote.
+6. When no errors are left but the owner's, and you still have paths to write, copy the candidate over the file in one step: `cp <foundry dir>/scratch/foundry.candidate.json <repo>/.claude/foundry.json`. If the copy is refused, apply the same rule: write nothing more, say it was refused, name `<repo>/.claude/foundry.json`, say init must run in the main session with that write allowed, and go to step 8. Otherwise tell the owner each path you wrote.
 
 ## 8. Tell the owner where things stand, and stop
 

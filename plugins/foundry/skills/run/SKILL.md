@@ -57,7 +57,7 @@ Check the file against `<plugin>/docs/foundry-config.schema.json` (`<plugin>` as
 - **`deploy` fails closed, as a whole.** Any error at or inside `/deploy` (a wrong type, a missing or bad field, an undeclared key) unsets the whole `deploy` key, so the devops member asks its lead, as when `deploy` is absent. Never fill in or default one field of `deploy`: a missing or non-boolean `production` is never read as `false`.
 - **`roles` unsets only the bad entry.** A job whose agent type fails the schema is picked from the inventory, as if it weren't listed; the other jobs keep their mapping. When `roles` itself is rejected (not an object, or empty), every job is picked from the inventory.
 - **`promptOverrides` unsets only the bad entry.** A role whose file fails the pattern has no override; the other roles keep theirs. When `promptOverrides` itself is rejected, no role has an override.
-- Any other declared key whose value fails the schema is unset, so its default applies.
+- Any other declared key whose value fails the schema is unset, so its default applies; `architecture` and `adr` have no default, so a rejected one counts as init missing.
 
 Crews work in worktrees, which see only committed files. If the architecture doc, its ADRs or `.claude/foundry.json` have uncommitted changes, ask the owner to commit them before any lead starts.
 
