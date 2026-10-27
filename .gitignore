@@ -6,3 +6,5 @@ __pycache__/
 # agent worktrees and local Claude Code settings
 .claude/worktrees/
 .claude/settings.local.json
+# local secrets
+.env
