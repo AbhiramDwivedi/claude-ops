@@ -197,6 +197,35 @@ class RetroEdges(unittest.TestCase):
         self.assertEqual(run["freeform"], 3)
         self.assertEqual(run["decisions"]["total"], 1)
 
+    # --- half-failed roll: events.<n>.jsonl byte-identical to events.jsonl must count once ---
+
+    def test_identical_rolled_events_file_counts_once(self):
+        self.write("decisions.md", "## Run 2026-01-01T00:00:00Z | g\n")
+        line = ev("2026-01-01T01:00:00Z", "spawn", model="opus", effort="high") + "\n"
+        self.write("events.1.jsonl", line)
+        self.write("events.jsonl", line)
+        self.assertEqual(self.run_raw()["runs"][0]["spawns"]["total"], 1)
+
+    def test_identical_rolled_messages_file_counts_once(self):
+        self.write("decisions.md", "## Run 2026-01-01T00:00:00Z | g\n")
+        line = json.dumps({"ts": "2026-01-01T01:00:00Z", "from": "a", "to": "b"}) + "\n"
+        self.write("messages.1.jsonl", line)
+        self.write("messages.jsonl", line)
+        self.assertEqual(self.run_raw()["runs"][0]["messages"], 1)
+
+    def test_different_rolled_files_both_count(self):
+        self.write("decisions.md", "## Run 2026-01-01T00:00:00Z | g\n")
+        a = ev("2026-01-01T01:00:00Z", "spawn", model="opus", effort="high") + "\n"
+        b = ev("2026-01-01T01:00:00Z", "spawn", model="opus", effort="low") + "\n"
+        self.write("events.1.jsonl", a)
+        self.write("events.jsonl", b)  # same size, different bytes
+        m = json.dumps({"ts": "2026-01-01T01:00:00Z"}) + "\n"
+        self.write("messages.1.jsonl", m)
+        self.write("messages.jsonl", m + m)  # rolled file is a prefix of the live one
+        out = self.run_raw()["runs"][0]
+        self.assertEqual(out["spawns"]["total"], 2)
+        self.assertEqual(out["messages"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

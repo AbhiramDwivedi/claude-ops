@@ -13,6 +13,7 @@ only as far as its first non-empty line.
 """
 import datetime
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -109,6 +110,42 @@ def list_files(directory, pattern):
         return []
     return [os.path.join(directory, n) for n in sorted(names)
             if fnmatch.fnmatchcase(n, pattern) and os.path.isfile(os.path.join(directory, n))]
+
+
+def drop_duplicate_files(paths):
+    """Drop a file whose bytes equal an earlier file in the list.
+
+    A half-failed roll in register.ts's appendLine copies events.jsonl to events.<n>.jsonl and then
+    fails to rewrite events.jsonl, leaving two identical files; reading both counts every line twice.
+    Only whole-file duplicates go; a rolled file that is a prefix of the live one still counts.
+    Size is compared first and the hash is streamed, so a big log is never loaded whole.
+    """
+    kept, by_size, digests = [], {}, {}
+
+    def digest(path):
+        if path not in digests:
+            digests[path] = file_digest(path)
+        return digests[path]
+
+    for path in paths:
+        try:
+            same_size = by_size.setdefault(os.path.getsize(path), [])
+            if same_size and any(digest(k) == digest(path) for k in same_size):
+                continue
+        except OSError:
+            kept.append(path)  # unreadable: let the normal reader deal with it
+            continue
+        same_size.append(path)
+        kept.append(path)
+    return kept
+
+
+def file_digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def new_run(started, goal, start_dt):
@@ -337,8 +374,8 @@ def read_plan(directory):
 def retro(directory):
     runs, pre, pre_used = read_decisions(os.path.join(directory, "decisions.md"))
     has_headings = bool(runs)
-    event_files = list_files(directory, "events*.jsonl")
-    message_files = list_files(directory, "messages*.jsonl")
+    event_files = drop_duplicate_files(list_files(directory, "events*.jsonl"))
+    message_files = drop_duplicate_files(list_files(directory, "messages*.jsonl"))
 
     pre_msgs = process_messages(message_files, runs, pre)
     skipped, outside = process_events(event_files, runs)
