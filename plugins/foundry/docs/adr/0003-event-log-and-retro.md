@@ -1,7 +1,7 @@
 # ADR-0003: an event log, a decision-log grammar, and a retro script that counts them
 
-Status: proposed
-Proposed on 2026-10-26 by foundry run 2's design crew, for foundry 0.4.0. It applies repo [ADR-0012](../../../../docs/adr/0012-extension-framework.md) and is accepted or sent back with it.
+Status: accepted, 2026-10-27
+Proposed on 2026-10-26 by foundry run 2's design crew, for foundry 0.4.0. It applies repo [ADR-0012](../../../../docs/adr/0012-extension-framework.md) and was accepted with it on 2026-10-27.
 
 ## Context
 

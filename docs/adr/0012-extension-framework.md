@@ -1,7 +1,7 @@
 # ADR-0012: plugins extend each other through manifests the base owns
 
-Status: proposed
-Proposed on 2026-10-26 by foundry run 2's design crew, against `main` at `b665583`. The owner accepts it, or sends it back, at wave 0's merge, together with the per-module ADRs that apply it: [ADR-0013](0013-kit-manifest.md), [ADR-0014](0014-worktrees-declared-read-only-agents.md), [foundry ADR-0002](../../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md) and [foundry ADR-0003](../../plugins/foundry/docs/adr/0003-event-log-and-retro.md).
+Status: accepted, 2026-10-27
+Proposed on 2026-10-26 by foundry run 2's design crew, against `main` at `b665583`. Accepted on 2026-10-27 in the foreman's acceptance review at wave 0's merge, with that review's fixes, together with the per-module ADRs that apply it: [ADR-0013](0013-kit-manifest.md), [ADR-0014](0014-worktrees-declared-read-only-agents.md), [foundry ADR-0002](../../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md) and [foundry ADR-0003](../../plugins/foundry/docs/adr/0003-event-log-and-retro.md).
 
 ## Context
 
@@ -35,7 +35,7 @@ Sources: `plugins/foundry/.claude-plugin/types/claude-code/index.d.ts` (the engi
 3. **An extension reads and never edits.** To add to a base's manifest, an extension runs the base's own skill, whose approval step the owner sees. Only the base's script writes the file.
 4. **Nothing extends by rewriting another plugin's prompt.** No `skill.prompt` handler for another plugin's skill, and no `$.agent.register` of another plugin's agent type. A plugin may append a note under its own prefix to prompts, as subagent-limits does, and it owns that note's tests.
 5. **Dependencies are soft.** No plugin lists another under plugin.json `dependencies`. An extension detects the base (the skill is listed, or the manifest file exists), degrades to its behaviour without the base, and says so in one line.
-6. **Unknown means today's behaviour.** A reader that finds the manifest missing, unreadable, invalid, or at a `version` it doesn't know treats it as absent and logs why under its own prefix (P5, P7).
+6. **Unknown means today's behaviour.** A reader that finds the manifest missing, unreadable, invalid, or at a `version` it doesn't know treats it as absent. A missing manifest is the normal case without the base, so it logs nothing (as [ADR-0014](0014-worktrees-declared-read-only-agents.md), Decision, does for worktrees). Only an unreadable, invalid or wrong-version manifest logs why, under the reader's own prefix (P5, P7).
 7. **A declaration that relaxes a default matches exactly and comes only from an owner-approved source.** Today that is kit's manifest, written after kit init's approval step, or a plugin's own declaration in its own code. Never an arbitrary project file (P9). Matching is on the full agent type (`foundry:judge`), case-folded as worktrees does today, never on the bare name. An explicit setting on the call (`isolation`) wins over any declaration.
 
 ### Extension points declared by this run
@@ -46,8 +46,9 @@ Sources: `plugins/foundry/.claude-plugin/types/claude-code/index.d.ts` (the engi
 | kit | `kit:init` with `declare read-only: <type>, ...`: how another plugin adds its read-only types to the manifest, through the owner's approval | `plugins/kit/skills/init/SKILL.md` (kit crew, wave 1) | foundry init | 0013 |
 | worktrees | read-only types: no worktree for a type the kit manifest marks `readOnly` | `plugins/worktrees/README.md` (worktrees crew, wave 1) | Claude Code `Agent` calls | 0014 |
 | worktrees | `PORT_BASE` per worktree slot (already shipped) | worktrees README, setup-script contract | the project's setup script; foundry crews | 0005 |
-| foundry | `.claude/foundry.json` keys | `plugins/foundry/docs/foundry-config.schema.json` | foundry's skills and agents | foundry ADR-0002 |
-| foundry | `<foundry dir>/events.jsonl` and the `decisions.md` grammar | `plugins/foundry/docs/events.schema.json`; foundry module doc, "On disk" | `foundry retro` | foundry ADR-0003 |
+| foundry | `<foundry dir>/events.jsonl` | `plugins/foundry/docs/events.schema.json`; foundry module doc, "On disk" | `foundry retro` | foundry ADR-0003 |
+
+Two other foundry contracts from this run are foundry's own declared config and grammar, **not** extension points: `.claude/foundry.json` (contract `plugins/foundry/docs/foundry-config.schema.json`, [foundry ADR-0002](../../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md)) and the `decisions.md` grammar ([foundry ADR-0003](../../plugins/foundry/docs/adr/0003-event-log-and-retro.md), section 2). Each has a declared contract that foundry's own code and tests hold it to, but foundry doesn't offer either for other plugins to build on, so rules 1 and 3 don't bind them. `.claude/foundry.json` also has no `version`, which rule 1 wouldn't allow for an extension point. Its departure from P29 is recorded in foundry ADR-0002, Consequences.
 
 ### Ports
 

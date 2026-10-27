@@ -4,7 +4,7 @@ This repo is the `claude-ops` plugin marketplace for Claude Code: seven plugins 
 
 foundry has its own, deeper module doc: [`plugins/foundry/docs/architecture.md`](../plugins/foundry/docs/architecture.md), with [foundry ADR-0001](../plugins/foundry/docs/adr/0001-design-phase.md) (the design phase, principle packs and plan file). That doc stays the source for foundry's internals; this one links to it rather than repeating it. Repo-level ADRs are in [`docs/adr/`](adr/) and are cited here as ADR-00NN; foundry's own is always written "foundry ADR-0001".
 
-Recorded on 2026-10-26 from the code at commit `0954e71`. foundry run 2's design crew added the extension framework on 2026-10-26, against `b665583`: [ADR-0012](adr/0012-extension-framework.md) (proposed) and the ADRs that apply it. Where this doc says kit 0.2.0, worktrees 0.6.0 or foundry 0.4.0, it describes that design; the code catches up when the run's wave 1 merges. `.claude/worktrees/` holds agent worktrees and is not part of the repo; `plugins/context-limits/` is an untracked, ignored leftover with no tracked files and no marketplace entry, and is not a module.
+Recorded on 2026-10-26 from the code at commit `0954e71`. foundry run 2's design crew added the extension framework on 2026-10-26, against `b665583`: [ADR-0012](adr/0012-extension-framework.md) and the ADRs that apply it, accepted on 2026-10-27. Where this doc says kit 0.2.0, worktrees 0.6.0 or foundry 0.4.0, it describes that design; the code catches up when the run's wave 1 merges. `.claude/worktrees/` holds agent worktrees and is not part of the repo; `plugins/context-limits/` is an untracked, ignored leftover with no tracked files and no marketplace entry, and is not a module.
 
 ## Principles
 
@@ -99,7 +99,7 @@ Dropped: frontend 1, 3, 5 to 8 and 10 to 14. There is no component tree, client 
 
 workflow-audit is a small batch job: transcripts in, `metrics.json` and samples out, read by its skill. kit's miner is a smaller one.
 
-- **P29. Stored shapes are declared and versioned.** (data 3 and 5) `metrics.json`, `experiments.json`, `catalog/practices.json` and `catalog/prices.json` are declared in `plugins/workflow-audit/CONTRACT.md`; `metrics.json` and the parse cache carry version numbers; `plan.json` has `plan.schema.json` and `version`; plugin-state types are in `types/index.d.ts` (ADR-0007).
+- **P29. Stored shapes are declared and versioned.** (data 3 and 5) `metrics.json`, `experiments.json`, `catalog/practices.json` and `catalog/prices.json` are declared in `plugins/workflow-audit/CONTRACT.md`; `metrics.json` and the parse cache carry version numbers; `plan.json` has `plan.schema.json` and `version`; plugin-state types are in `types/index.d.ts` (ADR-0007). Known departure: `.claude/foundry.json` is declared (`foundry-config.schema.json`) but unversioned, since foundry 0.3.0. It gets a `version` on its first change of meaning ([foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), Consequences).
   Test: a diff that adds, renames or retypes a field in a stored shape updates its declaration and, for a rename or retype, its version, and keeps reading the old shape or says why not.
 - **P30. Consumers read only declared fields.** (data 4) Test: a skill or hook in the diff reads no field of `metrics.json`, `plan.json` or the catalog that the contract doesn't declare.
 - **P31. Raw input is read-only.** (data 6) Scripts never write to `~/.claude/projects/`; their output and caches go to their own directories (`~/.claude/workflow-audit/`).
@@ -293,7 +293,7 @@ flowchart TB
   slots[("claude-worktrees/slots.json<br/>[git common dir]")]
   setup[".claude/worktree-setup.sh, .ps1<br/>[project script]<br/>Per-worktree setup"]
   finit["foundry:init<br/>[skill]<br/>Builds on kit, 0.4.0"]
-  fjson[(".claude/foundry.json<br/>[extension point, 0.4.0]")]
+  fjson[(".claude/foundry.json<br/>[foundry's own config, 0.4.0]")]
   frun["foundry:run and hooks<br/>[skill, hooks module]<br/>Foreman and crews"]
   fdir[("foundry/session id/<br/>[git common dir]<br/>plan.json, decisions.md, events.jsonl")]
   retro["scripts/retro.py, 0.4.0<br/>[script]<br/>Counts what a run did"]
@@ -322,12 +322,13 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 | Extension point: `.claude/kit/manifest.json`, kit 0.2.0 (checks, agents with `readOnly`, risky paths, setup scripts) | kit (`scripts/kit_manifest.py`, only after the owner approves) | worktrees, kit's stop gate, foundry init | `plugins/kit/docs/manifest.schema.json` | 0012, 0013 |
 | Extension point: `kit:init` with `declare read-only: <type>, ...`, kit 0.2.0 | kit | foundry init | `plugins/kit/skills/init/SKILL.md` | 0012, 0013 |
 | Extension point: read-only types declared through kit's manifest, worktrees 0.6.0 | worktrees | Claude Code `Agent` calls | `plugins/worktrees/README.md` | 0012, 0014 |
-| Extension point: `<foundry dir>/events.jsonl` and the `decisions.md` grammar, foundry 0.4.0 | foundry hooks, foreman | `scripts/retro.py` | `plugins/foundry/docs/events.schema.json`; module doc "On disk" | foundry 0003 |
+| Extension point: `<foundry dir>/events.jsonl`, foundry 0.4.0 | foundry hooks | `scripts/retro.py` | `plugins/foundry/docs/events.schema.json`; module doc "On disk" | 0012, foundry 0003 |
+| `<foundry dir>/decisions.md` grammar, foundry 0.4.0 (foundry's own grammar, not an extension point) | foreman; the hooks stamp `HH:MM` | `scripts/retro.py` | module doc "decisions.md grammar (0.4.0)" | foundry 0003 |
 | `.claude/worktree-setup.sh` / `.ps1` and its env | kit (writes), project owner | worktrees (runs); from foundry 0.4.0, crews read `PORT_BASE` through what the script writes | `plugins/worktrees/README.md`, "The `.claude/worktree-setup` contract" | 0005 |
 | `.claude/worktrees/<name>`, branch `worktree-<name>` | worktrees | kit init (ignore entries), `kit_mine.py`, workflow-audit project mapping, foundry | worktrees README; `CONTRACT.md` metrics version 3 note | 0005 |
 | `<git common dir>/claude-worktrees/slots.json` | worktrees | worktrees in other sessions | type in `register.ts` | 0006 |
 | `<git common dir>/foundry/<session id>/`, `plan.json` | foundry architect, foreman, hooks | foundry hooks and roles | `plugins/foundry/docs/plan.schema.json`; module doc "On disk" | 0006, foundry 0001 |
-| Extension point from 0.4.0: `.claude/foundry.json` | foundry init, owner | foundry run skill, architect | `plugins/foundry/docs/foundry-config.schema.json`; module doc config table | foundry 0001, foundry 0002 |
+| `.claude/foundry.json`, keys added in 0.4.0 (foundry's own config, not an extension point; unversioned, see foundry ADR-0002) | foundry init, owner | foundry run skill, architect | `plugins/foundry/docs/foundry-config.schema.json`; module doc config table | foundry 0001, foundry 0002 |
 | `.claude/kit/review-checklist.md`, `CLAUDE.md` section | kit init | kit agents; foundry lead and devops read `CLAUDE.md` | `skills/init/SKILL.md`, section 2 | 0001 |
 | `.claude/settings.json` gate hooks, `.claude/kit/*-gate.*` | kit init; from 0.2.0 `kit_manifest.py` re-renders the stop gate's skip line between its markers | Claude Code | `skills/init/hooks-reference.md` | 0008, 0013 |
 | Subagent prompt contract (`CONTRACT`) | subagent-limits | every subagent | exported constant in `register.ts`, tested in `tests/ctx-study.test.ts` | 0001 |
@@ -352,12 +353,12 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 - [ADR-0009](adr/0009-independent-plugin-versions.md): each plugin carries its own semver version, and every shipped change moves it.
 - [ADR-0010](adr/0010-dated-catalog-refreshed-by-pr.md): workflow-audit's advice is a dated data catalog, refreshed weekly through a PR.
 - [ADR-0011](adr/0011-agents-pin-their-model.md): agent types pin their model, so picking the agent picks the model.
-- [ADR-0012](adr/0012-extension-framework.md), proposed: plugins extend each other through versioned manifests the base owns; no prompt rewriting, soft dependencies only, exact-match declarations from owner-approved sources.
-- [ADR-0013](adr/0013-kit-manifest.md), proposed: kit records what it set up in `.claude/kit/manifest.json`, written by `kit_manifest.py`, and renders the stop gate's skip list from it.
-- [ADR-0014](adr/0014-worktrees-declared-read-only-agents.md), proposed: worktrees gives no worktree to agent types kit's manifest declares read-only.
+- [ADR-0012](adr/0012-extension-framework.md), accepted 2026-10-27: plugins extend each other through versioned manifests the base owns; no prompt rewriting, soft dependencies only, exact-match declarations from owner-approved sources.
+- [ADR-0013](adr/0013-kit-manifest.md), accepted 2026-10-27: kit records what it set up in `.claude/kit/manifest.json`, written by `kit_manifest.py`, and renders the stop gate's skip list from it.
+- [ADR-0014](adr/0014-worktrees-declared-read-only-agents.md), accepted 2026-10-27: worktrees gives no worktree to agent types kit's manifest declares read-only.
 - [foundry ADR-0001](../plugins/foundry/docs/adr/0001-design-phase.md): foundry's design phase, principle packs, extend-or-change verdicts and plan file.
-- [foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), proposed: foundry init builds on kit's manifest; new `foundry.json` keys; ports from worktrees' slots.
-- [foundry ADR-0003](../plugins/foundry/docs/adr/0003-event-log-and-retro.md), proposed: the event log, the `decisions.md` grammar and `scripts/retro.py`.
+- [foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), accepted 2026-10-27: foundry init builds on kit's manifest; new `foundry.json` keys; ports from worktrees' slots.
+- [foundry ADR-0003](../plugins/foundry/docs/adr/0003-event-log-and-retro.md), accepted 2026-10-27: the event log, the `decisions.md` grammar and `scripts/retro.py`.
 
 ## Open questions
 

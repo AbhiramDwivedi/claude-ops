@@ -1,7 +1,7 @@
 # ADR-0002: foundry init builds on kit's manifest, and foundry.json describes jobs
 
-Status: proposed
-Proposed on 2026-10-26 by foundry run 2's design crew, for foundry 0.4.0. It applies repo [ADR-0012](../../../../docs/adr/0012-extension-framework.md) and is accepted or sent back with it.
+Status: accepted, 2026-10-27
+Proposed on 2026-10-26 by foundry run 2's design crew, for foundry 0.4.0. It applies repo [ADR-0012](../../../../docs/adr/0012-extension-framework.md) and was accepted with it on 2026-10-27.
 
 ## Context
 
@@ -40,6 +40,8 @@ The contract is [`foundry-config.schema.json`](../foundry-config.schema.json), w
 
 init proposes these from the manifest and the repo. `roles` comes from the manifest's agents, for example `build: kit:builder`, `test: kit:test-writer`, `review: kit:reviewer`, `search: kit:scout`; `deploy` from what the repo shows. init shows the owner the proposed keys and writes only the approved ones. It writes only keys the schema declares, keeps every key already in the file, and validates the result with `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats -s <foundry-config.schema.json> -d .claude/foundry.json`, as the architect does for `plan.json`.
 
+The schema is closed (`additionalProperties: false`), so a top-level key the owner added by hand that the schema doesn't declare fails that validation. init doesn't treat that failure as fatal. It names each such key to the owner as undeclared and ignored by foundry, keeps it in the file unchanged, and carries on: it never deletes or rewrites the owner's key. Any other validation error is on a key init wrote. init then puts the file back as it was before its write, reports the error, and writes nothing.
+
 ### 3. Prompt overrides name files, and the briefs carry them
 
 `promptOverrides` stores paths, never prompt text (P21). The files are the owner's, committed in the project. They add to a role's prompt and never replace it: no `skill.prompt` hook, no re-registered agent type (repo ADR-0012, rule 4). The foreman writes a `Prompt overrides:` line in each goal file, naming the role and file for every configured role. Each lead's brief names the lead's file. The lead puts the right line into each judge, writer and devops brief: "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold." The foreman does the same for the cynic and the architect. A missing file is reported and skipped.
@@ -74,4 +76,5 @@ foundry goes to 0.4.0 (P16).
 - A project without kit gets 0.3.0 behaviour plus the new keys, and its judges and cynics still get worktrees unless the owner sets worktrees' `noIsolateAgents`.
 - foundry init can now start a second skill that writes into the project. Each write still goes through that skill's own approval step.
 - Port slices stop overlapping, because worktrees' slot lock allocates them (repo ADR-0006). A repo with no setup script gets no ports, and has to say what it needs.
+- `.claude/foundry.json` has no `version`, which departs from P29 (stored shapes are declared and versioned). The departure dates from 0.3.0, and this ADR widens it by adding keys. Keys that are only added and optional keep every older reader working, and the closed schema declares each one. The file gets a `version` key, and the schema a matching `const`, on the first change of meaning: a key renamed, removed, or read differently. This ADR adds no `version` now. It is foundry's own config, not an extension point (repo ADR-0012, "Extension points declared by this run").
 - Prompt overrides are text the owner wrote and the base's tests never see. They only add instructions, and the hooks still enforce what code can (repo ADR-0008).
