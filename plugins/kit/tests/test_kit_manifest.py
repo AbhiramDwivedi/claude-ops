@@ -112,6 +112,37 @@ class KitManifest(unittest.TestCase):
             self.put("manifest.json", fixture.replace(b'"version": 1,', b'"version": 1.0,'))
             self.ok(self.declare("foundry", "foundry:judge"))
 
+    def test_infinity_and_nan_are_not_json(self):
+        with open(FIXTURE, "rb") as f:
+            fixture = f.read()
+        for constant in ("Infinity", "-Infinity", "NaN"):
+            with self.subTest(constant=constant):
+                facts = json.dumps(fixture_facts()).replace('"checks": [', '"checks": [%s, ' % constant, 1)
+                self.err(self.run_script("write", "--repo", self.repo, "--facts", "-", stdin=facts), "BAD_JSON", 2)
+                data = fixture.replace(b'"version": 1,', b'"version": ' + constant.encode() + b",")
+                self.put("manifest.json", data)
+                for r in (self.write(), self.declare("foundry", "foundry:judge")):
+                    self.err(r, "MANIFEST_CORRUPT", 3)
+                    self.assertIn("isn't JSON", r.stderr)
+                    self.assertEqual(self.raw(self.manifest), data)
+
+    @unittest.skipIf(os.name != "nt" and os.geteuid() == 0, "root reads a mode-000 file")
+    def test_unreadable_manifest_is_an_io_error_not_corrupt(self):
+        self.put("stop-gate.sh", self.SH.encode())
+        self.ok(self.write())
+        if os.name == "nt":
+            user = getpass.getuser()
+            subprocess.run(["icacls", self.manifest, "/deny", user + ":(R)"], check=True, capture_output=True)
+            self.addCleanup(subprocess.run, ["icacls", self.manifest, "/remove:d", user], capture_output=True)
+        else:
+            os.chmod(self.manifest, 0)
+            self.addCleanup(os.chmod, self.manifest, 0o644)
+        before = self.snapshot()
+        for r in (self.write(), self.declare("foundry", "foundry:judge")):
+            self.err(r, "IO_ERROR", 1)
+            self.assertIn("can't read %s: " % self.manifest, r.stderr)
+            self.assertEqual(self.snapshot(), before)
+
     def test_deeply_nested_json_is_one_line_not_a_traceback(self):
         deep = "[" * 200000 + "]" * 200000
         self.err(self.run_script("write", "--repo", self.repo, "--facts", "-", stdin=deep), "BAD_JSON", 2)
@@ -405,7 +436,8 @@ class KitManifest(unittest.TestCase):
         self.assertEqual(len(err.splitlines()), 1, err)
         kept = {}
         for target, backup in re.findall(
-                r"couldn't restore ([^;]+): Permission denied; old bytes kept in ([^;\n]+)", err):
+                r"; ([^;]+) now holds the new bytes \(couldn't restore it: Permission denied\), "
+                r"old bytes kept in ([^;\n]+)", err):
             kept[os.path.basename(target)] = backup
         self.assertEqual(sorted(kept), ["manifest.json", "stop-gate.sh"])
         for name, backup in kept.items():
@@ -423,6 +455,112 @@ class KitManifest(unittest.TestCase):
         self.assertRegex(err, r"^kit_manifest: IO_ERROR: can't write [^\n]*manifest\.json: Permission denied; left "
                               r"[^\n]*\.tmp: Permission denied\n$")
         self.assertIn(os.path.join(self.kitdir, left), err)
+
+    def test_failed_first_write_names_the_manifest_it_could_not_remove(self):
+        self.put("stop-gate.sh", self.SH.encode())
+        self.put("stop-gate.ps1", self.PS1.encode("utf-8"))
+        before = self.snapshot()
+        # The manifest is renamed into place, stop-gate.sh's rename fails, and so does removing the new manifest.
+        with mock.patch("os.replace", self.fail_from(os.replace, 2)), mock.patch("os.remove", self.fail_from(os.remove, 1)):
+            _, code, err = self.in_process("write", "--repo", self.repo, "--facts", self.facts_file())
+        self.assertEqual(code, 1, err)
+        self.assertIn("; %s now holds the new bytes (couldn't remove it: Permission denied)" % self.manifest, err)
+        self.assertEqual(self.raw(self.manifest), self.clean_run(before, "write")["manifest.json"])
+        for gate in ("stop-gate.sh", "stop-gate.ps1"):
+            self.assertEqual(self.raw(os.path.join(self.kitdir, gate)), before[gate])
+
+    def test_every_failed_write_names_exactly_the_files_holding_new_bytes(self):
+        """Fault the renames and removals many ways; the line's claims must match the bytes on disk."""
+        self.put("stop-gate.sh", self.SH.encode())
+        self.put("stop-gate.ps1", self.PS1.encode("utf-8"))
+        gates_only = self.snapshot()
+        self.ok(self.write())
+        with_manifest = self.snapshot()
+        faults = [("replace#%d" % n, [("replace", self.fail_nth, n)]) for n in (1, 2, 3)]
+        faults += [("replace#%d+" % n, [("replace", self.fail_from, n)]) for n in (1, 2, 3, 4)]
+        faults += [(label + ",remove+", fs + [("remove", self.fail_from, 1)]) for label, fs in list(faults)]
+        failed = 0
+        for command, before in (("declare", with_manifest), ("write", gates_only)):
+            new = self.clean_run(before, command)
+            for label, fs in faults:
+                with self.subTest(command=command, faults=label):
+                    self.reset(before)
+                    args = (["declare", "--repo", self.repo, "--by", "foundry", "--read-only", "foundry:judge"]
+                            if command == "declare" else ["write", "--repo", self.repo, "--facts", self.facts_file()])
+                    with contextlib.ExitStack() as stack:
+                        stack.enter_context(mock.patch("time.sleep"))  # retried's pauses only slow the sweep
+                        for name, how, n in fs:  # each os call fails as how says
+                            stack.enter_context(mock.patch.object(os, name, how(getattr(os, name), n)))
+                        _, code, err = self.in_process(*args)
+                    if code != 0:
+                        failed += 1
+                        self.assert_claims_match_disk(err, before, new)
+        self.assertGreater(failed, 20)
+
+    def facts_file(self):
+        path = os.path.join(self.tmp, "facts.json")
+        facts = fixture_facts()
+        facts["agents"] = [a for a in facts["agents"] if a["declaredBy"] in ("kit", "project")]
+        facts["agents"].append({"name": "newone", "readOnly": True, "declaredBy": "project"})
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(facts, f)
+        return path
+
+    def reset(self, files):
+        shutil.rmtree(self.kitdir)
+        for name, data in files.items():
+            self.put(name, data)
+
+    def clean_run(self, before, command):
+        """The bytes each file in .claude/kit holds after the command runs with no faults, from before."""
+        self.reset(before)
+        args = (["declare", "--repo", self.repo, "--by", "foundry", "--read-only", "foundry:judge"]
+                if command == "declare" else ["write", "--repo", self.repo, "--facts", self.facts_file()])
+        _, code, err = self.in_process(*args)
+        self.assertEqual((code, err), (0, ""))
+        after = self.snapshot()
+        self.assertTrue(all(after[n] != before.get(n) for n in after), "a clean run changes every file")
+        self.reset(before)
+        return after
+
+    def assert_claims_match_disk(self, err, before, new):
+        """Every file the line names as holding new bytes does, with its old bytes where it says; nothing else changed."""
+        self.assertTrue(err.startswith("kit_manifest: IO_ERROR: can't write "), err)
+        self.assertEqual(len(err.splitlines()), 1, err)
+        clauses = err.rstrip("\n").split("; ")[1:]
+        claimed, kept, left = set(), set(), set()
+        for clause in clauses:
+            m = re.fullmatch(r"(.+) now holds the new bytes \(couldn't (restore|remove) it: Permission denied\)"
+                             r"(?:, old bytes kept in (.+))?", clause)
+            if m:
+                path, verb, backup = m.groups()
+                name = os.path.relpath(path, self.kitdir)
+                claimed.add(name)
+                self.assertEqual(self.raw(path), new[name], clause)
+                self.assertEqual(verb == "remove", name not in before, clause)
+                self.assertEqual(backup is None, name not in before, clause)
+                if backup:
+                    self.assertEqual(self.raw(backup), before[name], clause)
+                    kept.add(os.path.basename(backup))
+                continue
+            m = re.fullmatch(r"left (.+\.tmp): Permission denied", clause)
+            self.assertIsNotNone(m, "a clause that is neither a claim nor a leftover: %r" % clause)
+            self.assertTrue(os.path.exists(m.group(1)), clause)
+            left.add(os.path.basename(m.group(1)))
+        for name in new:
+            if name not in claimed:
+                self.assertEqual(self.snapshot().get(name), before.get(name), "%s changed but isn't named: %s" % (name, err))
+        self.assertEqual(set(self.temps()), kept | left, err)
+
+    def test_details_keep_their_spaces_but_not_their_line_breaks(self):
+        spaced = os.path.join(self.tmp, "two  spaces   three")
+        os.makedirs(spaced)
+        r = self.run_script("declare", "--repo", spaced, "--by", "foundry", "--read-only", "foundry:judge")
+        self.err(r, "NO_MANIFEST", 3)
+        self.assertIn(os.path.join(spaced, ".claude", "kit", "manifest.json") + " doesn't exist", r.stderr)
+        with mock.patch("os.path.isdir", side_effect=OSError(5, "I/O\r\n\nerror  here")):
+            _, code, err = self.declare_in_process()
+        self.assertEqual((code, err), (1, "kit_manifest: IO_ERROR: [Errno 5] I/O error  here\n"))
 
     @unittest.skipIf(shutil.which("pwsh") is None, "no pwsh on PATH")
     def test_rendered_ps1_skips_declared_agent_case_insensitively(self):
