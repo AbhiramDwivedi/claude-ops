@@ -200,6 +200,8 @@ Everything for a session lives under one folder:
   reports/<crew>/<agent>.interim.md  plugin: a lead's interim stop
   messages.jsonl             plugin: lead-to-lead messages
   messages.<n>.jsonl         plugin: the log rolled over, past 3 MiB
+  scratch/                   0.3.0, architect: plan-mode scratch output
+  scratch/foundry.candidate.json  0.4.0, init: the config it would write, validated before the write (ADR-0002)
 ```
 
 The plugin writes only `reports/`, the message logs and (0.4.0) the event logs. The foreman writes `decisions.md`, `plan.md` and `goals/`, as `skills/run/SKILL.md` tells it to; the plugin only stamps the time on new `decisions.md` lines (see Decision times).
@@ -255,7 +257,7 @@ One file lives in the project repo, not the foundry folder:
 <repo>/.claude/foundry.json  0.3.0: the project's foundry config
 ```
 
-`init` writes `architecture` and `adr`; from 0.4.0 it also proposes `roles`, `deploy`, `writingSkill` and `promptOverrides`, and writes those the owner approves. The owner can add any key by hand; each but the first two has a default. The contract is [`foundry-config.schema.json`](foundry-config.schema.json) ([ADR-0002](adr/0002-kit-manifest-and-config.md)). A key it doesn't declare, at any depth, is reported and ignored; a declared key whose value it rejects is reported and treated as unset. When init writes, errors in what the owner wrote are reported by path and kept, and only an error in what init itself is writing stops the write:
+`init` writes `architecture` and `adr`; from 0.4.0 it also proposes `roles`, `deploy`, `writingSkill` and `promptOverrides`, and writes those the owner approves. The owner can add any key by hand; each but the first two has a default. The contract is [`foundry-config.schema.json`](foundry-config.schema.json) ([ADR-0002](adr/0002-kit-manifest-and-config.md)). A key it doesn't declare is reported and ignored; a declared value it rejects is reported and unset. Inside `roles` and `promptOverrides` that unsets only the bad entry. `deploy` fails closed: any error inside it, an undeclared key included, unsets the whole key, so devops asks its lead. When init writes, errors in what the owner wrote are reported by path and kept; an owner value of the wrong shape to hold a key init would add, such as `roles: "x"`, is kept and that key is skipped; and only an error at a path init itself is writing stops the write:
 
 | Key | Written by | Default | Used for |
 | --- | --- | --- | --- |
