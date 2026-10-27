@@ -100,3 +100,13 @@ test('each promptOverrides value pattern takes a file directly under .claude/fou
     assert.ok(!re.test('.claude/foundry/prompts/a/b.md'), `${role}: accepts .claude/foundry/prompts/a/b.md`)
   }
 })
+
+// ---------- 5. run skill: decisions.md grammar (ADR-0003) ----------
+
+// docs/adr/0003-event-log-and-retro.md:59: "Each `## Run <start> | <goal>` heading starts a run."
+test('run names the "## Run <start> | <goal>" heading form', () =>
+  has(run(), '## Run <start> | <goal>', 'skills/run/SKILL.md'))
+
+// docs/adr/0003-event-log-and-retro.md:37: "- HH:MM | cynic-<n> RECOMMEND <answer|defer|pass>: <text> | <outcome>"
+test('run names the "cynic-<n> RECOMMEND" decision line form', () =>
+  has(run(), 'cynic-<n> RECOMMEND', 'skills/run/SKILL.md'))
