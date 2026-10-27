@@ -34,7 +34,7 @@
       "enum": ["auto", "owner"]
     },
     "approvedAt": {
-      "description": "Set by the foreman, as an RFC 3339 date-time with a time-zone offset (JSON Schema format date-time), for example 2026-10-26T14:03:00+01:00 or 2026-10-26T13:03:00Z. A date-time with no offset is invalid. An \"auto\" run gets the time the foreman logged the plan; an \"owner\" run gets the time the owner approved. Null only while a run waits for the owner; while approval is \"owner\" and this is null, the run-level approval gate refuses every lead in the plan.",
+      "description": "An RFC 3339 date-time with a time-zone offset (JSON Schema format date-time), for example 2026-10-26T14:03:00+01:00 or 2026-10-26T13:03:00Z. A date-time with no offset is invalid. The architect's draft sets it: an \"auto\" draft carries the time the architect wrote the plan, which the foreman overwrites with the time it logged the plan; an \"owner\" draft carries null, which the foreman replaces with the time the owner approved. The allOf rule requires a string when approval is \"auto\". Null only while a run waits for the owner; while approval is \"owner\" and this is null, the run-level approval gate refuses every lead in the plan.",
       "type": ["string", "null"],
       "format": "date-time"
     },

@@ -71,7 +71,7 @@ It never edits source or tests. It runs in three modes.
   - The draft sets `approval`: `owner` when the plan has a wave-0 crew, `auto` otherwise.
   - The foreman owns both files after that: it checks `approval`, sets `approvedAt`, and updates `status`.
 - **design:**
-  - A member of a wave-0 design crew, started by that crew's lead.
+  - A member of a design crew, started by that crew's lead. A design crew sits in wave 0 or, as a mid-run design slice (section 7), in a later wave.
   - It writes the ADR and the architecture-doc change for each `change` verdict, and names the seams the crew's test-writer must pin with contract tests.
 
 ### 4. Extend or change, decided by Opus
