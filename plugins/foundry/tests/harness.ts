@@ -59,6 +59,11 @@ export type World = {
   usageLimits: { kind: string; percentUsed: number; resetsAt?: string }[]
   // optional: an fs.read of a path held here waits for that promise first (empty: reads answer at once, as before)
   holds: Map<string, Promise<void>>
+  // optional, one-shot: the next fs.write of a path held here waits for that promise, then lands; the hold is used up
+  // (empty: writes land at once, as before)
+  writeHolds: Map<string, Promise<void>>
+  // optional: an fs.write of a path this answers true for throws (unset: every write lands, as before)
+  failWrite?: (path: string) => boolean
   send: (from: string | undefined, to: unknown, message?: string) => Promise<ToolCallResult>
   agentCall: (from: string | undefined, input: Record<string, unknown>) => Promise<ToolCallResult>
   // a tool call by an agent, the activity a heartbeat watches
@@ -92,6 +97,7 @@ export function world($: Engine, on: On, options: Options = {}): World {
     listCalls: 0,
     usageLimits: [],
     holds: new Map(),
+    writeHolds: new Map(),
     send: (from, to, message = 'm') => $.tool.call({ tool: 'SendMessage', to, message, summary: 'merge order', agentId: from } as never),
     agentCall: (from, input) => $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', agentId: from, ...input } as never),
     activity: (from, tool = 'Read') => $.tool.call({ tool, file_path: 'x', agentId: from } as never),
@@ -156,6 +162,12 @@ export function world($: Engine, on: On, options: Options = {}): World {
   })
   on('fs.write', async (_, e) => {
     if (options.writeFails) throw new Error('disk full')
+    if (w.failWrite?.(slashed(e.path))) throw new Error('disk hiccup')
+    const held = w.writeHolds.get(slashed(e.path))
+    if (held) {
+      w.writeHolds.delete(slashed(e.path))
+      await held
+    }
     w.files.set(slashed(e.path), e.text)
     return { value: undefined }
   })

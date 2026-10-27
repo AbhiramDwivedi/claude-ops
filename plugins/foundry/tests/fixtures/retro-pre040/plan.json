@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "goal": "synthetic goal for the retro contract test",
+  "architecture": "docs/architecture.md",
+  "approval": "owner",
+  "approvedAt": "2026-03-04T15:00:00Z",
+  "agentCap": 20,
+  "maxParallelCrews": 3,
+  "crews": [
+    { "slug": "quartz", "wave": 1, "verdict": "change", "modules": ["quartz"], "owns": ["src/quartz/**"], "doneCheck": "npm test", "doneCheckProved": true, "estAgents": 3, "status": "merged" },
+    { "slug": "ferry", "wave": 1, "verdict": "extend", "modules": ["ferry"], "owns": ["src/ferry/**"], "doneCheck": "npm test", "doneCheckProved": true, "estAgents": 4, "status": "merged" },
+    { "slug": "lantern", "wave": 2, "verdict": "change", "modules": ["lantern"], "owns": ["src/lantern/**"], "doneCheck": "npm test", "doneCheckProved": false, "estAgents": 5, "status": "failed" }
+  ]
+}

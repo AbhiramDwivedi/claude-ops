@@ -60,6 +60,37 @@ export function needsWorktree(input: { isolation?: unknown; subagent_type?: unkn
   return !readOnly.has(type) && !readOnly.has(type.slice(type.lastIndexOf(':') + 1))
 }
 
+// the agent name pattern of kit's manifest (plugins/kit/docs/manifest.schema.json)
+const MANIFEST_AGENT_NAME = /^[A-Za-z0-9_-]{1,64}(:[A-Za-z0-9_-]{1,64})?$/
+
+// Folds A-Z only. Declared manifest names are ASCII (MANIFEST_AGENT_NAME), and toLowerCase() would also fold U+212A
+// KELVIN SIGN into "k", letting a lookalike call type borrow a declared name's read-only exemption.
+const asciiLower = (s: string): string => s.replace(/[A-Z]/g, c => c.toLowerCase())
+
+// The agent types kit's manifest declares read-only (repo ADR-0014), from the text of `.claude/kit/manifest.json`:
+// the case-folded full name of each entry with `readOnly: true` and a name the schema allows. A bad entry adds
+// nothing and the rest still count. A file that isn't JSON, isn't an object, has a version other than 1 or has no
+// agents array declares nothing and says why in `error`.
+export function declaredReadOnly(text: string): { types: Set<string>; error?: string } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    return { types: new Set(), error: String(error) }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { types: new Set(), error: 'not a JSON object' }
+  const file = parsed as { version?: unknown; agents?: unknown }
+  if (file.version !== 1) return { types: new Set(), error: `version ${JSON.stringify(file.version)}, not 1` }
+  if (!Array.isArray(file.agents)) return { types: new Set(), error: 'no agents array' }
+  const types = new Set<string>()
+  for (const entry of file.agents as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const { name, readOnly } = entry as { name?: unknown; readOnly?: unknown }
+    if (readOnly === true && typeof name === 'string' && MANIFEST_AGENT_NAME.test(name)) types.add(asciiLower(name))
+  }
+  return { types }
+}
+
 // the Agent call's arguments with isolation set, and nothing else of the envelope
 export function withWorktree(e: Record<string, unknown>): Record<string, unknown> {
   const input: Record<string, unknown> = {}
@@ -677,6 +708,36 @@ async function repoAt($: $, cwd?: string): Promise<Repo | undefined> {
   return { top: top.out, common: common.out, mainRoot: common.out.replace(/[\\/]\.git$/, '') }
 }
 
+// Whether kit's manifest in the main checkout declares this Agent call's type read-only (repo ADR-0014). Read on
+// every call, never cached. A full-name match only: no bare-name fallback. Anything that goes wrong is false, so the
+// call keeps today's behaviour; an absent file is silent, any other failure goes to the debug log.
+async function declaredByKit($: $, input: Record<string, unknown>): Promise<boolean> {
+  try {
+    const type = typeof input.subagent_type === 'string' && input.subagent_type !== '' ? input.subagent_type : 'general-purpose'
+    const common = await git($, undefined, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    if (!common.ok || !/[\\/]\.git$/.test(common.out)) return false
+    const path = `${common.out.replace(/[\\/]\.git$/, '')}/.claude/kit/manifest.json`
+    if (!(await $.fs.exists(path))) return false
+    let text: string
+    try {
+      text = await $.fs.read(path)
+    } catch (error) {
+      if (String(error).includes('ENOENT')) return false
+      throw error
+    }
+    const declared = declaredReadOnly(text)
+    if (declared.error !== undefined) throw new Error(declared.error)
+    return declared.types.has(asciiLower(type))
+  } catch (error) {
+    try {
+      await $.ui.log(`worktrees: kit manifest unreadable, ignoring it: ${String(error)}`, { to: 'debug' })
+    } catch {
+      // the log is best effort: the call goes on as today
+    }
+    return false
+  }
+}
+
 type AgentWorktree = { repo: Repo; path: string; branch: string }
 
 // The worktree an agent runs in, when the plugin can identify it: the `.claude/worktrees/<name>` folder `cwd` lies
@@ -1233,6 +1294,7 @@ export const register: Register = (on, options) => {
         return next(e)
       }
     }
+    if (await declaredByKit($, input)) return next(e)
     const result = await next(e)
     if (result.deny !== undefined || result.updatedInput !== undefined) return result
     return { ...result, updatedInput: withWorktree(input) }

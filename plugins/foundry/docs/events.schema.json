@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AbhiramDwivedi/claude-ops/plugins/foundry/docs/events.schema.json",
+  "title": "foundry event log line",
+  "description": "One line of <foundry dir>/events.jsonl (rolled to events.<n>.jsonl past 3 MiB), appended by foundry's hooks from 0.4.0 (foundry ADR-0003). Each line is one JSON object matching this schema. Read by scripts/retro.py, which skips a line that isn't JSON or has a v it doesn't know, and counts the skips. No line holds message, prompt or report text (P8).",
+  "type": "object",
+  "required": ["v", "ts", "event", "crew", "agent"],
+  "properties": {
+    "v": { "description": "The line's shape. Goes up when a field is renamed or retyped.", "const": 1 },
+    "ts": { "description": "The engine clock, as toISOString() gives it (UTC, Z).", "type": "string", "format": "date-time" },
+    "event": { "enum": ["spawn", "stall", "tag", "report"] },
+    "crew": { "description": "The crew's name: its lead's spawn name, as reports/<crew>/ uses it.", "type": "string", "minLength": 1 },
+    "agent": { "description": "The agent the event is about, by its spawn name, else its id. For spawn: the new agent (the caller is by); for stall: the idle agent; for tag: the lead; for report: the reporting agent.", "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event": { "const": "spawn" } } },
+      "then": {
+        "description": "A crew agent's or a lead's Agent call that the engine let through.",
+        "additionalProperties": false,
+        "required": ["agentId", "type", "model", "effort", "by"],
+        "properties": {
+          "v": true, "ts": true, "event": true, "crew": true, "agent": true,
+          "agentId": { "type": ["string", "null"] },
+          "type": { "description": "subagent_type, or general-purpose when unset.", "type": "string", "minLength": 1 },
+          "model": { "description": "The model the call asked for, or null.", "type": ["string", "null"] },
+          "effort": { "description": "The effort the call asked for, or null.", "type": ["string", "null"] },
+          "by": { "description": "main for the foreman, else the calling agent's spawn name.", "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "stall" } } },
+      "then": {
+        "description": "One stall or idle-lead wake, when its prompt goes out.",
+        "additionalProperties": false,
+        "required": ["kind", "minutes"],
+        "properties": {
+          "v": true, "ts": true, "event": true, "crew": true, "agent": true,
+          "kind": { "enum": ["agent", "idle-lead"] },
+          "minutes": { "description": "Whole minutes idle, rounded down: the number the wake's prompt shows.", "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "tag" } } },
+      "then": {
+        "description": "A lead's tagged message to main.",
+        "additionalProperties": false,
+        "required": ["tag"],
+        "properties": {
+          "v": true, "ts": true, "event": true, "crew": true, "agent": true,
+          "tag": { "enum": ["QUESTION", "BLOCKED", "PROPOSAL"] }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "report" } } },
+      "then": {
+        "description": "A crew agent's final report written to its report file (not an interim stop).",
+        "additionalProperties": false,
+        "required": ["marker"],
+        "properties": {
+          "v": true, "ts": true, "event": true, "crew": true, "agent": true,
+          "marker": {
+            "description": "The report's leading marker, from its first non-empty line, or null.",
+            "enum": ["VERDICT: PASS", "VERDICT: FAIL", "REDTEAM", "CHECKPOINT", "BLOCKED", "QUESTION", "PROPOSAL", null]
+          }
+        }
+      }
+    }
+  ]
+}

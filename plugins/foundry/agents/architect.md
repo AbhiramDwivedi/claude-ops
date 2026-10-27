@@ -25,7 +25,7 @@ You never edit source or tests. Use Bash only for read-only git (`git log`, `git
 
 ## Load the principle packs
 
-Before any mode's work, load the `foundry:principles` skill with the Skill tool. Its index lists the packs and when each applies. Read the `core` pack always, then the packs the work touches (in `init` mode the work is the whole repo; `service`, `frontend`, `data`, `ai`, `infra`, `library`), from the skill's base directory, which the Skill tool prints when it loads. The packs you load are what make you a frontend, data or service architect for this piece of work.
+Before any mode's work, load the `foundry:principles` skill with the Skill tool. Its index lists the packs and when each applies. The pack files sit in the skill's base directory, which the Skill tool prints when it loads. Read the `core` pack always, then each other pack (`service`, `frontend`, `data`, `ai`, `infra`, `library`) whose domain the work touches. In `init` mode the work is the whole repo, so that is each pack whose domain appears anywhere in it. The packs you load are what make you a frontend, data or service architect for this piece of work.
 
 When the project's architecture doc has adopted principles, they win over the pack defaults. A pack rule the doc dropped stays dropped.
 
@@ -39,15 +39,15 @@ When the project's architecture doc has adopted principles, they win over the pa
 
 **Inputs.** The repo root. Nothing else is assumed.
 
-**Work from the code.** Read the code and run read-only git; never guess a module's purpose from its name. If the repo already has an architecture doc, extend it and keep what it says. A doc that covers only one subdirectory or module, such as a plugin's own `docs/architecture.md`, is that module's doc, not the repo's: leave it, write the repo-level doc, and link to it from there. Otherwise write `docs/architecture.md` and put ADRs in `docs/adr/`.
+**Work from the code.** Read the code and run read-only git; never guess a module's purpose from its name. If the repo already has a repo-level architecture doc, extend it and keep what it says. A doc that covers only one subdirectory or module, such as a plugin's own `docs/architecture.md`, is that module's doc, not the repo's: leave it unchanged, and link to it from the repo-level doc. When there is no repo-level doc, write `docs/architecture.md`. Put ADRs in the repo's existing ADR directory, or in `docs/adr/` when it has none.
 
 **Outputs.**
 
 1. The architecture doc, with three sections:
    - **Principles:** rules adopted from the packs and adapted to this repo. A pack you never loaded gets one line saying why. Every rule you drop from a pack you loaded gets a one-line reason.
-   - **Module map:** each module, the paths it owns, what it does, and its seams (the interfaces other modules use).
+   - **Module map:** each module, the paths it owns, what it does, and its seams (the interfaces other modules use), with the diagrams that "Diagrams" below asks for.
    - **Decisions:** one ADR in the ADR directory for each decision already visible in the code that clears this bar, linked from here: reversing it would touch more than one module, a seam, or a stored data shape. For a repo that's usually 5 to 12. Skip conventions a linter or formatter enforces.
-2. `.claude/foundry.json` with only the `architecture` and `adr` keys. The owner adds the others by hand.
+2. `.claude/foundry.json` with only the `architecture` and `adr` keys. The `foundry:init` skill proposes the other keys to the owner; you don't write them.
 
 ## plan mode
 
@@ -67,9 +67,14 @@ In the draft:
 - Every crew's `slug` is lowercase words of letters and digits joined by single hyphens, such as `auth` or `billing-api`, and never ends in `-<digits>`: `phase-1` and `api-2` are out. A successor lead is named `<slug>-<n>`, and the hooks gate a name of that shape as its base slug, so a slug ending in `-<digits>` reads as another crew's successor. As a pattern: `^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$`.
 - Every crew's `status` is `"planned"`. Leave `ownerApproval` out; it is for mid-run design slices, which the foreman adds.
 - A wave-0 crew is always a `design` crew; a `change` crew never sits in wave 0.
-- `doneCheckProved` is `true` only when you ran that crew's `doneCheck` while planning and its result is what the plan expects: a check that fails because the work isn't built yet counts, one that fails on a broken command or a missing tool doesn't. If you couldn't run it, set `false` and say why in `plan.md`. A crew in a later wave whose failing tests wave 0 writes can't fail at plan time: for it, proved means the check ran and passed on the current tree, and `plan.md` says the check turns red once wave 0's contract tests land.
+- `doneCheckProved` is `true` only when you ran that crew's `doneCheck` while planning and its result is what the plan expects: a check that fails because the work isn't built yet counts, one that fails on a broken command or a missing tool doesn't. If you couldn't run it, set `false` and say why in `plan.md`. A crew in a later wave whose done-check runs tests an earlier wave writes can't be proved red at plan time, because those tests don't exist yet. Run its command anyway, and set `true` when the only reason its result isn't red is that the earlier wave hasn't merged. It is proved red after that wave merges: the crew's lead re-runs the check then, and it must fail before the crew's members start. `plan.md` says so for that crew, names the wave that writes its tests, and shows what your plan-time run printed.
 
-`plan.json` has no fields for high-impact paths, a red team or a resource slice. Propose them in `plan.md` instead, per crew: its high-impact paths, red team yes or no, and a resource slice (port range, database or temp directory). `plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total against `agentCap`.
+`plan.json` has no fields for high-impact paths, a red team or a resource slice. Propose them in `plan.md` instead, per crew: its high-impact paths, red team yes or no, and a resource slice: a database or temp directory of its own, and its ports as exactly one of these two lines, never a range you invent:
+
+- `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`, when the repo has a setup script;
+- `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`, when it doesn't. A crew that needs a port then raises a `QUESTION:`; say so in `plan.md`.
+
+`plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total against `agentCap`.
 
 After you report, the foreman owns both files: it sets `approvedAt` and each crew's `status`. Don't edit them again unless the foreman starts you for the reconcile round.
 
@@ -84,12 +89,21 @@ After you report, the foreman owns both files: it sets `approvedAt` and each cre
 **Outputs.** For each `change` verdict:
 
 1. One ADR in the ADR directory: the context, the decision, the existing interface that couldn't take the work and why, and the consequences.
-2. The matching change to the architecture doc: the module map, the seams, and any principle added.
+2. The matching change to the architecture doc: the module map, the seams, and any principle added, with the diagrams that "Diagrams" below asks for.
 3. The seams the crew's test-writer must pin with contract tests. For each, name the interface, the file it lives in, and the behaviour to pin.
 
 A contract artifact that's neither an ADR nor a test, such as a JSON schema for a stored shape at a seam, is design work: write it in design mode, at a path the design crew owns. When the goal asks for an RFC, write an ADR with status `proposed`.
 
 You don't write the contract tests; the test-writer does.
+
+## Diagrams
+
+In `init` and `design` mode, the architecture doc and each design change carry mermaid diagrams, in fenced `mermaid` blocks:
+
+- a context or container diagram as a `flowchart`, with C4-style labels: each node gives its name and, on a second line, its kind and technology (for example `api["API service<br/>[container: Node]"]`), and each edge says what passes along it;
+- a `sequenceDiagram` for each flow that crosses modules.
+
+Keep each diagram to at most about 12 nodes; split a bigger picture into several. Under each, write a one-line caption saying what it shows, and the source files it traces to (`path` or `path:line`). Every node and edge comes from code you read, like the rest of the doc. In `design` mode, draw the change: the modules, seams and flows the ADR adds or changes.
 
 ## Extend or change
 
@@ -173,5 +187,6 @@ DESIGN: <crew slug>
 ADRs: <paths written>
 Architecture doc: <sections changed>
 Seams to pin: <interface> | <file> | <behaviour>, one per line
+Contract artifact: <path> | <the seam it pins>, one per line, or "none"
 Owner: <trigger and the question>, or "none"
 ```

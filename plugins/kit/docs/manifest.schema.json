@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/AbhiramDwivedi/claude-ops/plugins/kit/docs/manifest.schema.json",
+  "title": "kit manifest",
+  "description": "What kit init set up in a project, at <repo>/.claude/kit/manifest.json. Written only by plugins/kit/scripts/kit_manifest.py, after the owner approves kit init's proposal (repo ADR-0013). Read by foundry init, worktrees and the stop gate kit renders; no reader edits it (repo ADR-0012). A reader that finds a version it doesn't know treats the file as absent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "kit", "checks", "agents", "riskyPaths", "setupScripts"],
+  "properties": {
+    "version": {
+      "description": "The manifest's shape. Goes up when a field is added, renamed or retyped.",
+      "const": 1
+    },
+    "kit": {
+      "description": "The kit version whose script wrote the file, such as 0.2.0.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "checks": {
+      "description": "The project's own checks that kit found and the owner approved, in the order kit init proposed them.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind", "command", "gate"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+          "kind": { "enum": ["test", "lint", "typecheck", "format", "build"] },
+          "command": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$" },
+          "gate": {
+            "description": "The kit gate that runs it: edit (after each edit), stop (before an agent stops) or none.",
+            "enum": ["edit", "stop", "none"]
+          }
+        }
+      },
+      "uniqueItems": true
+    },
+    "agents": {
+      "description": "Agent types the project uses, each with whether it is read-only. Sorted by name. A qualified name (plugin:name) is declared by that plugin; a bare name is a project agent under .claude/agents/.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "readOnly", "declaredBy"],
+        "properties": {
+          "name": {
+            "description": "The full agent type, matched exactly (case-insensitively) by readers: foundry:judge, never the bare judge.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}(:[A-Za-z0-9_-]{1,64})?$"
+          },
+          "readOnly": {
+            "description": "True when the type never edits files: it gets no worktree and the stop gate skips it.",
+            "type": "boolean"
+          },
+          "declaredBy": {
+            "description": "Who declared it: the plugin named by the type's prefix, or project for a bare name. kit_manifest.py refuses any other pairing (DECLARER_MISMATCH).",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          }
+        }
+      }
+    },
+    "riskyPaths": {
+      "description": "Paths where a wrong edit is costly (migrations, deploy config, generated code), with the reason kit init gave.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "why"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$" },
+          "why": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$" }
+        }
+      }
+    },
+    "setupScripts": {
+      "description": "The worktree setup scripts the project has, repo-relative. Non-empty means worktrees gives each worktree a PORT_BASE slot (repo ADR-0005).",
+      "type": "array",
+      "items": { "enum": [".claude/worktree-setup.sh", ".claude/worktree-setup.ps1"] },
+      "uniqueItems": true
+    }
+  }
+}

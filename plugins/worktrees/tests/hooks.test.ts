@@ -405,3 +405,27 @@ test('finishes a remove git failed after unregistering the worktree, and reports
   expect(ran).toContain('git branch -d worktree-agent-x1')
   expect(toasts).toEqual(['worktrees: removed merged worktree-agent-x1'])
 })
+
+// kit manifest read-only declarations fold ASCII letters only: declared names are ASCII (MANIFEST_AGENT_NAME),
+// so U+212A KELVIN SIGN must not lower-case into "k" and borrow the exemption of "kit:keeper"
+test('kit manifest match folds ASCII case only: KELVIN SIGN does not match a declared name', async ($, on) => {
+  const MANIFEST = 'C:/r/.claude/kit/manifest.json'
+  const text = JSON.stringify({ version: 1, kit: '0.2.0', checks: [], agents: [{ name: 'kit:keeper', readOnly: true, declaredBy: 'kit' }], riskyPaths: [], setupScripts: [] })
+  const seen: Record<string, unknown>[] = []
+  on('process.run', async (_, e) => {
+    const args = e.argv.join(' ')
+    const stdout = args.includes('--git-common-dir') ? 'C:/r/.git\n' : args.includes('--is-inside-work-tree') ? 'true\n' : ''
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.exists', async (_, e) => ({ value: e.path.replace(/\\/g, '/') === MANIFEST }))
+  on('fs.read', async () => ({ value: text }))
+  on('env.get', async () => ({ value: undefined }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.call', async (_, e) => {
+    seen.push(e as unknown as Record<string, unknown>)
+    return { result: 'ok' }
+  })
+  for (const t of ['\u212Ait:keeper', 'KIT:KEEPER', 'kit:keeper'])
+    await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: t } as never)
+  expect(seen.map(e => e.isolation)).toEqual(['worktree', undefined, undefined])
+})

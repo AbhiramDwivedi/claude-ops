@@ -9,6 +9,7 @@ import {
   decideSelfClean,
   countChanges,
   decideStop,
+  declaredReadOnly,
   findMergedPr,
   SESSION_CONTEXT,
   startContext,
@@ -43,6 +44,53 @@ import {
 } from '../hooks/register'
 
 const RO = noIsolateTypes('')
+
+const kitManifest = (agents: unknown, version: unknown = 1) =>
+  JSON.stringify({ version, kit: '0.2.0', checks: [], agents, riskyPaths: [], setupScripts: [] })
+
+test("reads the read-only types kit's manifest declares, case-folded and in full", async () => {
+  const r = declaredReadOnly(
+    kitManifest([
+      { name: 'Foundry:Judge', readOnly: true, declaredBy: 'foundry' },
+      { name: 'kit:builder', readOnly: false, declaredBy: 'kit' },
+      { name: 'helper', readOnly: true, declaredBy: 'project' },
+    ]),
+  )
+  expect(r.error).toBeUndefined()
+  expect([...r.types].sort()).toEqual(['foundry:judge', 'helper'])
+})
+
+test('a bad manifest entry adds nothing and the rest still count', async () => {
+  const r = declaredReadOnly(
+    kitManifest([
+      { name: 'bad name!', readOnly: true },
+      { name: 7, readOnly: true },
+      { name: 'a:b:c', readOnly: true },
+      { name: 'x'.repeat(65), readOnly: true },
+      { name: 'x:y', readOnly: 'yes' },
+      { readOnly: true },
+      null,
+      'foundry:cynic',
+      { name: 'foundry:judge', readOnly: true },
+    ]),
+  )
+  expect(r.error).toBeUndefined()
+  expect([...r.types]).toEqual(['foundry:judge'])
+})
+
+test('a manifest that is not JSON, not an object, not version 1 or has no agents array declares nothing', async () => {
+  const one = [{ name: 'a', readOnly: true }]
+  const bad = ['{not json', '', '[]', 'null', '"x"', '3', kitManifest(one, 2), kitManifest(one, '1'), JSON.stringify({ version: 1 }), kitManifest({ name: 'a', readOnly: true })]
+  for (const text of bad) {
+    const r = declaredReadOnly(text)
+    expect(r.types.size).toBe(0)
+    expect(typeof r.error).toBe('string')
+  }
+  // an empty agents array is a good file that declares nothing
+  const empty = declaredReadOnly(kitManifest([]))
+  expect(empty.error).toBeUndefined()
+  expect(empty.types.size).toBe(0)
+})
 
 test('gives an editing agent a worktree, and a reading one none', async () => {
   expect(needsWorktree({ subagent_type: 'general-purpose' }, true, RO)).toBe(true)

@@ -6,52 +6,103 @@ The prompts decide what agents should do. The hooks refuse the calls that break 
 
 Foundry 0.3.0 adds a design phase: an architect, principle packs, a plan file and waves. [ADR-0001](adr/0001-design-phase.md) decides it. The parts are `agents/architect.md`, the `skills/principles/` and `skills/init/` skills, and the plan gates in `hooks/register.ts`, which read `plan.json`. The plan file's contract is [`plan.schema.json`](plan.schema.json), with an example in [`plan.example.json`](plan.example.json).
 
+Foundry 0.4.0 (designed in foundry run 2, ADRs accepted 2026-10-27) builds on kit and records what a run did. [ADR-0002](adr/0002-kit-manifest-and-config.md): foundry init reads kit's manifest, has kit declare `foundry:judge` and `foundry:cynic` read-only, and proposes the new `.claude/foundry.json` keys ([`foundry-config.schema.json`](foundry-config.schema.json)); crews take ports from worktrees' slots. [ADR-0003](adr/0003-event-log-and-retro.md): the hooks append `events.jsonl` ([`events.schema.json`](events.schema.json)), `decisions.md` gets a grammar, and `scripts/retro.py` with the `foundry:retro` skill counts both. Both apply the repo's extension rules, [repo ADR-0012](../../../docs/adr/0012-extension-framework.md). Until wave 1 of that run merges, the sections below marked 0.4.0 describe the design, not the code.
+
+The container view below shows which part writes and which reads each stored file. Nodes marked 0.4.0 are designed, not built.
+
+```mermaid
+flowchart TB
+  run["foundry:run<br/>[skill: skills/run/SKILL.md]<br/>Makes the main session the foreman"]
+  init["foundry:init<br/>[skill: skills/init/SKILL.md]<br/>Checks the architecture doc"]
+  arch["foundry:architect<br/>[agent: agents/architect.md]<br/>Writes the doc, ADRs and draft plan"]
+  crew["Crew agents<br/>[agents: lead, judge, cynic, writer, devops]<br/>Do and check the work"]
+  hooks["Hooks module<br/>[hooks/register.ts]<br/>Gates, report capture, wakes"]
+  retro["retro, 0.4.0<br/>[scripts/retro.py, foundry:retro]<br/>Counts what a run did"]
+  fjson[(".claude/foundry.json<br/>[project config]")]
+  kitman[("kit's .claude/kit/manifest.json<br/>[kit's store, read from 0.4.0]")]
+  plan[("plan.json, plan.md<br/>[foundry dir]")]
+  dec[("decisions.md<br/>[foundry dir]")]
+  events[("events.jsonl, 0.4.0<br/>[foundry dir]")]
+  reports[("reports/, messages.jsonl<br/>[foundry dir]")]
+
+  run -->|"Skill call when the doc is missing"| init
+  init -->|"reads read-only declarations"| kitman
+  init -->|"starts in init mode"| arch
+  arch -->|"writes architecture, adr keys"| fjson
+  fjson -->|"doc path, merge, target, caps; roles from 0.4.0"| run
+  run -->|"starts in plan mode"| arch
+  arch -->|"writes the draft"| plan
+  run -->|"sets approvedAt, status"| plan
+  run -->|"starts leads, by wave"| crew
+  run -->|"writes decision lines"| dec
+  crew -.->|"Agent, SendMessage, stops"| hooks
+  hooks -->|"reads, gates lead starts"| plan
+  hooks -->|"saves reports, logs lead messages"| reports
+  hooks -->|"stamps HH:MM"| dec
+  hooks -->|"appends spawn, stall, tag, report"| events
+  retro -->|"reads"| events
+  retro -->|"reads"| dec
+```
+
+*foundry's containers and the files between them.*
+Traces to: `plugins/foundry/skills/run/SKILL.md`, `plugins/foundry/skills/init/SKILL.md`, `plugins/foundry/agents/architect.md`, `plugins/foundry/hooks/register.ts`, `plugins/foundry/docs/adr/0001-design-phase.md`, `plugins/foundry/docs/adr/0002-kit-manifest-and-config.md`, `plugins/foundry/docs/adr/0003-event-log-and-retro.md`, and the "On disk" section below.
+
 ## Roles and who talks to whom
+
+The roles split into two diagrams: who the foreman talks to, and what happens inside one crew.
 
 ```mermaid
 flowchart TD
-  owner([Owner: you])
-  foreman[Foreman: main session]
-  cynic[Cynic: foundry:cynic]
-  integ[Integrator, single mode]
-  ijudge[Integration judge, single mode]
-  disk[(foundry dir on disk)]
-  arch[Architect: agents/architect.md, 0.3.0]
+  owner(["Owner<br/>[person]<br/>Approves, rules, pushes"])
+  foreman["Foreman<br/>[main session]<br/>Plans, settles, merges"]
+  cynic["Cynic<br/>[agent: foundry:cynic]<br/>Reviews items bound for the owner"]
+  arch["Architect<br/>[agent: foundry:architect, 0.3.0]<br/>Drafts the plan"]
+  integ["Integrator<br/>[agent, single mode]<br/>Merges every crew branch"]
+  ijudge["Integration judge<br/>[agent, single mode]<br/>Rules on the integration branch"]
+  leadA["Lead, crew A<br/>[agent: foundry:lead]"]
+  leadB["Lead, crew B<br/>[agent: foundry:lead]"]
+  disk[("foundry dir<br/>[store]")]
 
-  subgraph crewA [Crew A]
-    leadA[Lead: foundry:lead]
-    memA[Members: builders, test-writer, writer, devops]
-    judgeA[Judge: foundry:judge]
-    redA[Red team: foundry:judge in red-team mode]
-  end
-
-  subgraph crewB [Crew B]
-    leadB[Lead: foundry:lead]
-    memB[Members]
-    judgeB[Judge]
-  end
-
-  owner <-->|plan, rulings, push and PR| foreman
-  foreman -->|items bound for the owner| cynic
-  cynic -->|RECOMMEND lines| foreman
-  foreman -->|start, answers, rebase requests| leadA
-  foreman -->|start, answers, rebase requests| leadB
-  leadA -->|QUESTION, BLOCKED, PROPOSAL, report| foreman
-  leadB -->|QUESTION, BLOCKED, PROPOSAL, report| foreman
-  leadA <-->|collisions only, logged| leadB
-  leadA -->|tasks| memA
-  memA -->|reports| leadA
-  leadA --> redA
-  leadA --> judgeA
-  leadB --> memB
-  leadB --> judgeB
-  foreman --> integ
-  foreman --> ijudge
-  crewA -.->|reports| disk
-  crewB -.->|reports| disk
-  foreman -->|start: plan mode, every run| arch
-  arch -.->|draft plan.json, plan.md| disk
+  owner <-->|"plan, rulings, push and PR"| foreman
+  foreman -->|"items bound for the owner"| cynic
+  cynic -->|"RECOMMEND lines"| foreman
+  foreman -->|"start: plan mode, every run"| arch
+  arch -.->|"draft plan.json, plan.md"| disk
+  foreman -->|"start, answers, rebase requests"| leadA
+  foreman -->|"start, answers, rebase requests"| leadB
+  leadA -->|"QUESTION, BLOCKED, PROPOSAL, report"| foreman
+  leadB -->|"QUESTION, BLOCKED, PROPOSAL, report"| foreman
+  leadA <-->|"collisions only, logged"| leadB
+  foreman -->|"start"| integ
+  foreman -->|"start"| ijudge
 ```
+
+*Who the foreman talks to: the owner, the agents outside every crew, and the leads.*
+Traces to: `plugins/foundry/skills/run/SKILL.md`, `plugins/foundry/agents/lead.md`, `plugins/foundry/agents/cynic.md`, `plugins/foundry/agents/architect.md`, `plugins/foundry/hooks/register.ts`.
+
+```mermaid
+flowchart TD
+  foreman["Foreman<br/>[main session]"]
+  lead["Lead<br/>[agent: foundry:lead]<br/>Splits, delegates, merges members"]
+  mem["Members<br/>[agents: builders, test-writer, writer, devops]<br/>Each in its own worktree"]
+  judge["Judge<br/>[agent: foundry:judge]<br/>Rules PASS or FAIL"]
+  red["Red team<br/>[agent: foundry:judge, red-team mode]<br/>Tries to break the work"]
+  other["Another crew's lead<br/>[agent: foundry:lead]"]
+  disk[("reports/crew/<br/>[foundry dir]")]
+
+  foreman -->|"start, answers"| lead
+  lead -->|"tagged messages, report"| foreman
+  lead -->|"tasks"| mem
+  mem -->|"reports with proof"| lead
+  lead -->|"when the plan says yes"| red
+  lead -->|"fresh judge per ruling"| judge
+  lead <-->|"collisions only"| other
+  mem -.->|"reports, saved by the hooks"| disk
+  judge -.->|"judge file, the merge gate"| disk
+```
+
+*Inside one crew: the lead's members, its judge and red team, and where their reports land.*
+Traces to: `plugins/foundry/agents/lead.md`, `plugins/foundry/agents/judge.md`, `plugins/foundry/hooks/register.ts`.
 
 Only the foreman talks to the owner. Only leads message the foreman, so a member's question reaches the foreman through its lead. Leads message each other only when their work collides: a file another crew owns, a shared interface that changes, or the merge order. The hooks enforce the message rules for everything inside a crew (see [Hooks](#hooks)). The cynic, the integrator, the integration judge and (0.3.0) the architect in `plan` mode are started by the foreman, so they sit outside every crew. The hooks don't police them and don't save their reports.
 
@@ -79,13 +130,50 @@ A crew, as the hooks see it, is a `foundry:lead` with no parent (the main thread
 
 ## The run lifecycle
 
-The 0.3.0 additions are marked.
+The 0.3.0 additions are marked. The diagram shows steps 4 to 11 for one crew; the numbered steps below it are the full story.
 
-0. Init (0.3.0): When a run finds no architecture doc, the foreman runs the `foundry:init` skill, which starts the architect in `init` mode; the owner can also run `/foundry:init`. If the repo already has an architecture doc of its own, `init` extends it rather than replacing it; otherwise it writes `docs/architecture.md`, with ADRs in `docs/adr/`. It records the doc's path in `.claude/foundry.json`.
+```mermaid
+sequenceDiagram
+  actor Owner
+  participant F as Foreman
+  participant A as Architect
+  participant C as Cynic
+  participant L as Lead
+  participant M as Members
+  participant J as Judge
+  Owner->>F: /foundry:run with a goal
+  F->>A: start in plan mode
+  A-->>F: draft plan.json and plan.md (verdicts, crews, waves)
+  F->>C: review the verdicts
+  C-->>F: RECOMMEND lines
+  alt approval owner, the plan has a wave 0
+    F->>Owner: plan table with the ADRs, merge mode, target
+    Owner-->>F: approve
+    F->>F: set approvedAt
+  else approval auto
+    F->>F: log the plan, overwrite approvedAt
+  end
+  loop each wave, at most maxParallelCrews crews at once
+    F->>L: start with goals/slug.md (the hooks check plan.json)
+    L->>M: member tasks
+    M-->>L: reports with proof
+    L->>J: start a fresh judge
+    J-->>L: VERDICT and Proof checked SHA
+    L-->>F: final report
+    F->>C: pre-merge review of the report and plan
+    F->>F: merge on PASS whose SHA is the branch head
+  end
+  F->>Owner: end-of-run report, then ask before push and PR
+```
+
+*One run, from goal to merge, for a single crew per wave.*
+Traces to: `plugins/foundry/skills/run/SKILL.md`, `plugins/foundry/agents/architect.md`, `plugins/foundry/agents/lead.md`, `plugins/foundry/agents/judge.md`, `plugins/foundry/docs/adr/0001-design-phase.md` (sections 3, 6 and 9).
+
+0. Init (0.3.0): When a run finds no architecture doc, the foreman runs the `foundry:init` skill, which starts the architect in `init` mode; the owner can also run `/foundry:init`. If the repo already has an architecture doc of its own, `init` extends it rather than replacing it; otherwise it writes `docs/architecture.md`, with ADRs in `docs/adr/`. It records the doc's path in `.claude/foundry.json`. From 0.4.0, init then reads kit's manifest, runs `kit:init` when it is missing and kit is installed, and proposes the new `foundry.json` keys ([ADR-0002](adr/0002-kit-manifest-and-config.md)).
 1. Altitude: The foreman asks the owner once whether the goal is the end or a step toward a bigger outcome, and describes the bigger version.
 2. Depth pass: The foreman answers four questions (what a top practitioner would add, the rawest material, the practitioner's tools, what besides a model verifies the result). The answers decide which crews exist.
-3. Inventory: The foreman lists the agent types and skills the session can use.
-4. Split: Crews own disjoint files, each with a done-check it can't game, its high-impact paths, a red team yes or no, and a resource slice (port range, database or temp directory). From 0.3.0, the foreman starts the architect in `plan` mode for this, at the start of every run. It gives one verdict per touched module, `extend` by default, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. A plan whose total is over `agentCap` is re-planned with fewer, larger crews or more waves before anyone sees it. The architect drafts `plan.json` and `plan.md`; the foreman owns both after that. A cynic reviews the verdicts on its own; if the two disagree, the architect gets one round to reconcile. The owner is asked only when they still disagree, or a change breaks a declared principle, adds an external service or recurring cost, or changes a stored data shape in a way that's hard to undo. `plan.json` has no fields for a crew's high-impact paths, red team or resource slice, which the 0.2.1 foreman sets in its plan table and each lead's brief (`skills/run/SKILL.md`); ADR-0001 doesn't say who sets them from 0.3.0.
+3. Inventory: The foreman lists the agent types and skills the session can use. From 0.4.0 it starts from `roles` in `.claude/foundry.json`, where set.
+4. Split: Crews own disjoint files, each with a done-check it can't game, its high-impact paths, a red team yes or no, and a resource slice (port range, database or temp directory). From 0.3.0, the foreman starts the architect in `plan` mode for this, at the start of every run. It gives one verdict per touched module, `extend` by default, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. A plan whose total is over `agentCap` is re-planned with fewer, larger crews or more waves before anyone sees it. The architect drafts `plan.json` and `plan.md`; the foreman owns both after that. A cynic reviews the verdicts on its own; if the two disagree, the architect gets one round to reconcile. The owner is asked only when they still disagree, or a change breaks a declared principle, adds an external service or recurring cost, or changes a stored data shape in a way that's hard to undo. `plan.json` has no fields for a crew's high-impact paths, red team or resource slice, which the 0.2.1 foreman sets in its plan table and each lead's brief (`skills/run/SKILL.md`); ADR-0001 doesn't say who sets them from 0.3.0. From 0.4.0 the slice names no invented port range: a crew uses its worktree slot's `PORT_BASE` when the repo has a `.claude/worktree-setup.*`, and the plan says `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)` when it hasn't ([ADR-0002](adr/0002-kit-manifest-and-config.md), section 4).
 5. Approval and freeze: The foreman shows the plan table and asks for the merge mode and target branch. On approval it writes `plan.md`. From here the scope is frozen, and only the owner can change it. From 0.3.0, the pause depends on the plan. An extend-only run, with no wave 0, doesn't pause: the architect's draft sets `approval: "auto"`, and the foreman logs the plan, overwrites `approvedAt` with its own log time, and starts the crews without asking. Its merge mode and target come from `.claude/foundry.json` (`merge`, `target`); without them the merge mode is `sequential` and the target is the current branch, and the foreman logs which it used. The owner sees the plan in the end-of-run report. A run with a wave 0 gets `approval: "owner"` and `approvedAt: null` from the architect's draft: the foreman checks it, shows the plan table with the ADRs, asks for the merge mode and target as in 0.2.1, and sets `approvedAt` when the owner approves. Later waves start as earlier ones merge, with no further pause. `approvedAt` is null only while a run waits for the owner. In either case, questions still reach the owner through the cynic's escalation rules.
 6. Leads start: The foreman writes `goals/<slug>.md` for each crew and starts all leads in one message. From 0.3.0, leads start by wave. Wave 0 holds the `change` work (ADRs, the architecture-doc change, the contract tests) and merges before any other wave starts; each wave merges before the next starts. Within a wave, at most `maxParallelCrews` crews run at once; the rest queue and start as running ones merge. The queue order is the order of the `crews` array within the wave. The foreman sets each crew's `status` in `plan.json` as it starts and merges.
 7. Inside each crew: The lead runs its checks to prove its environment works, runs a full depth pass, splits the work into member tasks, and delegates. Members report with proof. The lead merges the members' branches with `git merge --no-ff`, runs the checks, then runs the red team (when there is one) and a fresh judge. Before the judge it compares its diff with the files it owns and asks the foreman for any extension. Every member commit carries `Foundry-Crew: <slug>` and `Foundry-Role: <role>` trailers. The judge reads the role with `git log --format='%H %(trailers:key=Foundry-Role,valueonly)'` and fails the crew if a `builder` commit touched the done-check tests. A file outside the crew's ownership is a `QUESTION:` for the foreman in the judge's findings, not a FAIL by itself. From 0.3.0, the judge also asks whether the diff conforms to the architecture doc's principles and module map, and to the run's ADRs. A violation that doesn't affect the done-check is a QUESTION. One that breaks a declared principle is a FAIL.
@@ -101,6 +189,9 @@ Everything for a session lives under one folder:
 ```
 <git common dir>/foundry/<session id>/
   decisions.md               foreman: one line per decision, `- HH:MM | decision | reason | cynic | followed`
+                             (0.4.0: a `## Run <start> | <goal>` heading per run; grammar below)
+  events.jsonl               0.4.0, plugin: one line per spawn, stall, tag and final report
+  events.<n>.jsonl           0.4.0, plugin: the event log rolled over, past 3 MiB
   plan.md                    foreman: the approved plan, written once the owner approves
                              (0.3.0: the architect drafts it with plan.json; the foreman owns it after that)
   plan.json                  0.3.0: the architect drafts it; the foreman owns it after that; hooks only read it
@@ -109,15 +200,35 @@ Everything for a session lives under one folder:
   reports/<crew>/<agent>.interim.md  plugin: a lead's interim stop
   messages.jsonl             plugin: lead-to-lead messages
   messages.<n>.jsonl         plugin: the log rolled over, past 3 MiB
+  scratch/                   0.3.0, architect: plan-mode scratch output
+  scratch/foundry.candidate.json  0.4.0, init: the config it would write, validated before the write (ADR-0002)
 ```
 
-The plugin writes only `reports/` and the message logs. The foreman writes `decisions.md`, `plan.md` and `goals/`, as `skills/run/SKILL.md` tells it to; the plugin only stamps the time on new `decisions.md` lines (see Decision times).
+The plugin writes only `reports/`, the message logs and (0.4.0) the event logs. The foreman writes `decisions.md`, `plan.md` and `goals/`, as `skills/run/SKILL.md` tells it to; the plugin only stamps the time on new `decisions.md` lines (see Decision times).
 
 The folder is `git rev-parse --path-format=absolute --git-common-dir` run in the session's working directory, plus `foundry/<session id>`. Every worktree of a repo shares one git common dir, so all crews write to the same place. Outside git the base is `$HOME/.claude` (or `%USERPROFILE%\.claude`). The path is worked out once per session and cached; a `/clear` works it out again. Session ids, crew names and agent names pass through `safeName` in `register.ts`: each run of characters other than letters, digits, `.`, `_` and `-`, and each run of two or more dots, becomes `-`; runs of `-` collapse to one; leading and trailing `-` and `.` are dropped; the result is cut to 100 characters, and an empty result becomes `agent`.
 
 A report file is named after the agent's spawn name, else its id, under its crew's folder. A judge's report is `reports/<crew>/<crew>-judge.md`, then `<crew>-judge-2.md` and so on; those are the merge-gate files. A red team is named `<crew>-redteam` so its report never lands on one. A successor lead `<slug>-2` is a crew of its own as far as the hooks go, with its own folder.
 
 Each line of `messages.jsonl` is `{ "ts", "from", "to", "summary" }`, where `from` and `to` are crew names and `summary` is the `SendMessage` summary. Only messages between two leads of different crews are logged. When the log is 3 MiB or more, the next append first copies it to `messages.<n>.jsonl` at the first free `n` and starts a new log.
+
+### `events.jsonl` (0.4.0)
+
+Each line is one JSON object under [`events.schema.json`](events.schema.json): `{ "v": 1, "ts", "event", "crew", "agent" }` plus the event's own fields. `spawn` (a crew agent's or a lead's `Agent` call that went through) adds `agentId`, `type`, `model`, `effort` and `by`; `stall` (a stall or idle-lead wake) adds `kind` and `minutes`; `tag` (a lead's tagged message to `main`) adds `tag`; `report` (a final report saved) adds `marker`, the report's leading marker or null. No line holds message, prompt or report text. Appends are serialized like the message log's and roll at 3 MiB the same way; a failed append is logged and changes nothing else ([ADR-0003](adr/0003-event-log-and-retro.md), section 1).
+
+### `decisions.md` grammar (0.4.0)
+
+```
+# <optional title>
+## Run <RFC 3339 start> | <goal>
+- HH:MM | <decision> | <reason> | <cynic> | <outcome>
+- HH:MM | cynic-<n> RECOMMEND <answer|defer|pass>: <text> | <outcome>
+  <two-space continuation>
+```
+
+`<outcome>` is `followed`, `followed (deferred)` or `overruled: <reason>`. One `## Run` heading per run lets `scripts/retro.py` split a session dir that holds several runs; without headings it reports the split as `"not recorded"`. retro also reads the older shapes (date-stamped lines, free-form lines, a literal `HH:MM`) and says `"not recorded"` for what they lack ([ADR-0003](adr/0003-event-log-and-retro.md), sections 2 and 3).
+
+### `plan.json`
 
 `plan.json` (0.3.0) is the seam between the architect, the foreman and the hooks: the goal, the architecture doc's path, `approval`, `approvedAt`, `agentCap`, `maxParallelCrews`, and one entry per crew with its wave, verdict, modules, owned paths, done-check, whether that check was proved, estimated agents, an optional `ownerApproval` and status. [`plan.schema.json`](plan.schema.json) is the contract; [ADR-0001](adr/0001-design-phase.md), section 8, is the source. The rules it adds:
 
@@ -146,7 +257,7 @@ One file lives in the project repo, not the foundry folder:
 <repo>/.claude/foundry.json  0.3.0: the project's foundry config
 ```
 
-`init` writes only `architecture` and `adr`. The owner can add the other keys by hand; each has a default:
+`init` writes `architecture` and `adr`; from 0.4.0 it also proposes `roles`, `deploy`, `writingSkill` and `promptOverrides`, and writes those the owner approves. The owner can add any key by hand; each but the first two has a default. The contract is [`foundry-config.schema.json`](foundry-config.schema.json) ([ADR-0002](adr/0002-kit-manifest-and-config.md)). A key it doesn't declare is reported and ignored; a declared value it rejects is reported and unset. Inside `roles` and `promptOverrides` that unsets only the bad entry. `deploy` fails closed: any error inside it, an undeclared key included, unsets the whole key, so devops asks its lead. When init writes, errors in what the owner wrote are reported by path and kept; an owner value of the wrong shape to hold a key init would add, such as `roles: "x"`, is kept and that key is skipped; and only an error at a path init itself is writing stops the write:
 
 | Key | Written by | Default | Used for |
 | --- | --- | --- | --- |
@@ -156,6 +267,45 @@ One file lives in the project repo, not the foundry folder:
 | `maxParallelCrews` | the owner | 4 | The most crews running at once |
 | `merge` | the owner | `sequential` | Merge mode of auto-started runs |
 | `target` | the owner | the current branch | Target branch of auto-started runs |
+| `roles`, 0.4.0 | `init` on approval, or the owner | the inventory, as 0.3.0 | Agent type per job: `build`, `test`, `review`, `search`, `docs`, `deploy` |
+| `deploy`, 0.4.0 | `init` on approval, or the owner | none | `{target, command, production}` for devops; `production: true` always goes to the owner |
+| `writingSkill`, 0.4.0 | `init` on approval, or the owner | none | The skill the writer loads, when listed |
+| `promptOverrides`, 0.4.0 | `init` on approval, or the owner | none | Per role (`lead`, `judge`, `cynic`, `writer`, `devops`, `architect`), a file under `.claude/foundry/prompts/` the role reads in addition to its prompt; never prompt text. The key is proposed like the others; the prompt files themselves are the owner's |
+
+From 0.4.0 init also reads `<repo>/.claude/kit/manifest.json`, kit's record of what it set up (contract `plugins/kit/docs/manifest.schema.json`, repo ADR-0013). It runs `kit:init` through the Skill tool when that skill is listed and the manifest is missing or lacks foundry's read-only declarations, and otherwise carries on as 0.3.0 and says so ([ADR-0002](adr/0002-kit-manifest-and-config.md), section 1). The sequence, as designed:
+
+```mermaid
+sequenceDiagram
+  actor Owner
+  participant I as foundry:init
+  participant A as Architect
+  participant MF as .claude/kit/manifest.json
+  participant K as kit:init
+  participant KM as kit_manifest.py
+  participant FJ as .claude/foundry.json
+  Owner->>I: /foundry:init
+  I->>A: init mode, only when there is no architecture doc
+  I->>MF: read
+  alt valid, declares foundry:judge and foundry:cynic read-only
+    I->>I: use it
+  else missing or lacks the declarations, and kit:init is listed
+    I->>K: Skill kit:init, args declare read-only: foundry:judge, foundry:cynic
+    K->>Owner: show the declaration (full init first when no manifest)
+    Owner-->>K: approve
+    K->>KM: declare --by foundry, or write with the declaration in the facts
+    KM->>MF: agents readOnly true, declaredBy foundry
+  else kit:init not listed
+    I->>Owner: kit is not installed, foundry init carries on without a kit manifest
+  else not JSON, fails the schema or another version
+    I->>Owner: kit manifest unreadable, carrying on without it
+  end
+  I->>Owner: propose roles, deploy, writingSkill, promptOverrides
+  Owner-->>I: approve some
+  I->>FJ: write the approved keys
+```
+
+*foundry init extending kit init, 0.4.0: the four manifest cases and what each writes.*
+Traces to: `plugins/foundry/docs/adr/0002-kit-manifest-and-config.md` (sections 1 and 2), `docs/adr/0013-kit-manifest.md`, `plugins/kit/docs/manifest.schema.json`, `plugins/foundry/skills/init/SKILL.md` (0.3.0 doc check).
 
 Two kinds of state don't go to the foundry folder:
 
@@ -172,13 +322,14 @@ All of these are in `hooks/register.ts`.
 | `session.start` | Registers `/foundry`, starts the one-minute heartbeat, and re-arms a pending limit-reset wake from plugin state. |
 | `session.end` with reason `clear` | Clears the module's memory. |
 | `agent.spawn` | Records each agent's spawn name, type, parent, model and start time, and counts the spawn as activity. |
-| `tool.call` on `SendMessage` | Enforces who a crew agent may message, logs lead-to-lead messages, and tracks each lead's tag for `/foundry`. |
+| `tool.call` on `Agent`, 0.4.0 | After a crew agent's or a lead's call goes through, appends a `spawn` line to `events.jsonl`. |
+| `tool.call` on `SendMessage` | Enforces who a crew agent may message, logs lead-to-lead messages, and tracks each lead's tag for `/foundry`. From 0.4.0, appends a `tag` line to `events.jsonl` for each tag set. |
 | `tool.call` on `Agent` | Refuses crew agents' calls without `model` or `effort`, or with `effort: "max"`. Adds the report-path note to calls that start a lead or a crew member. |
 | `tool.call` on `Agent`, 0.3.0 | Refuses starting a lead that `plan.json` holds back: the run-level and crew-level approval gates, the wave gate and the parallel cap (see [Plan gates](#plan-gates-030)). |
-| `tool.call` on `Write`, `Edit` | Stamps the clock's time on new lines of this session's `decisions.md`. |
+| `tool.call` on `Write`, `Edit` | Stamps the clock's time on new lines of this session's `decisions.md`; from 0.4.0, on every literal `HH:MM` too. |
 | `tool.call`, any tool | Records activity, the main session's too. On `SubagentHandback`, refuses an empty hand-back from a crew agent and captures the report. |
 | `turn.step` | Records activity for each model request, the main session's too. |
-| `classic.SubagentStop` | Runs the lead stop gate and saves the stopping agent's report. |
+| `classic.SubagentStop` | Runs the lead stop gate and saves the stopping agent's report. From 0.4.0, each final report saved (here or from `SubagentHandback`) appends a `report` line to `events.jsonl`. |
 | `session.measure`, `classic.StopFailure` | Arm the limit-reset wake. |
 | `command.run` for `foundry` | Prints the crew status. |
 
@@ -245,6 +396,8 @@ Every 60 seconds the module checks each crew agent listed as `running`. An agent
 
 `[foundry] stalled: <agent> in crew <crew>, no activity for <n>m. Check /foundry and message the <crew> lead. Read its transcript tail before you stop it; a resumed agent may be compacting.`
 
+From 0.4.0 each stall wake, and each idle-lead wake below, appends a `stall` line to `events.jsonl` (`kind` `agent` or `idle-lead`).
+
 ### Idle leads
 
 The same check looks at each listed lead that a check saw go from `running` to stopped, is now `idle` (never `waiting`, `killed`, `failed` or `completed`) and has no member at work. A lead first seen stopped, as after a reload, is never a candidate until it runs and stops again. A candidate is excused while it waits on the foreman (a `QUESTION:`, `BLOCKED:` or `PROPOSAL:` tag) or after a final report (a `## Proof` section, `CHECKPOINT:` or `BLOCKED:`) in its current stint. A stint begins at the check that sees the lead running again; activity alone doesn't start one, so a sign-off after a final hand-back doesn't undo it. The report and tag in its report file count as well when written in the stint, so a reloaded module doesn't prompt for a lead that already reported. Otherwise its idle period starts at the first check, and after 15 minutes the main session gets one prompt per period:
@@ -263,7 +416,7 @@ The wake goes out once per `resetsAt`. A hot reload cancels the timer with the o
 
 ### Decision times
 
-A `Write` or `Edit` of `<foundry dir>/decisions.md` for this session has each new line that starts `- HH:MM |` rewritten with the clock's local time. A line keeps its time when that `HH:MM` is already on a decision line of the text the call replaces: the file on disk for a `Write`, `old_string` for an `Edit`. So a reworded line keeps its time, and only new lines are stamped. An `Edit` changes only `new_string`. A log written through Bash isn't seen. Line endings are kept. Any other file, and another session's log, is left alone.
+A `Write` or `Edit` of `<foundry dir>/decisions.md` for this session has each new line that starts `- HH:MM |` rewritten with the clock's local time. A line keeps its time when that `HH:MM` is already on a decision line of the text the call replaces: the file on disk for a `Write`, `old_string` for an `Edit`. So a reworded line keeps its time, and only new lines are stamped. 0.3.0's pattern, `^- (\d{1,2}:\d{2}) \|`, misses the literal `HH:MM` the run skill tells the foreman to type, so those lines kept no time; from 0.4.0 the pattern is `^- (\d{1,2}:\d{2}|HH:MM) \|`, and a literal `HH:MM` is always stamped, since it marks no time ([ADR-0003](adr/0003-event-log-and-retro.md), section 2). An `Edit` changes only `new_string`. A log written through Bash isn't seen. Line endings are kept. Any other file, and another session's log, is left alone.
 
 ### `/foundry`
 

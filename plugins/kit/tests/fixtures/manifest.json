@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "kit": "0.2.0",
+  "checks": [
+    {
+      "name": "unit",
+      "kind": "test",
+      "command": "npm test",
+      "gate": "stop"
+    },
+    {
+      "name": "lint",
+      "kind": "lint",
+      "command": "npx eslint .",
+      "gate": "edit"
+    },
+    {
+      "name": "types",
+      "kind": "typecheck",
+      "command": "npx tsc --noEmit",
+      "gate": "none"
+    }
+  ],
+  "agents": [
+    {
+      "name": "kit:builder",
+      "readOnly": false,
+      "declaredBy": "kit"
+    },
+    {
+      "name": "kit:reviewer",
+      "readOnly": true,
+      "declaredBy": "kit"
+    },
+    {
+      "name": "kit:scout",
+      "readOnly": true,
+      "declaredBy": "kit"
+    },
+    {
+      "name": "kit:test-writer",
+      "readOnly": false,
+      "declaredBy": "kit"
+    },
+    {
+      "name": "migrator",
+      "readOnly": false,
+      "declaredBy": "project"
+    }
+  ],
+  "riskyPaths": [
+    {
+      "path": "db/migrations/",
+      "why": "a wrong migration corrupts production data"
+    },
+    {
+      "path": "deploy/prod.yaml",
+      "why": "production deploy config"
+    }
+  ],
+  "setupScripts": [
+    ".claude/worktree-setup.sh"
+  ]
+}
