@@ -1,0 +1,18 @@
+{"v":1,"ts":"2026-10-27T08:45:00.000Z","event":"spawn","crew":"auth","agent":"auth","agentId":"e0","type":"foundry:lead","model":"opus","effort":"high","by":"main"}
+{"v":1,"ts":"2026-10-27T09:01:00.000Z","event":"spawn","crew":"auth","agent":"auth-builder","agentId":"e1","type":"kit:builder","model":"sonnet","effort":"medium","by":"auth"}
+{"v":1,"ts":"2026-10-27T09:02:00.000Z","event":"spawn","crew":"auth","agent":"auth-tester","agentId":null,"type":"kit:test-writer","model":"sonnet","effort":"medium","by":"auth"}
+{"v":1,"ts":"2026-10-27T09:03:00.000Z","event":"spawn","crew":"billing","agent":"billing","agentId":"e3","type":"foundry:lead","model":"opus","effort":null,"by":"main"}
+{"v":1,"ts":"2026-10-27T09:40:00.000Z","event":"stall","crew":"auth","agent":"auth-builder","kind":"agent","minutes":15}
+{"v":1,"ts":"2026-10-27T09:50:00.000Z","event":"stall","crew":"billing","agent":"billing-builder","kind":"agent","minutes":16}
+{"v":1,"ts":"2026-10-27T09:55:00.000Z","event":"stall","crew":"billing","agent":"billing","kind":"idle-lead","minutes":20}
+{"v":1,"ts":"2026-10-27T10:05:00.000Z","event":"tag","crew":"auth","agent":"auth","tag":"QUESTION"}
+{"v":1,"ts":"2026-10-27T10:06:00.000Z","event":"tag","crew":"billing","agent":"billing","tag":"BLOCKED"}
+{oops, not json
+{"v":2,"ts":"2026-10-27T10:07:00.000Z","event":"tag","crew":"auth","agent":"auth","tag":"PROPOSAL"}
+{"v":1,"ts":"2026-10-27T10:30:00.000Z","event":"report","crew":"auth","agent":"auth-judge","marker":"VERDICT: FAIL"}
+{"v":1,"ts":"2026-10-27T11:00:00.000Z","event":"report","crew":"auth","agent":"auth-judge-2","marker":"VERDICT: PASS"}
+{"v":1,"ts":"2026-10-27T11:05:00.000Z","event":"report","crew":"auth","agent":"auth-builder","marker":"VERDICT: PASS"}
+{"v":1,"ts":"2026-10-27T11:10:00.000Z","event":"report","crew":"auth","agent":"auth-redteam","marker":"REDTEAM"}
+{"v":1,"ts":"2026-10-27T13:01:00.000Z","event":"spawn","crew":"docs","agent":"docs","agentId":"e9","type":"foundry:lead","model":null,"effort":null,"by":"main"}
+{"v":1,"ts":"2026-10-27T13:20:00.000Z","event":"tag","crew":"docs","agent":"docs","tag":"PROPOSAL"}
+{"v":1,"ts":"2026-10-27T13:40:00.000Z","event":"report","crew":"docs","agent":"docs-judge","marker":"VERDICT: PASS"}
