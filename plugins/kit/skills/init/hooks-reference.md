@@ -23,7 +23,7 @@ How hooks report back: a hook that exits 2 has its stderr shown to the agent. Af
 }
 ```
 
-Leave out `SubagentStop` when the tests take more than about a minute. The stop gate skips read-only agent types (from the hook input's `agent_type`); add the project's own read-only agents to that list. On Windows without Git Bash, use the PowerShell versions below with `powershell -NoProfile -File "$CLAUDE_PROJECT_DIR/.claude/kit/stop-gate.ps1"`.
+Leave out `SubagentStop` when the tests take more than about a minute. The stop gate skips read-only agent types (from the hook input's `agent_type`). The list between the `kit:read-only-agents` markers is rendered by `kit_manifest.py` from the manifest's read-only agents, so put the project's own read-only agents in the manifest facts, not in the gate by hand; the list in the template is what the gate uses until a manifest is written. On Windows without Git Bash, use the PowerShell versions below with `powershell -NoProfile -File "$CLAUDE_PROJECT_DIR/.claude/kit/stop-gate.ps1"`.
 
 ## `.claude/kit/edit-gate.sh`
 
@@ -55,7 +55,9 @@ input=$(cat)
 case "$input" in *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) exit 0 ;; esac
 # SubagentStop carries agent_type: read-only agents changed nothing, so skip them.
 agent=$(printf '%s' "$input" | sed -n 's/.*"agent_type" *: *"\([^"]*\)".*/\1/p')
-case "$agent" in kit:scout|kit:reviewer|Explore|Plan|claude-code-guide) exit 0 ;; esac
+# kit:read-only-agents:begin
+case "$agent" in Explore|Plan|claude-code-guide|kit:reviewer|kit:scout) exit 0 ;; esac
+# kit:read-only-agents:end
 # Test the agent's checkout: a worktree agent's own, not $CLAUDE_PROJECT_DIR (always the main checkout).
 cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 # Skip only a state that already passed: a clean tree at the last tested commit. Commits don't hide changes.
@@ -76,7 +78,9 @@ exit 0
 ```powershell
 $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
 if ($in.stop_hook_active) { exit 0 }
-if ($in.agent_type -in 'kit:scout','kit:reviewer','Explore','Plan','claude-code-guide') { exit 0 }
+# kit:read-only-agents:begin
+if ($in.agent_type -in 'Explore','Plan','claude-code-guide','kit:reviewer','kit:scout') { exit 0 }
+# kit:read-only-agents:end
 # Test the agent's checkout: a worktree agent's own, not $env:CLAUDE_PROJECT_DIR (always the main checkout).
 if ($in.cwd) { Set-Location $in.cwd }
 $top = git rev-parse --show-toplevel
