@@ -1,6 +1,6 @@
 # Decisions
 - 08:00 | a decision written before the first run heading | old habit | cynic: none | followed
-## Run 2026-10-27T09:00:00Z | build the retro script
+## Run 2026-10-27T09:00:30Z | build the retro script
 - 09:05 | start two crews, auth and billing | plan approved | cynic: none | followed
 - HH:MM | merge auth first | fewer conflicts | cynic: answer | overruled: owner chose billing first
 - 09:20 | cynic-1 RECOMMEND answer: merge auth first | overruled: owner chose billing first

@@ -1,24 +1,24 @@
 # Decisions
 
-- 2026-10-26 | Probe the platform before planning | owner said the foreman decides | cynic: n/a (not built yet) | —
-- 2026-10-26 | Merge mode single, integration branch from the base | avoid swapping hooks under the session | — | —
-- 2026-10-26 | Red team is the judge in red-team mode | one definition beats per-lead prompts | cynic: n/a | followed
-- 2026-10-26 hooks: background tasks count only when they belong to the lead's own descendants.
-- 2026-10-26 protocol: accepted at 0000001. The judge file starts VERDICT: PASS and names that head.
-- Finding for the end report: members ran unnamed, so their reports were saved under agent ids.
+- 2026-03-04 | Sketch the toolchain before drafting | sponsor wants the coordinator to pick | cynic: n/a (not yet built) | —
+- 2026-03-04 | Single merge into a staging branch cut from trunk | keeps the checkout stable mid-session | — | —
+- 2026-03-04 | Attack pass reuses the review rubric | one rubric beats two drifting copies | cynic: n/a | followed
+- 2026-03-04 tapestry: detached jobs are counted only when a crew owns their parent process.
+- 2026-03-04 ledger: signed off at 00000a1. The review file opens with VERDICT: PASS and cites that revision.
+- Finding for the closing note: helpers launched without labels, so their write-ups landed under opaque ids.
 - Mismatch decisions:
-  - Red team: the lead prompt is right; fix the judge prompt.
-  - Effort: low is allowed for lookups.
+  - Attack pass: the crew prompt is right; amend the review prompt.
+  - Effort: minimal is fine for quick lookups.
   - 09:00 | an indented structured line | sub-bullet | cynic: none | followed
-- 2026-10-26T09:20:20Z king: plan approved, wave 1 starts
-- 2026-10-26T09:21:00Z | wave 1 starts with three crews | plan approved | cynic: none | followed
-- 14:10 | synthetic run starts: plan approved, wave 0 starts | owner approval | cynic: n/a (owner decided) | followed
-- 14:25 | merge hooks before protocol | the skill relies on the dir note | cynic: n/a | overruled: owner wanted protocol first
-- HH:MM | architect plan accepted | plan gate passed | cynic: none | followed
-- HH:MM | outlet cap raised to five | owner answer | cynic: none | followed
-- 07:30 | embedder tiers are whole-run | mixing spaces breaks clustering | cynic: none | followed
-- 09:10 | cynic-1 RECOMMEND answer: the kinds check is the agreed measurement | followed
-- 09:10 | cynic-1 RECOMMEND defer: duplicated wording in the role file | followed (deferred)
-- 09:10 | cynic-1 RECOMMEND answer: no handoff needed before the merge | followed
-- 09:12 | cynic-2 RECOMMEND pass: the owner already answered this | overruled: asked the owner anyway
-- 10:00 | merge slate after judge PASS | judge PASS at 0000002 | cynic: none | followed (deferred)
+- 2026-03-04T16:45:12Z orrin: roadmap accepted, stage 1 opens
+- 2026-03-04T16:46:30Z | stage 1 opens with three crews | roadmap accepted | cynic: none | followed
+- 14:10 | fictional run begins: roadmap accepted, stage 0 opens | sponsor sign-off | cynic: n/a (sponsor decided) | followed
+- 14:25 | land tapestry ahead of ledger | the guide assumes that folder note | cynic: n/a | overruled: sponsor wanted ledger first
+- HH:MM | planner roadmap signed | roadmap gate cleared | cynic: none | followed
+- HH:MM | spout limit lifted to six | sponsor reply | cynic: none | followed
+- 07:30 | ferry sizes stay fixed per run | blending scales skews grouping | cynic: none | followed
+- 11:40 | cynic-3 RECOMMEND answer: the tally check is the agreed yardstick | followed
+- 11:40 | cynic-3 RECOMMEND defer: repeated phrasing in the persona file | followed (deferred)
+- 11:40 | cynic-3 RECOMMEND answer: no briefing required ahead of landing | followed
+- 09:12 | cynic-2 RECOMMEND pass: the sponsor settled this already | overruled: asked the sponsor regardless
+- 10:00 | land quartz after reviewer PASS | reviewer PASS at 00000b2 | cynic: none | followed (deferred)
