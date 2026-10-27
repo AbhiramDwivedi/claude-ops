@@ -100,7 +100,9 @@ def _array(value, where, err):
 
 def check_agent_name(name, declared_by, where, err):
     """The name pattern, then the declarer rule: a qualified name's prefix is its declarer, a bare one's is project."""
-    if not isinstance(name, str) or not AGENT_NAME.fullmatch(name):
+    if not isinstance(name, str):
+        raise err("BAD_FIELD", "%s must be a string" % where)
+    if not AGENT_NAME.fullmatch(name):
         raise err("BAD_AGENT_NAME", "%s is %r: want plugin:name or a bare name, letters, digits, _ and - only"
                   % (where, name))
     owner = name.split(":", 1)[0] if ":" in name else "project"

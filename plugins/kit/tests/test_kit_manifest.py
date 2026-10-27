@@ -170,6 +170,7 @@ class KitManifest(unittest.TestCase):
             ("readOnly not bool", "BAD_FIELD", facts(agents=[agent("kit:scout", "kit", 1)])),
             ("shell metacharacter", "BAD_AGENT_NAME", facts(agents=[agent("kit:x;rm", "kit")])),
             ("trailing newline", "BAD_AGENT_NAME", facts(agents=[agent("kit:x\n", "kit")])),
+            ("name not a string", "BAD_FIELD", facts(agents=[agent(5, "project")])),
             ("bare name not project", "DECLARER_MISMATCH", facts(agents=[agent("judge", "foundry")])),
             ("prefix not declarer", "DECLARER_MISMATCH", facts(agents=[agent("foundry:judge", "kit")])),
             ("case-folded duplicate", "DUPLICATE_AGENT", facts(agents=[agent("kit:scout", "kit"), agent("kit:Scout", "kit")])),
