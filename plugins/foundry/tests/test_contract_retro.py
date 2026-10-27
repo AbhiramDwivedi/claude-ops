@@ -87,7 +87,7 @@ class RetroContract(unittest.TestCase):
     def test_pre040_decisions(self):
         run = self.retro(PRE)["runs"][0]
         # 10 structured decision lines: 3 dated, 5 clock (one RFC 3339), 2 literal HH:MM.
-        # Outcomes: 7 followed (two "followed (deferred)"), 1 overruled, 2 "—".
+        # Outcomes: 7 followed (one of them "followed (deferred)"; the other deferred line is a RECOMMEND, counted separately), 1 overruled, 2 "—".
         self.assertEqual(run["decisions"], {"total": 10, "clock": 5, "dateOnly": 3, "notRecorded": 2, "followed": 7, "overruled": 1, "other": 2})
 
     def test_pre040_freeform_lines_and_skipped_sub_bullets(self):
@@ -109,7 +109,7 @@ class RetroContract(unittest.TestCase):
         self.assertEqual(self.retro(PRE)["eventsOutsideRuns"], 0)
 
     def test_pre040_judge_files(self):
-        # slate-judge FAIL, slate-judge-2 PASS, gateway-judge PASS, embedder-judge CHECKPOINT;
+        # quartz-judge FAIL, quartz-judge-2 PASS, lantern-judge PASS, ferry-judge CHECKPOINT;
         # not .interim.md, not builder/redteam reports, not a report saved under an agent id.
         self.assertEqual(self.retro(PRE)["judgeFiles"], {"files": 4, "pass": 2, "fail": 1, "other": 1})
 
@@ -124,7 +124,7 @@ class RetroContract(unittest.TestCase):
         self.assertEqual(out["split"], "headings")
         self.assertEqual([(r["started"], r["goal"]) for r in out["runs"]], [
             (NR, NR),
-            ("2026-10-27T09:00:00Z", "build the retro script"),
+            ("2026-10-27T09:00:30Z", "build the retro script"),
             ("2026-10-27T13:00:00Z", "docs pass"),
         ])
 
