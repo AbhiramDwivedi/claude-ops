@@ -31,7 +31,7 @@ Per run (`runs`), then the dir-wide keys. Be brief; a table or short list per ru
 - **Cynic** (`recommendations`): answer, defer, pass. With `decisions.overruled`, say how often the foreman overruled.
 - **Stalls** (`stalls`): agent and idle-lead.
 - **Spawns** (`spawns`): total, and `byModelEffort`. `unset` means the call named no model or effort.
-- **Owner interruptions**: escalations plus `messages`; say which of the two each number is.
+- **Owner interruptions**: `escalations.QUESTION` and `escalations.BLOCKED` are what leads sent the foreman that could reach the owner; the foreman took only some to the owner, so call these an upper bound. `messages` counts lead-to-lead messages, not owner interruptions; report it separately as crew collisions.
 - **Judge rejections**: `judges.fail` per run, and `judgeFiles` for the whole dir (its files can't be split by run).
 - **Decision timing** (`decisions`): `clock`, `dateOnly`, `notRecorded`. Also `freeform` lines the script couldn't read as decisions.
 - **Plan** (`plan`): crews, waves, `estAgents` against `agentCap`, and `status` counts. It describes the last run only.
