@@ -8,7 +8,9 @@ The only writer of the manifest (repo ADR-0013); the contract is plugins/kit/doc
 Exit 0 prints one JSON line: {"manifest": <path>, "changed": bool, "gates": {"stop-gate.sh": s, "stop-gate.ps1": s}},
 s being updated, unchanged, absent or no-markers. On error nothing is written and stderr is one line,
 "kit_manifest: <CODE>: <detail>": exit 2 for bad input, 3 for the repo's state, 1 (IO_ERROR) when the OS refuses
-a read or write.
+a read or write. When a failed write can't put a file back, its old bytes stay in a temp file the line names.
+Exit 0 can add one stderr line, "kit_manifest: warning: ...", naming a temp file left over after every
+file got its new bytes.
 """
 import argparse
 import json
@@ -185,13 +187,13 @@ def read_manifest(path):
         raise Fail("MANIFEST_CORRUPT", "%s can't be read: %s" % (path, e), 3)
     try:
         obj = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as e:
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:  # RecursionError: nesting too deep to parse
         raise Fail("MANIFEST_CORRUPT", "%s isn't JSON: %s" % (path, e), 3)
     if not isinstance(obj, dict):
         raise Fail("MANIFEST_CORRUPT", "%s isn't a JSON object" % path, 3)
     version = obj.get("version")
-    if isinstance(version, int) and not isinstance(version, bool) and version > MANIFEST_VERSION:
-        raise Fail("NEWER_VERSION", "%s is version %d; this kit (%s) writes version %d"
+    if isinstance(version, (int, float)) and not isinstance(version, bool) and version > MANIFEST_VERSION:
+        raise Fail("NEWER_VERSION", "%s is version %s; this kit (%s) writes version %d"
                    % (path, version, KIT_VERSION, MANIFEST_VERSION), 3)
 
     def corrupt(_code, detail):
@@ -216,7 +218,7 @@ def read_facts(source):
         raise bad("BAD_ARGS", "can't read --facts %s: %s" % (source, e))
     try:
         return json.loads(raw.decode("utf-8-sig"))
-    except (UnicodeDecodeError, ValueError) as e:
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:  # RecursionError: nesting too deep to parse
         raise bad("BAD_JSON", "--facts %s isn't JSON: %s" % (source, e))
 
 
@@ -285,47 +287,62 @@ def io_error(what, path, e):
     return Fail("IO_ERROR", "%s %s: %s" % (what, path, e.strerror or e), 1)
 
 
-def stage(path, data):
-    """A temp file beside path holding data, with path's mode when path exists (a gate's +x)."""
+def retried(action):
+    """Run action, retrying briefly on OSError; return the last OSError, or None once it succeeds.
+
+    On Windows a file renamed a moment ago can be held open by a virus scanner or the indexer.
+    """
+    for attempt in range(5):
+        try:
+            action()
+            return None
+        except OSError as e:
+            if attempt == 4:
+                return e
+            time.sleep(0.1)
+
+
+def stage(path, data, problems):
+    """A temp file beside path holding data, with path's mode when path exists (a gate's +x).
+
+    When writing it fails and the half-written temp can't be removed either, that goes into problems.
+    """
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix="." + os.path.basename(path) + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "wb") as f:
+        try:
+            f = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)  # still open, so Windows wouldn't let discard remove the temp
+            raise
+        with f:
             f.write(data)
         if os.path.exists(path):
             shutil.copymode(path, tmp)
     except BaseException:
-        discard(tmp)
+        problem = discard(tmp)
+        if problem:
+            problems.append(problem)
         raise
     return tmp
 
 
 def discard(tmp):
     """Remove a temp file if it is still there, read-only or not; return why it couldn't be, or None."""
-    try:
+    def remove():
         if os.path.lexists(tmp):
             os.chmod(tmp, stat.S_IREAD | stat.S_IWRITE)
             os.remove(tmp)
-    except OSError as e:
-        return "left %s: %s" % (tmp, e.strerror or e)
-    return None
+    e = retried(remove)
+    return None if e is None else "left %s: %s" % (tmp, e.strerror or e)
 
 
 def restore(path, backup):
-    """Put back a file write_all already replaced; return why it couldn't, or None.
-
-    Retried briefly: on Windows a file renamed a moment ago can be held open by a virus scanner or the indexer.
-    """
-    for attempt in range(5):
-        try:
-            if backup is None:
-                os.remove(path)
-            else:
-                os.replace(backup, path)
-            return None
-        except OSError as e:
-            if attempt == 4:
-                return "couldn't restore %s: %s" % (path, e.strerror or e)
-            time.sleep(0.1)
+    """Put back a file write_all already replaced; return why it couldn't, or None."""
+    e = retried(lambda: os.remove(path) if backup is None else os.replace(backup, path))
+    if e is None:
+        return None
+    problem = "couldn't restore %s: %s" % (path, e.strerror or e)
+    return problem if backup is None else problem + "; old bytes kept in " + backup
 
 
 def write_all(writes):
@@ -333,17 +350,21 @@ def write_all(writes):
 
     First every temp file: the new bytes, and a backup of the old bytes for a file that exists. A failure
     there changes nothing. Then each new file is renamed into place; if a rename fails, the files already
-    replaced get their backups back (or are removed, when they didn't exist). No temp file is left behind.
+    replaced get their backups back (or are removed, when they didn't exist). A backup that couldn't be put
+    back stays on disk and the error names it; every other temp file is removed.
+
+    Returns the warnings of a write that succeeded: temp files that couldn't be removed although every
+    file holds its new bytes.
     """
-    staged, temps, error = [], [], None
+    staged, temps, error, problems = [], [], None, []
     try:
         for path, new, old in writes:
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            tmp = stage(path, new)
+            tmp = stage(path, new, problems)
             temps.append(tmp)
             backup = None
             if old is not None:
-                backup = stage(path, old)
+                backup = stage(path, old, problems)
                 temps.append(backup)
             staged.append((path, tmp, backup))
     except OSError as e:
@@ -358,29 +379,32 @@ def write_all(writes):
             break
         done.append((path, backup))
 
-    problems = []
+    kept = set()
     if error:
         for path, backup in reversed(done):
             problem = restore(path, backup)
             if problem:
                 problems.append(problem)
-    problems += [p for p in map(discard, temps) if p]
+                kept.add(backup)  # the only copy of the old bytes: never discard it
+    problems += [p for p in map(discard, [t for t in temps if t not in kept]) if p]
     if error:
         error.detail = "; ".join([error.detail] + problems)
         raise error
-    if problems:
-        raise Fail("IO_ERROR", "wrote everything, but " + "; ".join(problems), 1)
+    return problems
 
 
 def commit(repo, path, old_raw, manifest):
-    """Write the manifest (when its bytes changed) and the gates, all or none, and return the stdout object."""
+    """Write the manifest (when its bytes changed) and the gates, all or none.
+
+    Returns the stdout object and write_all's warnings.
+    """
     data = serialise(manifest)
     changed = data != old_raw
     statuses, writes = plan_gates(repo, manifest["agents"])
     if changed:
         writes.insert(0, (path, data, old_raw))
-    write_all(writes)
-    return {"manifest": path, "changed": changed, "gates": statuses}
+    warnings = write_all(writes)
+    return {"manifest": path, "changed": changed, "gates": statuses}, warnings
 
 
 def cmd_write(repo, facts_source):
@@ -434,10 +458,13 @@ def main(argv=None):
         if not os.path.isdir(a.repo):
             raise Fail("NO_REPO", "%s isn't a directory" % a.repo, 3)
         if a.command == "write":
-            out = cmd_write(a.repo, a.facts)
+            out, warnings = cmd_write(a.repo, a.facts)
         else:
-            out = cmd_declare(a.repo, a.by, a.read_only)
+            out, warnings = cmd_declare(a.repo, a.by, a.read_only)
         sys.stdout.write(json.dumps(out) + "\n")
+        if warnings:  # every file holds its new bytes; only a temp file is left over
+            detail = " ".join(("wrote everything, but " + "; ".join(warnings)).split())
+            sys.stderr.write("kit_manifest: warning: %s\n" % detail)
         return 0
     except Fail as caught:
         f = caught
