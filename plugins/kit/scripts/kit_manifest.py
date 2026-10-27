@@ -7,15 +7,18 @@ The only writer of the manifest (repo ADR-0013); the contract is plugins/kit/doc
 
 Exit 0 prints one JSON line: {"manifest": <path>, "changed": bool, "gates": {"stop-gate.sh": s, "stop-gate.ps1": s}},
 s being updated, unchanged, absent or no-markers. On error nothing is written and stderr is one line,
-"kit_manifest: <CODE>: <detail>": exit 2 for bad input, 3 for the repo's state.
+"kit_manifest: <CODE>: <detail>": exit 2 for bad input, 3 for the repo's state, 1 (IO_ERROR) when the OS refuses
+a read or write.
 """
 import argparse
 import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
+import time
 
 KIT_VERSION = "0.2.0"
 MANIFEST_VERSION = 1
@@ -253,15 +256,18 @@ def render_gate(raw, line):
 
 
 def plan_gates(repo, agents):
-    """Each gate's status, and the (path, bytes) writes it needs."""
+    """Each gate's status, and the (path, new bytes, old bytes) writes it needs."""
     names, statuses, writes = skip_list(agents), {}, []
     for gate in GATE_FILES:
         path = os.path.join(repo, ".claude", "kit", gate)
         if not os.path.isfile(path):
             statuses[gate] = "absent"
             continue
-        with open(path, "rb") as f:
-            raw = f.read()
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError as e:
+            raise io_error("can't read", path, e)
         new = render_gate(raw, gate_line(gate, names))
         if new is None:
             statuses[gate] = "no-markers"
@@ -269,41 +275,111 @@ def plan_gates(repo, agents):
             statuses[gate] = "unchanged"
         else:
             statuses[gate] = "updated"
-            writes.append((path, new))
+            writes.append((path, new, raw))
     return statuses, writes
 
 
 # ---------- writing ----------
 
-def atomic_write(path, data):
-    """Write to a temp file beside path, then rename over it, keeping an existing file's mode (a gate's +x)."""
-    folder = os.path.dirname(path)
-    os.makedirs(folder, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=folder, prefix="." + os.path.basename(path) + ".", suffix=".tmp")
+def io_error(what, path, e):
+    return Fail("IO_ERROR", "%s %s: %s" % (what, path, e.strerror or e), 1)
+
+
+def stage(path, data):
+    """A temp file beside path holding data, with path's mode when path exists (a gate's +x)."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix="." + os.path.basename(path) + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         if os.path.exists(path):
             shutil.copymode(path, tmp)
-        os.replace(tmp, path)
     except BaseException:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        discard(tmp)
         raise
+    return tmp
+
+
+def discard(tmp):
+    """Remove a temp file if it is still there, read-only or not; return why it couldn't be, or None."""
+    try:
+        if os.path.lexists(tmp):
+            os.chmod(tmp, stat.S_IREAD | stat.S_IWRITE)
+            os.remove(tmp)
+    except OSError as e:
+        return "left %s: %s" % (tmp, e.strerror or e)
+    return None
+
+
+def restore(path, backup):
+    """Put back a file write_all already replaced; return why it couldn't, or None.
+
+    Retried briefly: on Windows a file renamed a moment ago can be held open by a virus scanner or the indexer.
+    """
+    for attempt in range(5):
+        try:
+            if backup is None:
+                os.remove(path)
+            else:
+                os.replace(backup, path)
+            return None
+        except OSError as e:
+            if attempt == 4:
+                return "couldn't restore %s: %s" % (path, e.strerror or e)
+            time.sleep(0.1)
+
+
+def write_all(writes):
+    """Write every (path, new bytes, old bytes or None), or as far as the OS allows none of them.
+
+    First every temp file: the new bytes, and a backup of the old bytes for a file that exists. A failure
+    there changes nothing. Then each new file is renamed into place; if a rename fails, the files already
+    replaced get their backups back (or are removed, when they didn't exist). No temp file is left behind.
+    """
+    staged, temps, error = [], [], None
+    try:
+        for path, new, old in writes:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = stage(path, new)
+            temps.append(tmp)
+            backup = None
+            if old is not None:
+                backup = stage(path, old)
+                temps.append(backup)
+            staged.append((path, tmp, backup))
+    except OSError as e:
+        error = io_error("can't write", path, e)
+
+    done = []
+    for path, tmp, backup in ([] if error else staged):
+        try:
+            os.replace(tmp, path)
+        except OSError as e:
+            error = io_error("can't write", path, e)
+            break
+        done.append((path, backup))
+
+    problems = []
+    if error:
+        for path, backup in reversed(done):
+            problem = restore(path, backup)
+            if problem:
+                problems.append(problem)
+    problems += [p for p in map(discard, temps) if p]
+    if error:
+        error.detail = "; ".join([error.detail] + problems)
+        raise error
+    if problems:
+        raise Fail("IO_ERROR", "wrote everything, but " + "; ".join(problems), 1)
 
 
 def commit(repo, path, old_raw, manifest):
-    """Write the manifest (when its bytes changed) and the gates, and return the stdout object."""
+    """Write the manifest (when its bytes changed) and the gates, all or none, and return the stdout object."""
     data = serialise(manifest)
     changed = data != old_raw
-    statuses, gate_writes = plan_gates(repo, manifest["agents"])
-    try:
-        if changed:
-            atomic_write(path, data)
-        for gate_path, gate_data in gate_writes:
-            atomic_write(gate_path, gate_data)
-    except OSError as e:
-        raise Fail("IO_ERROR", str(e), 1)
+    statuses, writes = plan_gates(repo, manifest["agents"])
+    if changed:
+        writes.insert(0, (path, data, old_raw))
+    write_all(writes)
     return {"manifest": path, "changed": changed, "gates": statuses}
 
 
@@ -361,12 +437,15 @@ def main(argv=None):
             out = cmd_write(a.repo, a.facts)
         else:
             out = cmd_declare(a.repo, a.by, a.read_only)
-    except Fail as f:
-        detail = " ".join(f.detail.split())  # one line, whatever the detail held
-        sys.stderr.write("kit_manifest: %s: %s\n" % (f.code, detail))
-        return f.exit_code
-    sys.stdout.write(json.dumps(out) + "\n")
-    return 0
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 0
+    except Fail as caught:
+        f = caught
+    except OSError as e:  # the guard: an OS error no code path names still ends as one line, not a traceback
+        f = Fail("IO_ERROR", str(e), 1)
+    detail = " ".join(f.detail.split())  # one line, whatever the detail held
+    sys.stderr.write("kit_manifest: %s: %s\n" % (f.code, detail))
+    return f.exit_code
 
 
 if __name__ == "__main__":

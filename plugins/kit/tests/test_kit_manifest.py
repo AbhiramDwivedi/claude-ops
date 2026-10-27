@@ -2,6 +2,10 @@
 
 Run: python -m unittest discover -s plugins/kit/tests
 """
+import contextlib
+import getpass
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -10,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "scripts", "kit_manifest.py")
@@ -224,6 +229,102 @@ class KitManifest(unittest.TestCase):
         self.ok(self.write())
         self.ok(self.declare("foundry", "foundry:judge"))
         self.assertEqual(sorted(os.listdir(self.kitdir)), ["manifest.json", "stop-gate.sh"])
+
+    # ---------- the OS refusing a read or write ----------
+
+    def snapshot(self):
+        """Every file in .claude/kit with its bytes (None when unreadable)."""
+        out = {}
+        for name in sorted(os.listdir(self.kitdir)):
+            try:
+                out[name] = self.raw(os.path.join(self.kitdir, name))
+            except OSError:
+                out[name] = None
+        return out
+
+    def three_files(self):
+        """A manifest and both gates, and a snapshot of them, before a declare that changes all three."""
+        self.put("stop-gate.sh", self.SH.encode())
+        self.put("stop-gate.ps1", self.PS1.encode("utf-8"))
+        self.ok(self.write())
+        return self.snapshot()
+
+    @unittest.skipIf(os.name != "nt", "a POSIX rename replaces a read-only file; Windows refuses it")
+    def test_read_only_gate_fails_declare_and_changes_nothing(self):
+        before = self.three_files()
+        ps1 = os.path.join(self.kitdir, "stop-gate.ps1")
+        os.chmod(ps1, stat.S_IREAD)
+        self.addCleanup(os.chmod, ps1, stat.S_IREAD | stat.S_IWRITE)
+        r = self.declare("foundry", "foundry:judge")
+        self.err(r, "IO_ERROR", 1)
+        self.assertIn("stop-gate.ps1: ", r.stderr)
+        self.assertNotIn(".tmp", r.stderr, "the error names the gate, not a temp file")
+        self.assertEqual(self.snapshot(), before, "manifest and stop-gate.sh restored, no .tmp left")
+
+    @unittest.skipIf(os.name != "nt" and os.geteuid() == 0, "root reads a mode-000 file")
+    def test_unreadable_gate_is_one_line_and_changes_nothing(self):
+        before = self.three_files()
+        ps1 = os.path.join(self.kitdir, "stop-gate.ps1")
+        if os.name == "nt":
+            user = getpass.getuser()
+            subprocess.run(["icacls", ps1, "/deny", user + ":(R)"], check=True, capture_output=True)
+            self.addCleanup(subprocess.run, ["icacls", ps1, "/remove:d", user], capture_output=True)
+        else:
+            os.chmod(ps1, 0)
+            self.addCleanup(os.chmod, ps1, 0o644)
+        before["stop-gate.ps1"] = None
+        r = self.declare("foundry", "foundry:judge")
+        self.err(r, "IO_ERROR", 1)
+        self.assertIn("can't read %s: " % ps1, r.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def in_process(self, *args):
+        """Run main() in this process, so a test can make one OS call fail; returns (exit, stderr)."""
+        spec = importlib.util.spec_from_file_location("kit_manifest_under_test", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        err, out = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+            code = mod.main(list(args))
+        return mod, code, err.getvalue()
+
+    def fail_nth(self, real, n):
+        """real, but the nth call (1-based) raises PermissionError."""
+        calls = []
+
+        def fake(*a, **k):
+            calls.append(a)
+            if len(calls) == n:
+                raise PermissionError(13, "Permission denied")
+            return real(*a, **k)
+        return fake
+
+    def test_failed_rename_restores_the_files_already_replaced(self):
+        before = self.three_files()
+        for n in (1, 2, 3):  # manifest, stop-gate.sh, stop-gate.ps1
+            with self.subTest(failing_rename=n), mock.patch("os.replace", self.fail_nth(os.replace, n)):
+                _, code, err = self.in_process("declare", "--repo", self.repo, "--by", "foundry",
+                                               "--read-only", "foundry:judge")
+                self.assertEqual(code, 1, err)
+                self.assertRegex(err, r"^kit_manifest: IO_ERROR: can't write .*(manifest\.json|stop-gate\.(sh|ps1)): "
+                                      r"Permission denied\n$")
+                self.assertEqual(self.snapshot(), before)
+
+    def test_failed_temp_write_changes_nothing(self):
+        before = self.three_files()
+        for n in range(1, 7):  # new + backup temp for each of the three files
+            with self.subTest(failing_temp=n), mock.patch("tempfile.mkstemp", self.fail_nth(tempfile.mkstemp, n)):
+                _, code, err = self.in_process("declare", "--repo", self.repo, "--by", "foundry",
+                                               "--read-only", "foundry:judge")
+                self.assertEqual(code, 1, err)
+                self.assertTrue(err.startswith("kit_manifest: IO_ERROR: can't write "), err)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_no_os_error_escapes_as_a_traceback(self):
+        self.three_files()
+        with mock.patch("os.path.isdir", side_effect=OSError(5, "I/O error")):
+            _, code, err = self.in_process("declare", "--repo", self.repo, "--by", "foundry", "--read-only", "foundry:judge")
+        self.assertEqual((code, err), (1, "kit_manifest: IO_ERROR: [Errno 5] I/O error\n"))
 
     @unittest.skipIf(shutil.which("pwsh") is None, "no pwsh on PATH")
     def test_rendered_ps1_skips_declared_agent_case_insensitively(self):

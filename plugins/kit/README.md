@@ -49,7 +49,7 @@ After you approve the proposal, and never before, `/kit:init` writes `.claude/ki
 The script has two subcommands:
 
 - `write --repo <dir> --facts <file|->` takes the approved facts and writes the manifest.
-- `declare --repo <dir> --by <plugin> --read-only <names>` marks another plugin's agent types read-only in an existing manifest. The names are comma-separated and each must be prefixed by `<plugin>:`. Foundry uses it to mark its own agent types.
+- `declare --repo <dir> --by <plugin> --read-only <names>` marks agent types read-only in an existing manifest. The names are comma-separated. Each is `<plugin>:<name>` with the prefix equal to `--by`, or, with `--by project`, a bare name for one of the project's own agents. Foundry uses it to mark its own agent types.
 
 Two things read the manifest:
 
