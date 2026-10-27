@@ -37,7 +37,8 @@ Run `/foundry:init` once per project. A run does it for you when the architectur
    | What init finds | What it does |
    | --- | --- |
    | A valid manifest at `version` 1 that marks `foundry:judge` and `foundry:cynic` read-only | Uses it, and says nothing about kit. |
-   | No manifest, or a valid one without those declarations, and `kit:init` in the session's skills | Runs `kit:init` with the args `declare read-only: foundry:judge, foundry:cynic`. kit shows you the declaration (with no manifest, as part of setting the project up) and writes it when you approve. |
+   | A valid manifest without those declarations, and `kit:init` in the session's skills | Runs `kit:init` with the args `declare read-only: foundry:judge, foundry:cynic`. kit shows you the declaration and writes it when you approve. |
+   | No manifest, and `kit:init` in the session's skills | Says `no kit manifest; foundry init carries on without one (run /kit:init on its own to set kit up)` and carries on. It never sets kit up for you. |
    | No manifest, or one without the declarations, and no `kit:init` | Says `kit is not installed; foundry init carries on without a kit manifest (0.3.0 behaviour)` and carries on. |
    | A manifest that isn't JSON, fails kit's schema or has another `version` | Says `kit manifest unreadable, carrying on without it: <reason>` and carries on as if there were none. It doesn't rerun `kit:init` over it. |
 

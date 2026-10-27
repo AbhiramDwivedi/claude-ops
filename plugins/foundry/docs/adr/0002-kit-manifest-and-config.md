@@ -19,11 +19,13 @@ After step 1 (the doc check), init looks at `<repo>/.claude/kit/manifest.json` (
 | --- | --- |
 | A valid manifest at `version` 1 that marks `foundry:judge` and `foundry:cynic` read-only | Uses it (below). |
 | A valid manifest without those declarations, and `kit:init` listed among the session's skills | Runs `kit:init` through the Skill tool with args `declare read-only: foundry:judge, foundry:cynic`. kit shows the owner the declaration and writes it on approval. |
-| No manifest, and `kit:init` listed | Runs `kit:init` through the Skill tool with the same args, so kit sets the project up and records the declaration in one approval. |
+| No manifest, and `kit:init` listed | Says `no kit manifest; foundry init carries on without one (run /kit:init on its own to set kit up)` and carries on. It doesn't start `kit:init` (amended 2026-10-27, foundry 0.4.1, below). |
 | `kit:init` not listed | Says `kit is not installed; foundry init carries on without a kit manifest (0.3.0 behaviour)` and carries on. |
 | A manifest that isn't JSON, fails the schema or has another `version` | Says `kit manifest unreadable, carrying on without it: <reason>` and carries on as if there were none. It doesn't rerun `kit:init` over it. |
 
 The rows don't overlap, because init decides on the manifest before it looks at the skill list. The first and last rows depend on the manifest alone. A valid manifest that already holds both declarations means there is nothing to do, whatever kit's install state: init uses it and says nothing about kit, even when `kit:init` isn't listed. An unreadable manifest gets the `unreadable` line, listed or not. Only when the manifest is absent, or valid but without the declarations, does the skill list decide: `kit:init` listed means the second or third row, and not listed means the `kit is not installed` line.
+
+**Amendment, 2026-10-27 (foundry 0.4.1).** As accepted, the no-manifest row ran `kit:init`, so kit set the project up inside foundry init. On the first live init (a repo with its own hooks and no kit) that made init stop and ask the owner, because a full kit setup is a large, separate change and foundry needs only two read-only declarations from it. A missing manifest now gets the line and no `kit:init`; the owner runs `/kit:init` on its own when they want kit. A manifest without the declarations still gets `kit:init` with the declare args, since kit is already set up there and only the declaration is shown.
 
 The judge and cynic are the declared types because both are `tools: Read, Grep, Glob, Bash`. The writer, devops, lead and architect edit files and stay isolated. Once kit records them, worktrees gives them no worktree (repo [ADR-0014](../../../../docs/adr/0014-worktrees-declared-read-only-agents.md)) and kit's stop gate skips them.
 
