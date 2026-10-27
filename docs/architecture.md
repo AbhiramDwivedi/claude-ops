@@ -4,7 +4,7 @@ This repo is the `claude-ops` plugin marketplace for Claude Code: seven plugins 
 
 foundry has its own, deeper module doc: [`plugins/foundry/docs/architecture.md`](../plugins/foundry/docs/architecture.md), with [foundry ADR-0001](../plugins/foundry/docs/adr/0001-design-phase.md) (the design phase, principle packs and plan file). That doc stays the source for foundry's internals; this one links to it rather than repeating it. Repo-level ADRs are in [`docs/adr/`](adr/) and are cited here as ADR-00NN; foundry's own is always written "foundry ADR-0001".
 
-Recorded on 2026-10-26 from the code at commit `0954e71`. `.claude/worktrees/` holds agent worktrees and is not part of the repo; `plugins/context-limits/` is an untracked, ignored leftover with no tracked files and no marketplace entry, and is not a module.
+Recorded on 2026-10-26 from the code at commit `0954e71`. foundry run 2's design crew added the extension framework on 2026-10-26, against `b665583`: [ADR-0012](adr/0012-extension-framework.md) (proposed) and the ADRs that apply it. Where this doc says kit 0.2.0, worktrees 0.6.0 or foundry 0.4.0, it describes that design; the code catches up when the run's wave 1 merges. `.claude/worktrees/` holds agent worktrees and is not part of the repo; `plugins/context-limits/` is an untracked, ignored leftover with no tracked files and no marketplace entry, and is not a module.
 
 ## Principles
 
@@ -60,6 +60,8 @@ The plugins are what other people install. They are not imported as code, so the
   Test: the diff adds no I/O, timer or `process.env` read at module top level, and no `process.exit`.
 - **P19. No runtime dependencies.** (library 10, made stricter; ADR-0002, ADR-0004) Mods import only `claude-code`; Python scripts use the 3.9+ standard library.
   Test: the diff adds no `package.json`, npm import, `requirements.txt` or non-stdlib Python import.
+- **P33. A plugin extends another only through an extension point the base declares.** (added by ADR-0012; library 1 and 2, extended) The base writes a versioned file under a schema it owns, through code, and names it as an extension point in its README and in the seams table. Extensions read it and never edit it, adding to it only through the base's own skill and its approval step. No plugin rewrites another's prompt (`skill.prompt`, or registering another plugin's agent type), and none lists another under plugin.json `dependencies`. A declaration that relaxes a default matches the full name exactly; a missing, unreadable or unknown-version file means today's behaviour.
+  Test: a diff that makes one plugin act on another's file reads a path the seams table marks as an extension point, writes nothing there, and has a test for the file being absent and corrupt; the diff adds no `skill.prompt` handler for a skill outside the plugin and no `dependencies` key.
 
 Dropped: library 5 (changelog). The repo keeps no changelog; commit subjects carry the version (`kit 0.1.1: ...`) and READMEs describe the current behaviour. Library 11 (wrapped error types) and 12 (API report): nothing imports the plugins as code, so there is no error API or export surface to check.
 
@@ -115,11 +117,11 @@ Dropped: data 1, 2, 7 to 11 and 13. The audit is a personal report over "the las
 | usage-limits | `plugins/usage-limits/` | Line above the prompt: limit windows, burn rate, run-out projection, context fill, cost |
 | session-models | `plugins/session-models/` | Line above the prompt: main model and effort, live agents by model, named crews, warnings |
 | subagent-limits | `plugins/subagent-limits/` | Sizes and splits subagent work; asks a large subagent to checkpoint, then refuses its tools |
-| worktrees | `plugins/worktrees/` | Worktree per editing agent, setup script and port slots, cleanup, `/tidy` |
+| worktrees | `plugins/worktrees/` | Worktree per editing agent (none for types kit's manifest declares read-only, 0.6.0), setup script and port slots, cleanup, `/tidy` |
 | workflow-audit | `plugins/workflow-audit/` | `/workflow-audit`: script measures transcripts, skill judges against the catalog |
 | catalog-refresh | `scripts/catalog-refresh/` | Weekly headless refresh of workflow-audit's catalog, by PR |
-| kit | `plugins/kit/` | `/kit:init` sets a project up from its code; `/kit:revise` revises it from its sessions; four model-pinned agents |
-| foundry | `plugins/foundry/` | `/foundry:run` runs a goal as parallel crews; `/foundry:init` and the architect write the architecture doc and plan |
+| kit | `plugins/kit/` | `/kit:init` sets a project up from its code and (0.2.0) records it in a manifest; `/kit:revise` revises it from its sessions; four model-pinned agents |
+| foundry | `plugins/foundry/` | `/foundry:run` runs a goal as parallel crews; `/foundry:init` and the architect write the architecture doc and plan; (0.4.0) `/foundry:retro` counts what a run did |
 
 Every plugin has `.claude-plugin/plugin.json` (name, version, `userConfig`) and a `README.md`. The mods (usage-limits, session-models, subagent-limits, worktrees, foundry) have `hooks/hooks.json` naming one module, `tests/`, `tsconfig.json`, and `types/index.d.ts` where they keep plugin state (ADR-0002, ADR-0007).
 
@@ -146,6 +148,7 @@ Owns the marketplace manifest and the root README. Seam: `marketplace.json` list
 
 - `hooks/register.ts`: `classic.PreToolUse` on `Agent` adds `isolation: "worktree"` unless the type is in `READ_ONLY_AGENTS` (`Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer`) or `noIsolateAgents`; `classic.WorktreeCreate` creates the worktree from the current HEAD, copies `.worktreeinclude` files and runs the setup script; `classic.SubagentStop` refuses a stop while the agent owns a background shell or monitor, and stops what it left running; `classic.PostToolUse`, after a `Bash` or `PowerShell` command containing `merge`, sweeps the worktrees this session made and removes an agent's worktree and branch once it is merged; `/tidy` removes other merged worktrees and branches. Settings: `noIsolateAgents`, `readOnlyAgents` (deprecated), `isolateNestedRepos`, `portBase`.
 - Seams: the worktree layout and setup-script contract (ADR-0005), and `<git common dir>/claude-worktrees/slots.json` (ADR-0006). Its contract is the README's "The `.claude/worktree-setup` contract" table.
+- 0.6.0 ([ADR-0014](adr/0014-worktrees-declared-read-only-agents.md)): before isolating an `Agent` call, it reads `<main checkout>/.claude/kit/manifest.json` and gives no worktree to a type whose full name a `readOnly: true` entry declares. Exact names only; an explicit `isolation` wins; a missing or unreadable manifest changes nothing. Its extension point is "read-only types, declared through kit's manifest".
 
 ### workflow-audit
 
@@ -174,6 +177,7 @@ kit is a set of prompts, four agents and one script. It has no hooks module of i
 | `kit:test-writer` | `agents/test-writer.md` | sonnet; tests from the spec first |
 | `kit:scout` | `agents/scout.md` | haiku; tools Read, Grep, Glob; search |
 | miner | `scripts/kit_mine.py --days N` | Prints one JSON object to stdout with `window`, `commands`, `prompts`, `briefs`, `findings`, `kit`; read only by `kit:revise` |
+| manifest writer, 0.2.0 | `scripts/kit_manifest.py write` / `declare` | Validates approved facts and writes `.claude/kit/manifest.json`; re-renders the stop gates' skip line (ADR-0013) |
 
 `scripts/wa_parse.py` and `scripts/wa_common.py` are copies of workflow-audit's (ADR-0003). `kit_mine.py` hard-codes kit's own agents and skills (`KIT_AGENTS`, `KIT_SKILLS`) to count their use. Tests: `tests/test_mine.py`, run with `python -m unittest discover -s plugins/kit/tests`.
 
@@ -187,12 +191,15 @@ kit is a set of prompts, four agents and one script. It has no hooks module of i
 | `.claude/kit/review-checklist.md` | 5 to 15 repo-specific review items | `kit:builder`, `kit:reviewer` |
 | `.claude/worktree-setup.sh` / `.ps1` | Per-worktree setup from the stub, using `WORKTREE_PATH`, `WORKTREE_SLOT`, `PORT_BASE` | worktrees (ADR-0005) |
 | `.gitignore` and tool ignore configs | `.claude/worktrees/` entries | git, linters, test runners |
+| `.claude/kit/manifest.json`, 0.2.0 | What kit set up: checks, agents with `readOnly`, risky paths, setup scripts; written only by `kit_manifest.py` | kit's stop gate (rendered from it), worktrees, foundry init |
 
-`kit:init` treats an existing `.claude/kit/` directory as "kit has run here before" and suggests `/kit:revise` instead. That directory is the only marker of a kit run; kit writes no machine-readable record of what it set up (no manifest, no list of the checks, agents or risky paths it found). It doesn't commit.
+`kit:init` treats an existing `.claude/kit/` directory as "kit has run here before" and suggests `/kit:revise` instead. In 0.1.1 that directory is the only marker of a kit run; kit writes no machine-readable record of what it set up. It doesn't commit.
+
+**The manifest, 0.2.0** ([ADR-0013](adr/0013-kit-manifest.md)). After the owner approves, kit init calls `scripts/kit_manifest.py write`, which writes `.claude/kit/manifest.json`: `version`, `kit`, `checks`, `agents` (each with `readOnly` and `declaredBy`), `riskyPaths` and `setupScripts`. The contract is [`plugins/kit/docs/manifest.schema.json`](../plugins/kit/docs/manifest.schema.json). Another plugin adds its read-only types by running `kit:init` with `declare read-only: <type>, ...`; kit shows the owner the declaration and on approval calls `kit_manifest.py declare`. Both commands re-render the skip line between `# kit:read-only-agents:begin` and `# kit:read-only-agents:end` in the stop gates. Only the script writes the manifest; the stop gate, worktrees and foundry init read it.
 
 **Seams**
 
-- Out: the four agent type names (used by foundry's run skill at run time, by worktrees' read-only list, by kit's stop gate); the project files above; the setup-script contract shared with worktrees.
+- Out: the four agent type names (used by foundry's run skill at run time, by worktrees' read-only list, by kit's stop gate); the project files above; the setup-script contract shared with worktrees; (0.2.0) the manifest and the `declare read-only:` flow of `kit:init`, its two declared extension points.
 - In: workflow-audit's parser (vendored); transcripts under `~/.claude/projects/` (read-only, through the miner).
 - kit declares no dependency on any plugin, and nothing in kit reads foundry's files or `.claude/foundry.json`.
 
@@ -230,22 +237,32 @@ Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
 - worktrees: foundry's prompts set `isolation: "worktree"` on leads and editing members; worktrees creates those worktrees from the current HEAD under `.claude/worktrees/`. foundry relies on crews seeing only committed files (init step 4; run section 0).
 - subagent-limits: the lead loads `subagent-limits:split-work` if present; every crew agent's prompt carries subagent-limits' contract when that plugin is installed.
 - session-models: shows foundry's leads as crews by their names; no file seam.
-- Resource slices: the architect proposes a port range, database or temp directory per crew in `plan.md`. That range is not connected to worktrees' `PORT_BASE` slots (ADR-0005, consequences).
+- Resource slices: in 0.3.0 the architect proposes a port range, database or temp directory per crew in `plan.md`, and the range is not connected to worktrees' `PORT_BASE` slots (ADR-0005, consequences). From 0.4.0 crews use their worktree slot's `PORT_BASE`, or the plan says there is none ([foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), section 4).
 
-**Where run 2 attaches** (from `plugins/foundry/docs/backlog.md`, "Run 2"; described, not planned here): `foundry init` would read a manifest `kit init` writes (checks, agents, risky paths) and add role mapping, port slices, deploy target, the writing skill and prompt overrides per role; when the manifest is missing, foundry runs `kit:init` first. Today the facts such a manifest would carry are spread across the files in kit's table above, and foundry discovers agents by listing types. `foundry retro` would read `decisions.md` from the foundry dir. None of the plugins declares a dependency in `plugin.json`.
+**0.4.0, from foundry run 2** (design in [foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md) and [foundry ADR-0003](../plugins/foundry/docs/adr/0003-event-log-and-retro.md)):
+
+- foundry init reads kit's manifest. When the manifest is missing or lacks `foundry:judge` and `foundry:cynic` as read-only, and `kit:init` is listed, it runs `kit:init` with `declare read-only: foundry:judge, foundry:cynic`. Without kit it carries on as 0.3.0 and says so. kit is a soft dependency: nothing in `plugin.json` names it (ADR-0012, rule 5).
+- `.claude/foundry.json` gains `roles`, `deploy`, `writingSkill` and `promptOverrides`, under [`plugins/foundry/docs/foundry-config.schema.json`](../plugins/foundry/docs/foundry-config.schema.json). Prompt overrides name files under `.claude/foundry/prompts/`, which the briefs point roles at; they never replace a role's prompt.
+- The hooks append `<foundry dir>/events.jsonl` ([`events.schema.json`](../plugins/foundry/docs/events.schema.json)); `decisions.md` gets a grammar with a `## Run` heading per run; `scripts/retro.py` and the `foundry:retro` skill count both, and say `"not recorded"` for what an older log lacks.
 
 ## Seams
+
+A row marked "Extension point" is one its base declares for other plugins to build on (ADR-0012, rule 2): the base owns its schema, and other plugins read it and never edit it. Every other row is a seam two modules share, not an invitation to extend.
 
 | Seam | Producer | Consumers | Contract | ADR |
 | --- | --- | --- | --- | --- |
 | Agent type names (`kit:scout`, `kit:reviewer`, `kit:builder`, `kit:test-writer`, `foundry:*`) | kit, foundry | worktrees (`READ_ONLY_AGENTS`), kit's stop gate, foundry's run skill | agent frontmatter `name`, `model`, `tools` | 0001, 0011 |
-| `.claude/worktree-setup.sh` / `.ps1` and its env | kit (writes), project owner | worktrees (runs) | `plugins/worktrees/README.md`, "The `.claude/worktree-setup` contract" | 0005 |
+| Extension point: `.claude/kit/manifest.json`, kit 0.2.0 (checks, agents with `readOnly`, risky paths, setup scripts) | kit (`scripts/kit_manifest.py`, only after the owner approves) | worktrees, kit's stop gate, foundry init | `plugins/kit/docs/manifest.schema.json` | 0012, 0013 |
+| Extension point: `kit:init` with `declare read-only: <type>, ...`, kit 0.2.0 | kit | foundry init | `plugins/kit/skills/init/SKILL.md` | 0012, 0013 |
+| Extension point: read-only types declared through kit's manifest, worktrees 0.6.0 | worktrees | Claude Code `Agent` calls | `plugins/worktrees/README.md` | 0012, 0014 |
+| `<foundry dir>/events.jsonl` and the `decisions.md` grammar, foundry 0.4.0 | foundry hooks, foreman | `scripts/retro.py` | `plugins/foundry/docs/events.schema.json`; module doc "On disk" | foundry 0003 |
+| `.claude/worktree-setup.sh` / `.ps1` and its env | kit (writes), project owner | worktrees (runs); from foundry 0.4.0, crews read `PORT_BASE` through what the script writes | `plugins/worktrees/README.md`, "The `.claude/worktree-setup` contract" | 0005 |
 | `.claude/worktrees/<name>`, branch `worktree-<name>` | worktrees | kit init (ignore entries), `kit_mine.py`, workflow-audit project mapping, foundry | worktrees README; `CONTRACT.md` metrics version 3 note | 0005 |
 | `<git common dir>/claude-worktrees/slots.json` | worktrees | worktrees in other sessions | type in `register.ts` | 0006 |
 | `<git common dir>/foundry/<session id>/`, `plan.json` | foundry architect, foreman, hooks | foundry hooks and roles | `plugins/foundry/docs/plan.schema.json`; module doc "On disk" | 0006, foundry 0001 |
-| `.claude/foundry.json` | foundry init, owner | foundry run skill, architect | module doc config table | foundry 0001 |
+| Extension point from 0.4.0: `.claude/foundry.json` | foundry init, owner | foundry run skill, architect | `plugins/foundry/docs/foundry-config.schema.json`; module doc config table | foundry 0001, foundry 0002 |
 | `.claude/kit/review-checklist.md`, `CLAUDE.md` section | kit init | kit agents; foundry lead and devops read `CLAUDE.md` | `skills/init/SKILL.md`, section 2 | 0001 |
-| `.claude/settings.json` gate hooks, `.claude/kit/*-gate.*` | kit init | Claude Code | `skills/init/hooks-reference.md` | 0008 |
+| `.claude/settings.json` gate hooks, `.claude/kit/*-gate.*` | kit init; from 0.2.0 `kit_manifest.py` re-renders the stop gate's skip line between its markers | Claude Code | `skills/init/hooks-reference.md` | 0008, 0013 |
 | Subagent prompt contract (`CONTRACT`) | subagent-limits | every subagent | exported constant in `register.ts`, tested in `tests/ctx-study.test.ts` | 0001 |
 | `subagent-limits:split-work` skill | subagent-limits | foundry lead, main sessions | the skill file | 0001 |
 | `wa_parse.py`, `wa_common.py` | workflow-audit | kit (vendored copy) | byte-for-byte test in `plugins/kit/tests/test_mine.py` | 0003 |
@@ -268,12 +285,20 @@ Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
 - [ADR-0009](adr/0009-independent-plugin-versions.md): each plugin carries its own semver version, and every shipped change moves it.
 - [ADR-0010](adr/0010-dated-catalog-refreshed-by-pr.md): workflow-audit's advice is a dated data catalog, refreshed weekly through a PR.
 - [ADR-0011](adr/0011-agents-pin-their-model.md): agent types pin their model, so picking the agent picks the model.
+- [ADR-0012](adr/0012-extension-framework.md), proposed: plugins extend each other through versioned manifests the base owns; no prompt rewriting, soft dependencies only, exact-match declarations from owner-approved sources.
+- [ADR-0013](adr/0013-kit-manifest.md), proposed: kit records what it set up in `.claude/kit/manifest.json`, written by `kit_manifest.py`, and renders the stop gate's skip list from it.
+- [ADR-0014](adr/0014-worktrees-declared-read-only-agents.md), proposed: worktrees gives no worktree to agent types kit's manifest declares read-only.
 - [foundry ADR-0001](../plugins/foundry/docs/adr/0001-design-phase.md): foundry's design phase, principle packs, extend-or-change verdicts and plan file.
+- [foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), proposed: foundry init builds on kit's manifest; new `foundry.json` keys; ports from worktrees' slots.
+- [foundry ADR-0003](../plugins/foundry/docs/adr/0003-event-log-and-retro.md), proposed: the event log, the `decisions.md` grammar and `scripts/retro.py`.
 
 ## Open questions
 
 - TODO: the order in which Claude Code runs different plugins' handlers for one event is not recorded in this repo. worktrees, subagent-limits and foundry all act on agent starts.
 - TODO: subagent-limits refuses tools without a fail-open guard (ADR-0008).
-- TODO: foundry's per-crew port ranges and worktrees' port slots are not connected (ADR-0005).
+- Settled by ADR-0012 and foundry ADR-0002, once built: foundry's per-crew port ranges and worktrees' port slots were not connected (ADR-0005).
+- TODO: whether plugin.json `dependencies` enforces a version range, blocks loading when the dependency is missing, or needs the same marketplace. Probing it means installing plugins. ADR-0012 uses no `dependencies`, so nothing depends on the answer yet.
+- TODO: a kit-free way for a plugin to declare its own read-only types (plugin state is the candidate, ADR-0012). Deferred until a second plugin needs it; without kit the owner sets worktrees' `noIsolateAgents`.
+- TODO: report files are named per crew, so a later run in the same session dir that reuses a crew name can leave a stale, higher-numbered judge file (foundry ADR-0003, consequences).
 - TODO: there is no eval set for the prompts (AI principles, dropped rules).
 - TODO: the scheduler that runs `scripts/catalog-refresh/run.sh` is not recorded in the repo (ADR-0010).
