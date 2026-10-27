@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -95,6 +96,31 @@ class KitManifest(unittest.TestCase):
         self.err(self.write(), "NEWER_VERSION", 3)
         self.err(self.declare("foundry", "foundry:judge"), "NEWER_VERSION", 3)
         self.assertEqual(self.raw(self.manifest), data)
+
+    def test_any_number_above_1_is_a_newer_version(self):
+        with open(FIXTURE, "rb") as f:
+            fixture = f.read()
+        cases = [("2.0", "NEWER_VERSION"), ("1.5", "NEWER_VERSION"), ("2", "NEWER_VERSION"),
+                 ("true", "MANIFEST_CORRUPT"), ("0.5", "MANIFEST_CORRUPT")]
+        for version, code in cases:
+            with self.subTest(version=version):
+                data = fixture.replace(b'"version": 1,', b'"version": ' + version.encode() + b",")
+                self.put("manifest.json", data)
+                self.err(self.declare("foundry", "foundry:judge"), code, 3)
+                self.assertEqual(self.raw(self.manifest), data)
+        with self.subTest(version="1.0"):  # ajv's const accepts 1.0, so the script does too
+            self.put("manifest.json", fixture.replace(b'"version": 1,', b'"version": 1.0,'))
+            self.ok(self.declare("foundry", "foundry:judge"))
+
+    def test_deeply_nested_json_is_one_line_not_a_traceback(self):
+        deep = "[" * 200000 + "]" * 200000
+        self.err(self.run_script("write", "--repo", self.repo, "--facts", "-", stdin=deep), "BAD_JSON", 2)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, ".claude")))
+        self.put("manifest.json", deep.encode())
+        for r in (self.write(), self.declare("foundry", "foundry:judge")):
+            self.err(r, "MANIFEST_CORRUPT", 3)
+            self.assertEqual(sorted(os.listdir(self.kitdir)), ["manifest.json"])
+            self.assertEqual(self.raw(self.manifest), deep.encode())
 
     # ---------- bad input ----------
 
@@ -286,6 +312,7 @@ class KitManifest(unittest.TestCase):
         err, out = io.StringIO(), io.StringIO()
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
             code = mod.main(list(args))
+        self.out = out.getvalue()
         return mod, code, err.getvalue()
 
     def fail_nth(self, real, n):
@@ -325,6 +352,77 @@ class KitManifest(unittest.TestCase):
         with mock.patch("os.path.isdir", side_effect=OSError(5, "I/O error")):
             _, code, err = self.in_process("declare", "--repo", self.repo, "--by", "foundry", "--read-only", "foundry:judge")
         self.assertEqual((code, err), (1, "kit_manifest: IO_ERROR: [Errno 5] I/O error\n"))
+
+    def fail_from(self, real, n):
+        """real, but every call from the nth (1-based) on raises PermissionError."""
+        calls = []
+
+        def fake(*a, **k):
+            calls.append(a)
+            if len(calls) >= n:
+                raise PermissionError(13, "Permission denied")
+            return real(*a, **k)
+        return fake
+
+    def declare_in_process(self):
+        return self.in_process("declare", "--repo", self.repo, "--by", "foundry", "--read-only", "foundry:judge")
+
+    def temps(self):
+        return sorted(n for n in os.listdir(self.kitdir) if n.endswith(".tmp"))
+
+    def test_one_failed_backup_removal_is_retried(self):
+        self.three_files()
+        with mock.patch("os.remove", self.fail_nth(os.remove, 1)):  # the first backup's removal, after every rename
+            _, code, err = self.declare_in_process()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(self.out)["gates"], {"stop-gate.sh": "updated", "stop-gate.ps1": "updated"})
+        self.assertEqual(self.temps(), [])
+        self.assertTrue(self.agents()["foundry:judge"]["readOnly"])
+
+    def test_backup_left_after_a_complete_write_is_a_warning_not_an_error(self):
+        self.three_files()
+        with mock.patch("os.remove", self.fail_from(os.remove, 1)):
+            _, code, err = self.declare_in_process()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(self.out)["gates"], {"stop-gate.sh": "updated", "stop-gate.ps1": "updated"})
+        self.assertRegex(err, r"^kit_manifest: warning: wrote everything, but left [^\n]*\.tmp: Permission denied\n$")
+        self.assertEqual(len(self.temps()), 3)  # a backup per file, each named in the warning
+        for name in self.temps():
+            self.assertIn(os.path.join(self.kitdir, name) + ": Permission denied", err)
+        for name in self.temps():
+            os.remove(os.path.join(self.kitdir, name))
+        again = self.ok(self.declare("foundry", "foundry:judge"))  # every file already holds its new bytes
+        self.assertEqual((again["changed"], again["gates"]), (False, {"stop-gate.sh": "unchanged",
+                                                                      "stop-gate.ps1": "unchanged"}))
+
+    def test_backup_whose_restore_failed_is_kept_and_named(self):
+        before = self.three_files()
+        # The third rename (stop-gate.ps1) fails, and so does every rename that would restore the other two.
+        with mock.patch("os.replace", self.fail_from(os.replace, 3)):
+            _, code, err = self.declare_in_process()
+        self.assertEqual(code, 1, err)
+        self.assertTrue(err.startswith("kit_manifest: IO_ERROR: can't write "), err)
+        self.assertEqual(len(err.splitlines()), 1, err)
+        kept = {}
+        for target, backup in re.findall(
+                r"couldn't restore ([^;]+): Permission denied; old bytes kept in ([^;\n]+)", err):
+            kept[os.path.basename(target)] = backup
+        self.assertEqual(sorted(kept), ["manifest.json", "stop-gate.sh"])
+        for name, backup in kept.items():
+            self.assertEqual(self.raw(backup), before[name])
+        self.assertEqual(sorted(os.path.join(self.kitdir, n) for n in self.temps()), sorted(kept.values()))
+        self.assertEqual(self.raw(os.path.join(self.kitdir, "stop-gate.ps1")), before["stop-gate.ps1"])
+
+    def test_temp_left_by_a_failed_stage_is_reported(self):
+        self.three_files()
+        with mock.patch("shutil.copymode", self.fail_nth(shutil.copymode, 1)), \
+                mock.patch("os.remove", self.fail_from(os.remove, 1)):
+            _, code, err = self.declare_in_process()
+        self.assertEqual(code, 1, err)
+        [left] = self.temps()
+        self.assertRegex(err, r"^kit_manifest: IO_ERROR: can't write [^\n]*manifest\.json: Permission denied; left "
+                              r"[^\n]*\.tmp: Permission denied\n$")
+        self.assertIn(os.path.join(self.kitdir, left), err)
 
     @unittest.skipIf(shutil.which("pwsh") is None, "no pwsh on PATH")
     def test_rendered_ps1_skips_declared_agent_case_insensitively(self):
