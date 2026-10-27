@@ -8,52 +8,101 @@ Foundry 0.3.0 adds a design phase: an architect, principle packs, a plan file an
 
 Foundry 0.4.0 (proposed, foundry run 2) builds on kit and records what a run did. [ADR-0002](adr/0002-kit-manifest-and-config.md): foundry init reads kit's manifest, has kit declare `foundry:judge` and `foundry:cynic` read-only, and proposes the new `.claude/foundry.json` keys ([`foundry-config.schema.json`](foundry-config.schema.json)); crews take ports from worktrees' slots. [ADR-0003](adr/0003-event-log-and-retro.md): the hooks append `events.jsonl` ([`events.schema.json`](events.schema.json)), `decisions.md` gets a grammar, and `scripts/retro.py` with the `foundry:retro` skill counts both. Both apply the repo's extension rules, [repo ADR-0012](../../../docs/adr/0012-extension-framework.md). Until wave 1 of that run merges, the sections below marked 0.4.0 describe the design, not the code.
 
+The container view below shows which part writes and which reads each stored file. Nodes marked 0.4.0 are designed, not built.
+
+```mermaid
+flowchart TB
+  run["foundry:run<br/>[skill: skills/run/SKILL.md]<br/>Makes the main session the foreman"]
+  init["foundry:init<br/>[skill: skills/init/SKILL.md]<br/>Checks the architecture doc"]
+  arch["foundry:architect<br/>[agent: agents/architect.md]<br/>Writes the doc, ADRs and draft plan"]
+  crew["Crew agents<br/>[agents: lead, judge, cynic, writer, devops]<br/>Do and check the work"]
+  hooks["Hooks module<br/>[hooks/register.ts]<br/>Gates, report capture, wakes"]
+  retro["retro, 0.4.0<br/>[scripts/retro.py, foundry:retro]<br/>Counts what a run did"]
+  fjson[(".claude/foundry.json<br/>[project config]")]
+  kitman[("kit's .claude/kit/manifest.json<br/>[kit's store, read from 0.4.0]")]
+  plan[("plan.json, plan.md<br/>[foundry dir]")]
+  dec[("decisions.md<br/>[foundry dir]")]
+  events[("events.jsonl, 0.4.0<br/>[foundry dir]")]
+  reports[("reports/, messages.jsonl<br/>[foundry dir]")]
+
+  run -->|"Skill call when the doc is missing"| init
+  init -->|"reads read-only declarations"| kitman
+  init -->|"starts in init mode"| arch
+  arch -->|"writes architecture, adr keys"| fjson
+  fjson -->|"doc path, merge, target, caps; roles from 0.4.0"| run
+  run -->|"starts in plan mode"| arch
+  arch -->|"writes the draft"| plan
+  run -->|"sets approvedAt, status"| plan
+  run -->|"starts leads, by wave"| crew
+  run -->|"writes decision lines"| dec
+  crew -.->|"Agent, SendMessage, stops"| hooks
+  hooks -->|"reads, gates lead starts"| plan
+  hooks -->|"saves reports, logs lead messages"| reports
+  hooks -->|"stamps HH:MM"| dec
+  hooks -->|"appends spawn, stall, tag, report"| events
+  retro -->|"reads"| events
+  retro -->|"reads"| dec
+```
+
+*foundry's containers and the files between them.*
+Traces to: `plugins/foundry/skills/run/SKILL.md`, `plugins/foundry/skills/init/SKILL.md`, `plugins/foundry/agents/architect.md`, `plugins/foundry/hooks/register.ts`, `plugins/foundry/docs/adr/0001-design-phase.md`, `plugins/foundry/docs/adr/0002-kit-manifest-and-config.md`, `plugins/foundry/docs/adr/0003-event-log-and-retro.md`, and the "On disk" section below.
+
 ## Roles and who talks to whom
+
+The roles split into two diagrams: who the foreman talks to, and what happens inside one crew.
 
 ```mermaid
 flowchart TD
-  owner([Owner: you])
-  foreman[Foreman: main session]
-  cynic[Cynic: foundry:cynic]
-  integ[Integrator, single mode]
-  ijudge[Integration judge, single mode]
-  disk[(foundry dir on disk)]
-  arch[Architect: agents/architect.md, 0.3.0]
+  owner(["Owner<br/>[person]<br/>Approves, rules, pushes"])
+  foreman["Foreman<br/>[main session]<br/>Plans, settles, merges"]
+  cynic["Cynic<br/>[agent: foundry:cynic]<br/>Reviews items bound for the owner"]
+  arch["Architect<br/>[agent: foundry:architect, 0.3.0]<br/>Drafts the plan"]
+  integ["Integrator<br/>[agent, single mode]<br/>Merges every crew branch"]
+  ijudge["Integration judge<br/>[agent, single mode]<br/>Rules on the integration branch"]
+  leadA["Lead, crew A<br/>[agent: foundry:lead]"]
+  leadB["Lead, crew B<br/>[agent: foundry:lead]"]
+  disk[("foundry dir<br/>[store]")]
 
-  subgraph crewA [Crew A]
-    leadA[Lead: foundry:lead]
-    memA[Members: builders, test-writer, writer, devops]
-    judgeA[Judge: foundry:judge]
-    redA[Red team: foundry:judge in red-team mode]
-  end
-
-  subgraph crewB [Crew B]
-    leadB[Lead: foundry:lead]
-    memB[Members]
-    judgeB[Judge]
-  end
-
-  owner <-->|plan, rulings, push and PR| foreman
-  foreman -->|items bound for the owner| cynic
-  cynic -->|RECOMMEND lines| foreman
-  foreman -->|start, answers, rebase requests| leadA
-  foreman -->|start, answers, rebase requests| leadB
-  leadA -->|QUESTION, BLOCKED, PROPOSAL, report| foreman
-  leadB -->|QUESTION, BLOCKED, PROPOSAL, report| foreman
-  leadA <-->|collisions only, logged| leadB
-  leadA -->|tasks| memA
-  memA -->|reports| leadA
-  leadA --> redA
-  leadA --> judgeA
-  leadB --> memB
-  leadB --> judgeB
-  foreman --> integ
-  foreman --> ijudge
-  crewA -.->|reports| disk
-  crewB -.->|reports| disk
-  foreman -->|start: plan mode, every run| arch
-  arch -.->|draft plan.json, plan.md| disk
+  owner <-->|"plan, rulings, push and PR"| foreman
+  foreman -->|"items bound for the owner"| cynic
+  cynic -->|"RECOMMEND lines"| foreman
+  foreman -->|"start: plan mode, every run"| arch
+  arch -.->|"draft plan.json, plan.md"| disk
+  foreman -->|"start, answers, rebase requests"| leadA
+  foreman -->|"start, answers, rebase requests"| leadB
+  leadA -->|"QUESTION, BLOCKED, PROPOSAL, report"| foreman
+  leadB -->|"QUESTION, BLOCKED, PROPOSAL, report"| foreman
+  leadA <-->|"collisions only, logged"| leadB
+  foreman -->|"start"| integ
+  foreman -->|"start"| ijudge
 ```
+
+*Who the foreman talks to: the owner, the agents outside every crew, and the leads.*
+Traces to: `plugins/foundry/skills/run/SKILL.md`, `plugins/foundry/agents/lead.md`, `plugins/foundry/agents/cynic.md`, `plugins/foundry/agents/architect.md`, `plugins/foundry/hooks/register.ts`.
+
+```mermaid
+flowchart TD
+  foreman["Foreman<br/>[main session]"]
+  lead["Lead<br/>[agent: foundry:lead]<br/>Splits, delegates, merges members"]
+  mem["Members<br/>[agents: builders, test-writer, writer, devops]<br/>Each in its own worktree"]
+  judge["Judge<br/>[agent: foundry:judge]<br/>Rules PASS or FAIL"]
+  red["Red team<br/>[agent: foundry:judge, red-team mode]<br/>Tries to break the work"]
+  other["Another crew's lead<br/>[agent: foundry:lead]"]
+  disk[("reports/crew/<br/>[foundry dir]")]
+
+  foreman -->|"start, answers"| lead
+  lead -->|"tagged messages, report"| foreman
+  lead -->|"tasks"| mem
+  mem -->|"reports with proof"| lead
+  lead -->|"when the plan says yes"| red
+  lead -->|"fresh judge per ruling"| judge
+  lead <-->|"collisions only"| other
+  mem -.->|"reports, saved by the hooks"| disk
+  judge -.->|"judge file, the merge gate"| disk
+```
+
+*Inside one crew: the lead's members, its judge and red team, and where their reports land.*
+Traces to: `plugins/foundry/agents/lead.md`, `plugins/foundry/agents/judge.md`, `plugins/foundry/hooks/register.ts`.
 
 Only the foreman talks to the owner. Only leads message the foreman, so a member's question reaches the foreman through its lead. Leads message each other only when their work collides: a file another crew owns, a shared interface that changes, or the merge order. The hooks enforce the message rules for everything inside a crew (see [Hooks](#hooks)). The cynic, the integrator, the integration judge and (0.3.0) the architect in `plan` mode are started by the foreman, so they sit outside every crew. The hooks don't police them and don't save their reports.
 
@@ -81,7 +130,44 @@ A crew, as the hooks see it, is a `foundry:lead` with no parent (the main thread
 
 ## The run lifecycle
 
-The 0.3.0 additions are marked.
+The 0.3.0 additions are marked. The diagram shows steps 4 to 11 for one crew; the numbered steps below it are the full story.
+
+```mermaid
+sequenceDiagram
+  actor Owner
+  participant F as Foreman
+  participant A as Architect
+  participant C as Cynic
+  participant L as Lead
+  participant M as Members
+  participant J as Judge
+  Owner->>F: /foundry:run with a goal
+  F->>A: start in plan mode
+  A-->>F: draft plan.json and plan.md (verdicts, crews, waves)
+  F->>C: review the verdicts
+  C-->>F: RECOMMEND lines
+  alt approval owner, the plan has a wave 0
+    F->>Owner: plan table with the ADRs, merge mode, target
+    Owner-->>F: approve
+    F->>F: set approvedAt
+  else approval auto
+    F->>F: log the plan, overwrite approvedAt
+  end
+  loop each wave, at most maxParallelCrews crews at once
+    F->>L: start with goals/slug.md (the hooks check plan.json)
+    L->>M: member tasks
+    M-->>L: reports with proof
+    L->>J: start a fresh judge
+    J-->>L: VERDICT and Proof checked SHA
+    L-->>F: final report
+    F->>C: pre-merge review of the report and plan
+    F->>F: merge on PASS whose SHA is the branch head
+  end
+  F->>Owner: end-of-run report, then ask before push and PR
+```
+
+*One run, from goal to merge, for a single crew per wave.*
+Traces to: `plugins/foundry/skills/run/SKILL.md`, `plugins/foundry/agents/architect.md`, `plugins/foundry/agents/lead.md`, `plugins/foundry/agents/judge.md`, `plugins/foundry/docs/adr/0001-design-phase.md` (sections 3, 6 and 9).
 
 0. Init (0.3.0): When a run finds no architecture doc, the foreman runs the `foundry:init` skill, which starts the architect in `init` mode; the owner can also run `/foundry:init`. If the repo already has an architecture doc of its own, `init` extends it rather than replacing it; otherwise it writes `docs/architecture.md`, with ADRs in `docs/adr/`. It records the doc's path in `.claude/foundry.json`. From 0.4.0, init then reads kit's manifest, runs `kit:init` when it is missing and kit is installed, and proposes the new `foundry.json` keys ([ADR-0002](adr/0002-kit-manifest-and-config.md)).
 1. Altitude: The foreman asks the owner once whether the goal is the end or a step toward a bigger outcome, and describes the bigger version.
@@ -184,7 +270,40 @@ One file lives in the project repo, not the foundry folder:
 | `writingSkill`, 0.4.0 | `init` on approval, or the owner | none | The skill the writer loads, when listed |
 | `promptOverrides`, 0.4.0 | the owner | none | Per role (`lead`, `judge`, `cynic`, `writer`, `devops`, `architect`), a file under `.claude/foundry/prompts/` the role reads in addition to its prompt; never prompt text |
 
-From 0.4.0 init also reads `<repo>/.claude/kit/manifest.json`, kit's record of what it set up (contract `plugins/kit/docs/manifest.schema.json`, repo ADR-0013). It runs `kit:init` through the Skill tool when that skill is listed and the manifest is missing or lacks foundry's read-only declarations, and otherwise carries on as 0.3.0 and says so ([ADR-0002](adr/0002-kit-manifest-and-config.md), section 1).
+From 0.4.0 init also reads `<repo>/.claude/kit/manifest.json`, kit's record of what it set up (contract `plugins/kit/docs/manifest.schema.json`, repo ADR-0013). It runs `kit:init` through the Skill tool when that skill is listed and the manifest is missing or lacks foundry's read-only declarations, and otherwise carries on as 0.3.0 and says so ([ADR-0002](adr/0002-kit-manifest-and-config.md), section 1). The sequence, as designed:
+
+```mermaid
+sequenceDiagram
+  actor Owner
+  participant I as foundry:init
+  participant A as Architect
+  participant MF as .claude/kit/manifest.json
+  participant K as kit:init
+  participant KM as kit_manifest.py
+  participant FJ as .claude/foundry.json
+  Owner->>I: /foundry:init
+  I->>A: init mode, only when there is no architecture doc
+  I->>MF: read
+  alt valid, declares foundry:judge and foundry:cynic read-only
+    I->>I: use it
+  else missing or lacks the declarations, and kit:init is listed
+    I->>K: Skill kit:init, args declare read-only: foundry:judge, foundry:cynic
+    K->>Owner: show the declaration (full init first when no manifest)
+    Owner-->>K: approve
+    K->>KM: declare --by foundry, or write with the declaration in the facts
+    KM->>MF: agents readOnly true, declaredBy foundry
+  else kit:init not listed
+    I->>Owner: kit is not installed, foundry init carries on without a kit manifest
+  else not JSON, fails the schema or another version
+    I->>Owner: kit manifest unreadable, carrying on without it
+  end
+  I->>Owner: propose roles, deploy, writingSkill, promptOverrides
+  Owner-->>I: approve some
+  I->>FJ: write the approved keys
+```
+
+*foundry init extending kit init, 0.4.0: the four manifest cases and what each writes.*
+Traces to: `plugins/foundry/docs/adr/0002-kit-manifest-and-config.md` (sections 1 and 2), `docs/adr/0013-kit-manifest.md`, `plugins/kit/docs/manifest.schema.json`, `plugins/foundry/skills/init/SKILL.md` (0.3.0 doc check).
 
 Two kinds of state don't go to the foundry folder:
 

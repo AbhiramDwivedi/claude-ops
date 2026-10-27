@@ -111,6 +111,38 @@ Dropped: data 1, 2, 7 to 11 and 13. The audit is a personal report over "the las
 
 ## Module map
 
+The context diagram shows the plugins, the person who runs them and what sits around them. The table after it says what each module owns.
+
+```mermaid
+flowchart LR
+  owner(["Project owner<br/>[person]<br/>Runs commands, approves proposals"])
+  cc["Claude Code<br/>[external system]<br/>Runs sessions, agents and plugin hooks"]
+  proj[("Project repo<br/>[external store]<br/>Code, CLAUDE.md, .claude/")]
+  tx[("Transcripts<br/>[external store: ~/.claude/projects/]")]
+  line["usage-limits, session-models<br/>[plugins: mods]<br/>Lines above the prompt"]
+  sub["subagent-limits<br/>[plugin: mod]<br/>Sizes subagent work"]
+  wt["worktrees<br/>[plugin: mod]<br/>A worktree per editing agent"]
+  kit["kit<br/>[plugin: skills, agents, scripts]<br/>Sets a project up"]
+  fdy["foundry<br/>[plugin: mod, skills, agents]<br/>Runs a goal as crews"]
+  wa["workflow-audit<br/>[plugin: skill, scripts]<br/>Audits usage"]
+  cr["catalog-refresh<br/>[scheduled job: scripts/catalog-refresh/]<br/>Refreshes the catalog"]
+
+  owner -->|"slash commands, approvals"| cc
+  cc -->|"events: turn.step, session.measure"| line
+  cc -->|"events: agent.spawn, turn.step, tool.call"| sub
+  cc -->|"Agent calls, WorktreeCreate, SubagentStop"| wt
+  cc -->|"events, Skill calls"| fdy
+  wt -->|"worktrees under .claude/worktrees/"| proj
+  kit -->|"CLAUDE.md section, gates, checklist"| proj
+  fdy -->|"architecture doc, ADRs, .claude/foundry.json"| proj
+  kit -->|"miner reads"| tx
+  wa -->|"audit.py reads"| tx
+  cr -->|"catalog edits, by PR"| wa
+```
+
+*The repo's context: seven plugins and one scheduled job, and what each talks to.*
+Traces to: `.claude-plugin/marketplace.json`, `docs/adr/0001-self-contained-plugins.md`, `docs/adr/0010-dated-catalog-refreshed-by-pr.md`, and the module entries below.
+
 | Module | Owns | Job |
 | --- | --- | --- |
 | marketplace | `.claude-plugin/marketplace.json`, `README.md`, `LICENSE`, `assets/`, `.gitignore`, `.gitattributes`, `docs/` | Lists the plugins, tells the story, holds repo-wide docs |
@@ -248,6 +280,41 @@ Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
 ## Seams
 
 A row marked "Extension point" is one its base declares for other plugins to build on (ADR-0012, rule 2): the base owns its schema, and other plugins read it and never edit it. Every other row is a seam two modules share, not an invitation to extend.
+
+The container diagram draws the seams between kit, worktrees and foundry, with the stored files between them. Nodes marked 0.2.0 or 0.4.0 are designed, not built.
+
+```mermaid
+flowchart TB
+  kinit["kit:init<br/>[skill]<br/>Proposes the setup and declarations"]
+  kman["kit_manifest.py, 0.2.0<br/>[script: write, declare]<br/>Only writer of the manifest"]
+  man[(".claude/kit/manifest.json<br/>[extension point]")]
+  gate[".claude/kit/stop-gate.sh, .ps1<br/>[project hook script]<br/>Skips read-only types"]
+  wt["worktrees<br/>[hooks module]<br/>Isolates editing agents"]
+  slots[("claude-worktrees/slots.json<br/>[git common dir]")]
+  setup[".claude/worktree-setup.sh, .ps1<br/>[project script]<br/>Per-worktree setup"]
+  finit["foundry:init<br/>[skill]<br/>Builds on kit, 0.4.0"]
+  fjson[(".claude/foundry.json<br/>[extension point, 0.4.0]")]
+  frun["foundry:run and hooks<br/>[skill, hooks module]<br/>Foreman and crews"]
+  fdir[("foundry/session id/<br/>[git common dir]<br/>plan.json, decisions.md, events.jsonl")]
+  retro["scripts/retro.py, 0.4.0<br/>[script]<br/>Counts what a run did"]
+
+  finit -->|"Skill call: declare read-only: foundry:judge, foundry:cynic"| kinit
+  kinit -->|"approved facts or declaration"| kman
+  kman -->|"writes"| man
+  kman -->|"re-renders the skip line"| gate
+  man -->|"read: readOnly agents"| wt
+  man -->|"read"| finit
+  wt -->|"port slot per worktree"| slots
+  wt -->|"runs with WORKTREE_SLOT, PORT_BASE"| setup
+  finit -->|"writes approved keys"| fjson
+  fjson -->|"read: roles, merge, target"| frun
+  setup -.->|"PORT_BASE for each crew, 0.4.0"| frun
+  frun -->|"writes, appends"| fdir
+  fdir -->|"read: events.jsonl, decisions.md"| retro
+```
+
+*Containers across kit, worktrees and foundry: who writes and who reads each stored file.*
+Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006-shared-state-in-git-common-dir.md`, `docs/adr/0012-extension-framework.md`, `docs/adr/0013-kit-manifest.md`, `docs/adr/0014-worktrees-declared-read-only-agents.md`, `plugins/foundry/docs/adr/0002-kit-manifest-and-config.md`, `plugins/foundry/docs/adr/0003-event-log-and-retro.md`, `plugins/worktrees/hooks/register.ts`, and the table below.
 
 | Seam | Producer | Consumers | Contract | ADR |
 | --- | --- | --- | --- | --- |
