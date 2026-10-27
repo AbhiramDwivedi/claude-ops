@@ -24,7 +24,7 @@ LINE_CAP = 1 << 20  # a line longer than 1 MiB is skipped, never held whole
 CLOCK = r"\d{1,2}:\d{2}"
 DATE = r"\d{4}-\d{2}-\d{2}"
 DATETIME = DATE + r"[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})"
-STRUCTURED = re.compile(r"^- (" + DATETIME + "|" + DATE + "|" + CLOCK + r"|HH:MM) \| ?(.*)$")
+STRUCTURED = re.compile(r"^- (" + DATETIME + "|" + DATE + "|" + CLOCK + r"|HH:MM) \| (.*)$")
 RECOMMEND = re.compile(r"^\s*cynic-\d+ RECOMMEND (answer|defer|pass)\b")
 HEADING = re.compile(r"^## Run[ \t]+(.*)$")
 RFC3339 = re.compile(
@@ -32,6 +32,23 @@ RFC3339 = re.compile(
 )
 JUDGE_NAME = re.compile(r"^(.+)-judge(-\d+)?$")
 JUDGE_FILE = re.compile(r"^.+-judge(-\d+)?\.md$")
+
+
+INT_CAP = 10 ** 18  # a count above this is not a plausible agent count; treated as invalid
+
+
+def loads(text):
+    """json.loads that never raises: deep nesting (RecursionError), huge ints or anything else
+    unforeseen reads as 'not JSON' (None). Callers treat None as unusable input."""
+    try:
+        return json.loads(text)
+    except Exception:  # noqa: BLE001 - one bad input must never crash the report
+        return None
+
+
+def good_int(v):
+    """True for a real int (not a bool) of sane size."""
+    return isinstance(v, int) and not isinstance(v, bool) and -INT_CAP <= v <= INT_CAP
 
 
 def parse_rfc3339(text):
@@ -173,10 +190,7 @@ def assign(runs, ts):
 
 def valid_event(line):
     """Return (event dict, ts) for a usable v:1 line, else None. Caller counts the skip."""
-    try:
-        ev = json.loads(line)
-    except ValueError:
-        return None
+    ev = loads(line)
     if not isinstance(ev, dict) or ev.get("v") != 1 or isinstance(ev.get("v"), bool):
         return None
     ts = parse_rfc3339(ev.get("ts"))
@@ -208,7 +222,7 @@ def process_events(files, runs):
                 continue
             kind = ev.get("event")
             if kind == "spawn":
-                def pick(k):
+                def pick(k):  # a non-string model/effort counts as unset, like a missing one
                     v = ev.get(k)
                     return v if isinstance(v, str) and v else "unset"
                 key = pick("model") + "/" + pick("effort")
@@ -221,8 +235,9 @@ def process_events(files, runs):
                 elif ev.get("kind") == "idle-lead":
                     run["_stalls"]["idleLead"] += 1
             elif kind == "tag":
-                if ev.get("tag") in run["_esc"]:
-                    run["_esc"][ev["tag"]] += 1
+                tag = ev.get("tag")
+                if isinstance(tag, str) and tag in run["_esc"]:
+                    run["_esc"][tag] += 1
             elif kind == "report":
                 agent = ev.get("agent")
                 m = JUDGE_NAME.match(agent) if isinstance(agent, str) else None
@@ -241,10 +256,7 @@ def process_messages(files, runs, pre):
         for line in read_lines(path):
             if not line or not line.strip():
                 continue
-            try:
-                msg = json.loads(line)
-            except ValueError:
-                continue
+            msg = loads(line)
             if not isinstance(msg, dict):
                 continue
             run = None
@@ -297,9 +309,10 @@ def judge_files(directory):
 def read_plan(directory):
     try:
         with open(os.path.join(directory, "plan.json"), "rb") as fh:
-            plan = json.loads(fh.read().decode("utf-8", errors="replace").lstrip("﻿"))
-    except (OSError, ValueError):
+            text = fh.read().decode("utf-8", errors="replace").lstrip("﻿")
+    except OSError:
         return NR
+    plan = loads(text)
     if not isinstance(plan, dict):
         return NR
     crews = plan.get("crews")
@@ -312,13 +325,13 @@ def read_plan(directory):
         if isinstance(w, (int, float, str)) and not isinstance(w, bool):
             waves.add(w)
         e = c.get("estAgents")
-        if isinstance(e, (int, float)) and not isinstance(e, bool):
+        if good_int(e):  # NaN, Infinity, floats, bools and absurd ints are skipped
             est += e
         st = c.get("status")
         key = st if isinstance(st, str) and st else "unset"
         status[key] = status.get(key, 0) + 1
     return {"crews": len(crews), "waves": len(waves), "estAgents": est,
-            "agentCap": plan.get("agentCap"), "status": status}
+            "agentCap": plan.get("agentCap") if good_int(plan.get("agentCap")) else None, "status": status}
 
 
 def retro(directory):
@@ -363,7 +376,7 @@ def main(argv):
     if not os.path.isdir(directory):
         sys.stderr.write("retro: NO_FOUNDRY_DIR: %s\n" % directory)
         return 2
-    sys.stdout.write(json.dumps(retro(directory), indent=2, ensure_ascii=True) + "\n")
+    sys.stdout.write(json.dumps(retro(directory), indent=2, ensure_ascii=True, allow_nan=False) + "\n")
     return 0
 
 

@@ -132,6 +132,71 @@ class RetroEdges(unittest.TestCase):
         r = subprocess.run([sys.executable, SCRIPT, self.dir], capture_output=True, cwd=other, timeout=60)
         self.assertEqual(r.returncode, 0)
 
+    # --- red-team regressions: no input may crash the script or break strict JSON ---
+
+    def run_raw(self):
+        r = subprocess.run([sys.executable, SCRIPT, self.dir], capture_output=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace")[-300:])
+
+        def no_const(c):
+            raise ValueError("non-JSON constant " + c)
+        return json.loads(r.stdout.decode("utf-8"), parse_constant=no_const)
+
+    def test_deeply_nested_lines_do_not_crash(self):
+        self.write("decisions.md", "## Run 2026-01-01T00:00:00Z | g\n")
+        self.write("events.jsonl", ev("2026-01-01T01:00:00Z", "stall", kind="agent") + "\n" + "[" * 200000 + "\n")
+        self.write("messages.jsonl", "[" * 200000 + "\n")
+        self.write("plan.json", "[" * 200000)
+        out = self.run_raw()
+        self.assertEqual(out["eventsSkipped"], 1)
+        self.assertEqual(out["runs"][0]["stalls"]["agent"], 1)
+        self.assertEqual(out["runs"][0]["messages"], 0)
+        self.assertEqual(out["plan"], NR)
+
+    def test_wrong_typed_event_fields_are_ignored(self):
+        self.write("decisions.md", "## Run 2026-01-01T00:00:00Z | g\n")
+        t = "2026-01-01T01:00:00Z"
+        self.write("events.jsonl", "\n".join([
+            ev(t, "tag", tag=["QUESTION"]), ev(t, "tag", tag={"a": 1}), ev(t, "tag", tag="BLOCKED"),
+            ev(t, "stall", kind=["agent"]), ev(t, "report", agent=["x-judge"], marker=["VERDICT: PASS"]),
+            ev(t, "report", agent="c-judge", marker={"a": 1}),
+            ev(t, "spawn", model=["opus"], effort=5), ev(t, ["spawn"]),
+        ]) + "\n")
+        out = self.run_raw()
+        run = out["runs"][0]
+        self.assertEqual(out["eventsSkipped"], 0)
+        self.assertEqual(run["escalations"], {"QUESTION": 0, "BLOCKED": 1, "PROPOSAL": 0})
+        self.assertEqual(run["stalls"], {"agent": 0, "idleLead": 0})
+        self.assertEqual(run["judges"], {"pass": 0, "fail": 0})
+        self.assertEqual(run["spawns"], {"total": 1, "byModelEffort": {"unset/unset": 1}})
+
+    def test_plan_output_is_strict_json(self):
+        self.write("plan.json", '{"agentCap": NaN, "crews":[{"wave":1,"estAgents":Infinity,"status":"done"},'
+                                '{"wave":1,"estAgents":3},{"estAgents":true},{"estAgents":1.5}]}')
+        plan = self.run_raw()["plan"]
+        self.assertEqual(plan["estAgents"], 3)
+        self.assertIsNone(plan["agentCap"])
+        self.assertEqual(plan["crews"], 4)
+
+    def test_plan_huge_ints_do_not_crash(self):
+        n = "9" * 4300
+        self.write("plan.json", '{"agentCap": %s, "crews":[{"estAgents":%s},{"estAgents":%s},{"estAgents":2}]}' % (n, n, n))
+        plan = self.run_raw()["plan"]
+        self.assertEqual(plan["estAgents"], 2)
+        self.assertIsNone(plan["agentCap"])
+
+    def test_plan_valid_agent_cap_is_copied(self):
+        self.write("plan.json", '{"agentCap": 12, "crews":[]}')
+        self.assertEqual(self.run_raw()["plan"]["agentCap"], 12)
+
+    def test_structured_decision_line_needs_a_space_after_the_pipe(self):
+        self.write("decisions.md", "## Run 2026-01-01T00:00:00Z | g\n"
+                   "- 10:05| a | r | c | followed\n- 10:06 |nospace | followed\n- 10:07 |\n"
+                   "- 10:08 | ok | r | c | followed\n")
+        run = self.run_raw()["runs"][0]
+        self.assertEqual(run["freeform"], 3)
+        self.assertEqual(run["decisions"]["total"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
