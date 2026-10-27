@@ -21,8 +21,8 @@ The hooks append one JSON line per event, under [`events.schema.json`](../events
 
 | `event` | Written when | Extra fields |
 | --- | --- | --- |
-| `spawn` | the `tool.call` handler on `Agent` (`register.ts:1109`), after `next(e)` returns without a deny, for a call from inside a crew or one that starts a lead: the same calls that get the report note | `agentId` (or null), `type` (`subagent_type`, else `general-purpose`), `model` and `effort` as the call asked (or null), `by` (`main`, or the caller's spawn name) |
-| `stall` | each stall wake and idle-lead wake, as its prompt goes out | `kind` (`agent` or `idle-lead`), `minutes` |
+| `spawn` | the `tool.call` handler on `Agent` (`register.ts:1109`), after `next(e)` returns without a deny, for a call from inside a crew or one that starts a lead: the same calls that get the report note | `agent` is the new agent's spawn name, as the report note names it: the label `agent.spawn` recorded, else the call's `name`, else the new agent's id, else `unknown`. `agentId` (or null), `type` (`subagent_type`, else `general-purpose`), `model` and `effort` as the call asked (or null), `by` (`main` when the foreman starts a lead, else the calling agent's spawn name) |
+| `stall` | each stall wake and idle-lead wake, as its prompt goes out | `agent` is the idle agent's spawn name. `kind` (`agent` or `idle-lead`), `minutes`: whole minutes idle, rounded down, the same number the wake's prompt shows (`Math.floor`, as `register.ts:903` and `:858` do) |
 | `tag` | a lead's message to `main` that sets a tag | `tag` (`QUESTION`, `BLOCKED` or `PROPOSAL`) |
 | `report` | a final report written to a report file (not an `.interim.md`) | `marker`: `VERDICT: PASS`, `VERDICT: FAIL`, `REDTEAM`, `CHECKPOINT`, `BLOCKED`, `QUESTION`, `PROPOSAL`, from the start of its first non-empty line, or null |
 
@@ -40,7 +40,7 @@ No line holds message, prompt or report text (P8). Appends go through one in-mod
 
 - The foreman writes a `## Run` heading when a run starts, before its first decision line. A session dir that holds several runs has one heading each.
 - `<outcome>` is `followed`, `followed (deferred)` or `overruled: <reason>`.
-- The foreman still writes the literal `HH:MM`. The stamp hook replaces it with the clock's local time: `DECISION_TIME` becomes `/^- (\d{1,2}:\d{2}|HH:MM) \|/`. A literal `HH:MM` is always stamped, even when the replaced text has one, since it marks no time.
+- The foreman still writes the literal `HH:MM`. The stamp hook replaces it with the clock's local time: `DECISION_TIME` becomes `/^- (\d{1,2}:\d{2}|HH:MM) \|/`. A literal `HH:MM` is always stamped, even when the replaced text has one, since it marks no time. Concretely: the hook rewrites only the new text, a `Write`'s `content` or an `Edit`'s `new_string`, never an `Edit`'s `old_string` (the engine has to find it in the file as written). Every `- HH:MM |` line in the new text gets the clock time, whether or not the replaced text (the `Edit`'s `old_string`, or the file on disk for a `Write`) holds the same line. A clock time already in the replaced text is kept, as in 0.3.0. So an `Edit` whose `old_string` and `new_string` both hold `- HH:MM | a | b | c | followed` writes that line with the clock time.
 
 ### 3. `scripts/retro.py`
 
@@ -56,7 +56,7 @@ No line holds message, prompt or report text (P8). Appends go through one in-mod
 
 **Splitting runs.**
 
-- Each `## Run <start> | <goal>` heading starts a run. `started` is `<start>` when it parses as RFC 3339, else `"not recorded"`.
+- Each `## Run <start> | <goal>` heading starts a run. `<start>` is the text between `## Run ` and the first ` | `; `goal` is the rest of the line, with surrounding whitespace trimmed. `started` echoes `<start>` exactly as written, with no normalisation to UTC and no reformatting, when it parses as RFC 3339, else it is `"not recorded"`. Assigning events and messages to runs compares the parsed instants, not the text.
 - Lines before the first heading form one more run, first in the list, with `started` and `goal` `"not recorded"`.
 - With no heading the dir is one run and `split` is `"not recorded"`: retro can't split it. That is the case for every pre-0.4.0 dir, this repo's three-run log included. With headings, `split` is `"headings"`.
 - Events and messages go to the run whose `started` is the latest one at or before their `ts`. Messages before the first heading go to the pre-heading run. Events before the first heading count in `eventsOutsideRuns`.
@@ -90,8 +90,8 @@ No line holds message, prompt or report text (P8). Appends go through one in-mod
 
 - In `byModelEffort`, a null model or effort is `unset`.
 - `judges` counts `report` events from agents named `<crew>-judge` or `<crew>-judge-<n>`.
-- `judgeFiles` covers the whole dir: every `reports/*/*-judge.md` and `*-judge-<n>.md` (not `.interim.md`), sorted by its first line into `VERDICT: PASS`, `VERDICT: FAIL` or other. Report files are overwritten by name, so they can't be split by run.
-- `plan` describes `plan.json`, which only the last run's plan survives in.
+- `judgeFiles` covers the whole dir: every `reports/*/*-judge.md` and `*-judge-<n>.md` (not `.interim.md`), sorted by its first non-empty line (after the BOM and `\r` are stripped, the same line the `report` event's `marker` reads) into `pass` when it starts `VERDICT: PASS`, `fail` when it starts `VERDICT: FAIL`, or `other`. Report files are overwritten by name, so they can't be split by run.
+- `plan` describes `plan.json`, which only the last run's plan survives in. `crews` is the length of its `crews` array; `waves` is the number of distinct `wave` values among the crews (waves 1 and 2 with three crews give 2); `estAgents` is the sum of the crews' `estAgents`; `agentCap` is copied; `status` counts crews per `status` value. It is `"not recorded"` when `plan.json` is absent or isn't JSON.
 - `eventsSkipped` counts lines that aren't JSON or have a `v` other than 1.
 
 ### 4. The `foundry:retro` skill

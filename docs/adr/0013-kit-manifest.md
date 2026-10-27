@@ -42,7 +42,7 @@ Standard library, Python 3.9+ (P19). Only this script writes the manifest. kit i
 | 2, bad input | `BAD_ARGS`, `BAD_JSON`, `MISSING_FIELD`, `BAD_FIELD` (wrong type, bad enum, or an unknown key), `BAD_AGENT_NAME`, `DUPLICATE_AGENT` (two agents whose names case-fold equal), `DECLARER_MISMATCH` |
 | 3, state | `NO_REPO` (the `--repo` dir doesn't exist), `NO_MANIFEST` (`declare` with no manifest), `MANIFEST_CORRUPT` (the existing file isn't JSON or doesn't match the schema), `NEWER_VERSION` (the existing file's `version` is above 1) |
 
-**Bytes.** Keys in schema order; `agents` sorted by name (Python's default string order); indent 2; LF; one trailing newline; UTF-8 without BOM; no timestamp. `kit` is the script's `KIT_VERSION`, which equals kit's `plugin.json` version. The file is written to a temp file beside it and renamed. A second run with the same input leaves identical bytes and reports `"changed": false` (P6).
+**Bytes.** The object is built with keys in schema order (`version`, `kit`, `checks`, `agents`, `riskyPaths`, `setupScripts`, and each item's keys in its schema order) and `agents` sorted by name (Python's default string order). It is serialised as exactly `json.dumps(obj, indent=2) + "\n"`: default separators, `ensure_ascii` left at its default `True` (so non-ASCII is written as `\uXXXX` escapes), no `sort_keys`. It is written as UTF-8 without BOM, with LF only (opened with `newline="\n"` or in binary, so Windows adds no `\r`). No timestamp. `kit` is the script's `KIT_VERSION`, which equals kit's `plugin.json` version. The file is written to a temp file beside it and renamed. A second run with the same input leaves identical bytes and reports `"changed": false` (P6).
 
 ### The stop gate reads its skip list from the manifest
 
