@@ -51,6 +51,7 @@ No line holds message, prompt or report text (P8). Appends go through one in-mod
 - Only lines starting `- ` at column 0 count. Indented lines, headings other than `## Run` and blank lines are skipped.
 - A **structured** line matches `^- (<time>) \| ` with `<time>` one of: a clock time `\d{1,2}:\d{2}`, the literal `HH:MM`, a date `\d{4}-\d{2}-\d{2}`, or an RFC 3339 date-time. Any other `- ` line is **free-form**.
 - A structured line whose first field after the time matches `^cynic-\d+ RECOMMEND (answer|defer|pass)\b` is a **recommendation**. Every other structured line is a **decision**.
+- A decision line with at least four fields after the time whose cynic field (the second-to-last) matches `^(cynic-\d+:?\s+)?RECOMMEND:?\s+(answer|defer|pass)\b` also adds to the recommendations, once, or N times when `(xN)` follows the outcome. `none` and any other cynic field add nothing.
 - A decision's time is `clock` (a clock time or a date-time), `dateOnly` (a date) or `notRecorded` (`HH:MM`).
 - A decision's outcome is its last field: `followed` (exactly `followed` or `followed (deferred)`), `overruled` (starts `overruled`), or `other`.
 

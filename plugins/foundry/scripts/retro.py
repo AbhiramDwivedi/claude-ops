@@ -27,6 +27,11 @@ DATE = r"\d{4}-\d{2}-\d{2}"
 DATETIME = DATE + r"[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})"
 STRUCTURED = re.compile(r"^- (" + DATETIME + "|" + DATE + "|" + CLOCK + r"|HH:MM) \| (.*)$")
 RECOMMEND = re.compile(r"^\s*cynic-\d+ RECOMMEND (answer|defer|pass)\b")
+# A RECOMMEND in a decision line's cynic field: "RECOMMEND: answer (soft)", "cynic-3 RECOMMEND:
+# answer", "cynic-4: RECOMMEND: defer (x2)". An "(xN)" right after the outcome is N of them.
+CYNIC_FIELD = re.compile(
+    r"^(?:cynic-\d+:?\s+)?RECOMMEND:?\s+(answer|defer|pass)\b(?:\s*\(x([1-9]\d{0,2})\))?"
+)
 HEADING = re.compile(r"^## Run[ \t]+(.*)$")
 RFC3339 = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})$"
@@ -206,7 +211,13 @@ def read_decisions(path):
         d = cur["decisions"]
         d["total"] += 1
         d[classify_time(m.group(1))] += 1
-        outcome = rest.split("|")[-1].strip()
+        fields = rest.split("|")
+        cyn = CYNIC_FIELD.match(fields[-2].strip()) if len(fields) >= 4 else None
+        if cyn:
+            n = int(cyn.group(2) or 1)
+            cur["recommendations"]["total"] += n
+            cur["recommendations"][cyn.group(1)] += n
+        outcome = fields[-1].strip()
         if outcome in ("followed", "followed (deferred)"):
             d["followed"] += 1
         elif outcome.startswith("overruled"):
