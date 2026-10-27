@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/AbhiramDwivedi/claude-ops/plugins/foundry/docs/foundry-config.schema.json",
   "title": "foundry project config",
-  "description": "<repo>/.claude/foundry.json, read by foundry's skills and agents; the hooks don't read it. foundry init writes architecture and adr, and from 0.4.0 proposes roles, deploy, writingSkill and promptOverrides, writing them only after the owner approves (foundry ADR-0002). Every key but architecture and adr is optional and has a default. A reader reports a key this schema doesn't declare to the owner and ignores it; it is never fatal.",
+  "description": "<repo>/.claude/foundry.json, read by foundry's skills and agents; the hooks don't read it. foundry init writes architecture and adr, and from 0.4.0 proposes roles, deploy, writingSkill and promptOverrides, writing them only after the owner approves (foundry ADR-0002). Every key but architecture and adr is optional and has a default. A reader reports each problem to the owner once and never treats one as fatal. It ignores a key this schema doesn't declare and unsets a value the schema rejects, so its default applies; inside roles and promptOverrides it unsets only the bad entry, and deploy fails closed: any error inside it, an undeclared key included, unsets the whole deploy key, and production is never defaulted to false. init keeps what the owner wrote, errors included, and reports them by path (foundry ADR-0002).",
   "type": "object",
   "additionalProperties": false,
   "required": ["architecture", "adr"],
