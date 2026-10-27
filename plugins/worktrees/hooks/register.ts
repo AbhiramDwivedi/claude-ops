@@ -63,6 +63,10 @@ export function needsWorktree(input: { isolation?: unknown; subagent_type?: unkn
 // the agent name pattern of kit's manifest (plugins/kit/docs/manifest.schema.json)
 const MANIFEST_AGENT_NAME = /^[A-Za-z0-9_-]{1,64}(:[A-Za-z0-9_-]{1,64})?$/
 
+// Folds A-Z only. Declared manifest names are ASCII (MANIFEST_AGENT_NAME), and toLowerCase() would also fold U+212A
+// KELVIN SIGN into "k", letting a lookalike call type borrow a declared name's read-only exemption.
+const asciiLower = (s: string): string => s.replace(/[A-Z]/g, c => c.toLowerCase())
+
 // The agent types kit's manifest declares read-only (repo ADR-0014), from the text of `.claude/kit/manifest.json`:
 // the case-folded full name of each entry with `readOnly: true` and a name the schema allows. A bad entry adds
 // nothing and the rest still count. A file that isn't JSON, isn't an object, has a version other than 1 or has no
@@ -82,7 +86,7 @@ export function declaredReadOnly(text: string): { types: Set<string>; error?: st
   for (const entry of file.agents as unknown[]) {
     if (typeof entry !== 'object' || entry === null) continue
     const { name, readOnly } = entry as { name?: unknown; readOnly?: unknown }
-    if (readOnly === true && typeof name === 'string' && MANIFEST_AGENT_NAME.test(name)) types.add(name.toLowerCase())
+    if (readOnly === true && typeof name === 'string' && MANIFEST_AGENT_NAME.test(name)) types.add(asciiLower(name))
   }
   return { types }
 }
@@ -723,7 +727,7 @@ async function declaredByKit($: $, input: Record<string, unknown>): Promise<bool
     }
     const declared = declaredReadOnly(text)
     if (declared.error !== undefined) throw new Error(declared.error)
-    return declared.types.has(type.toLowerCase())
+    return declared.types.has(asciiLower(type))
   } catch (error) {
     try {
       await $.ui.log(`worktrees: kit manifest unreadable, ignoring it: ${String(error)}`, { to: 'debug' })
