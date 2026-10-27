@@ -2,7 +2,8 @@
 
 Keeps agents from stepping on each other's files, and cleans up after them.
 
-- **Every agent that can edit gets a git worktree.** When an Agent call leaves `isolation` unset and the session is in a git repo, the mod sets `isolation: "worktree"`. Read-only agent types run in the session's checkout: `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer` (also with a plugin prefix, such as `kit:scout`), plus any you list in `noIsolateAgents`. A call that already chose `worktree` or `remote` is left alone.
+- **Every agent that can edit gets a git worktree.** When an Agent call leaves `isolation` unset and the session is in a git repo, the mod sets `isolation: "worktree"`. Read-only agent types run in the session's checkout: `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer` (also with a plugin prefix, such as `kit:scout`), plus any you list in `noIsolateAgents`, plus any that kit's manifest declares read-only. A call that already chose `worktree` or `remote` is left alone.
+- **A plugin can declare its own agents read-only through kit.** On each Agent call that would get a worktree, the mod reads `.claude/kit/manifest.json` in the main checkout and skips the worktree for every agent listed there with `readOnly: true` ([ADR-0014](../../docs/adr/0014-worktrees-declared-read-only-agents.md)). The name must match in full, ignoring case: a declared `foundry:judge` covers `foundry:judge`, not `judge` or `other:judge`. The manifest only adds to the list; `readOnly: false` takes nothing out of it. A missing manifest changes nothing, and one the mod can't read or parse is ignored, with a line in the debug log. Without kit, list the types yourself in `noIsolateAgents`, such as `foundry:judge,foundry:cynic`.
 - **A workspace of nested repos keeps its agents in the main checkout.** When the repo's ignored directories hold their own git repos (a workspace with service repos checked out inside it, each in `.gitignore`), a worktree of the outer repo would contain none of their code. Unless the repo has a setup script, the mod then leaves `isolation` unset and shows one toast per session saying why. See [Workspaces of nested repos](#workspaces-of-nested-repos).
 - **The worktree starts from your current commit.** Claude Code's default worktree starts from `origin/HEAD`, so an agent never sees your unmerged branch. The mod creates every worktree itself, from the HEAD of the checkout the session works in (a detached HEAD too).
 - **A project can set each worktree up.** Gitignored files listed in `.worktreeinclude` are copied in from the main checkout. If the repo has `.claude/worktree-setup.ps1` (Windows) or `.claude/worktree-setup.sh` (elsewhere), the mod gives the worktree a port slot and runs the script in it. See the contract below.
@@ -22,7 +23,7 @@ Keeps agents from stepping on each other's files, and cleans up after them.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `noIsolateAgents` | empty | Comma-separated agent types that never get a worktree, added to the built-in read-only list. |
+| `noIsolateAgents` | empty | Comma-separated agent types that never get a worktree, added to the built-in read-only list and to the types kit's manifest declares (`.claude/kit/manifest.json`, `readOnly: true`). Without kit, this is where `foundry:judge,foundry:cynic` go. |
 | `readOnlyAgents` | empty | Deprecated name for `noIsolateAgents`. Still read; the types in both are used. |
 | `isolateNestedRepos` | false | Give agents worktrees even in a repo with ignored nested repos and no setup script. |
 | `portBase` | 4000 | Slot N owns ports `portBase + N*10` to `portBase + N*10 + 9`. |
