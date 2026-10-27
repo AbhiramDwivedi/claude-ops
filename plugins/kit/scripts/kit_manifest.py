@@ -6,10 +6,11 @@ The only writer of the manifest (repo ADR-0013); the contract is plugins/kit/doc
   declare --repo <dir> --by <plugin> --read-only <name>[,...] a plugin marks its own agent types read-only
 
 Exit 0 prints one JSON line: {"manifest": <path>, "changed": bool, "gates": {"stop-gate.sh": s, "stop-gate.ps1": s}},
-s being updated, unchanged, absent or no-markers. On error nothing is written and stderr is one line,
-"kit_manifest: <CODE>: <detail>": exit 2 for bad input, 3 for the repo's state, 1 (IO_ERROR) when the OS refuses
-a read or write. When a failed write can't put a file back, its old bytes stay in a temp file the line names.
-Exit 0 can add one stderr line, "kit_manifest: warning: ...", naming a temp file left over after every
+s being updated, unchanged, absent or no-markers. On error stderr is one line, "kit_manifest: <CODE>: <detail>":
+exit 2 for bad input, 3 for the repo's state, 1 (IO_ERROR) when the OS refuses a read or write. An error leaves
+every file as it was, except one the line names as "<path> now holds the new bytes": a failed write couldn't put
+it back, and the line adds "old bytes kept in <temp file>" when the file existed before.
+Exit 0 can add one stderr line, "kit_manifest: warning: ...", naming the temp files left over after every
 file got its new bytes.
 """
 import argparse
@@ -176,17 +177,29 @@ def manifest_path(repo):
     return os.path.abspath(os.path.join(repo, ".claude", "kit", "manifest.json"))
 
 
+def no_constant(name):
+    raise ValueError("%s isn't a JSON value" % name)
+
+
+def loads(text):
+    """json.loads, but Infinity, -Infinity and NaN, which Python accepts and JSON doesn't, are a ValueError."""
+    return json.loads(text, parse_constant=no_constant)
+
+
 def read_manifest(path):
-    """The existing manifest as (bytes, object), or (None, None) when there is none."""
-    if not os.path.exists(path):
-        return None, None
+    """The existing manifest as (bytes, object), or (None, None) when there is none.
+
+    A manifest the OS won't let kit read is an IO_ERROR, not MANIFEST_CORRUPT: it may be fine, only locked.
+    """
     try:
         with open(path, "rb") as f:
             raw = f.read()
+    except (FileNotFoundError, NotADirectoryError):
+        return None, None
     except OSError as e:
-        raise Fail("MANIFEST_CORRUPT", "%s can't be read: %s" % (path, e), 3)
+        raise io_error("can't read", path, e)
     try:
-        obj = json.loads(raw.decode("utf-8"))
+        obj = loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as e:  # RecursionError: nesting too deep to parse
         raise Fail("MANIFEST_CORRUPT", "%s isn't JSON: %s" % (path, e), 3)
     if not isinstance(obj, dict):
@@ -217,7 +230,7 @@ def read_facts(source):
     except OSError as e:
         raise bad("BAD_ARGS", "can't read --facts %s: %s" % (source, e))
     try:
-        return json.loads(raw.decode("utf-8-sig"))
+        return loads(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, ValueError, RecursionError) as e:  # RecursionError: nesting too deep to parse
         raise bad("BAD_JSON", "--facts %s isn't JSON: %s" % (source, e))
 
@@ -337,21 +350,30 @@ def discard(tmp):
 
 
 def restore(path, backup):
-    """Put back a file write_all already replaced; return why it couldn't, or None."""
-    e = retried(lambda: os.remove(path) if backup is None else os.replace(backup, path))
-    if e is None:
-        return None
-    problem = "couldn't restore %s: %s" % (path, e.strerror or e)
-    return problem if backup is None else problem + "; old bytes kept in " + backup
+    """Put back a file write_all already replaced: its backup, or no file when it didn't exist before.
+
+    Returns the OSError that stopped it, or None.
+    """
+    return retried(lambda: os.remove(path) if backup is None else os.replace(backup, path))
+
+
+def holds_new(path, backup, e):
+    """The error's words for a replaced file that couldn't be put back."""
+    claim = "%s now holds the new bytes (couldn't %s it: %s)" % (
+        path, "remove" if backup is None else "restore", e.strerror or e)
+    return claim if backup is None else claim + ", old bytes kept in " + backup
 
 
 def write_all(writes):
     """Write every (path, new bytes, old bytes or None), or as far as the OS allows none of them.
 
     First every temp file: the new bytes, and a backup of the old bytes for a file that exists. A failure
-    there changes nothing. Then each new file is renamed into place; if a rename fails, the files already
-    replaced get their backups back (or are removed, when they didn't exist). A backup that couldn't be put
-    back stays on disk and the error names it; every other temp file is removed.
+    there changes nothing. Then each new file is renamed into place, and done records each rename that
+    worked; if one fails, every file in done gets its backup back (or is removed, when it didn't exist).
+
+    The error is built from done: each file whose restore failed is named as holding the new bytes, with
+    the backup that keeps its old bytes, and that backup stays on disk. Every other temp file is removed,
+    and any that can't be is named too. So a file the error doesn't name holds its old bytes.
 
     Returns the warnings of a write that succeeded: temp files that couldn't be removed although every
     file holds its new bytes.
@@ -379,16 +401,16 @@ def write_all(writes):
             break
         done.append((path, backup))
 
-    kept = set()
+    unrestored = []  # (path, backup, OSError): files in done that still hold their new bytes
     if error:
         for path, backup in reversed(done):
-            problem = restore(path, backup)
-            if problem:
-                problems.append(problem)
-                kept.add(backup)  # the only copy of the old bytes: never discard it
+            e = restore(path, backup)
+            if e:
+                unrestored.append((path, backup, e))
+    kept = {backup for _, backup, _ in unrestored}  # the only copies of those old bytes: never discard them
     problems += [p for p in map(discard, [t for t in temps if t not in kept]) if p]
     if error:
-        error.detail = "; ".join([error.detail] + problems)
+        error.detail = "; ".join([error.detail] + [holds_new(*u) for u in unrestored] + problems)
         raise error
     return problems
 
@@ -441,6 +463,11 @@ def cmd_declare(repo, by, names_arg):
     return commit(repo, path, old_raw, build(facts))
 
 
+def one_line(text):
+    """text with each run of line breaks made one space; other whitespace, a path's double space say, stays."""
+    return re.sub(r"[\r\n]+", " ", text)
+
+
 def main(argv=None):
     ap = Parser(prog="kit_manifest.py", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", parser_class=Parser)
@@ -462,16 +489,14 @@ def main(argv=None):
         else:
             out, warnings = cmd_declare(a.repo, a.by, a.read_only)
         sys.stdout.write(json.dumps(out) + "\n")
-        if warnings:  # every file holds its new bytes; only a temp file is left over
-            detail = " ".join(("wrote everything, but " + "; ".join(warnings)).split())
-            sys.stderr.write("kit_manifest: warning: %s\n" % detail)
+        if warnings:  # every file holds its new bytes; only temp files are left over
+            sys.stderr.write("kit_manifest: warning: %s\n" % one_line("wrote everything, but " + "; ".join(warnings)))
         return 0
     except Fail as caught:
         f = caught
     except OSError as e:  # the guard: an OS error no code path names still ends as one line, not a traceback
         f = Fail("IO_ERROR", str(e), 1)
-    detail = " ".join(f.detail.split())  # one line, whatever the detail held
-    sys.stderr.write("kit_manifest: %s: %s\n" % (f.code, detail))
+    sys.stderr.write("kit_manifest: %s: %s\n" % (f.code, one_line(f.detail)))
     return f.exit_code
 
 
