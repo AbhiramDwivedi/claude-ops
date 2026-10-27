@@ -226,6 +226,50 @@ class RetroEdges(unittest.TestCase):
         self.assertEqual(out["spawns"]["total"], 2)
         self.assertEqual(out["messages"], 3)
 
+    # A RECOMMEND in the cynic field (4th field) of a decision line counts as a recommendation,
+    # and the line still counts as a decision.
+    def recs_of(self, *lines):
+        self.write("decisions.md", "\n".join(lines) + "\n")
+        return self.run_retro()["runs"][0]
+
+    def test_cynic_field_bare_recommend(self):
+        run = self.recs_of("- 19:04 | d | r | RECOMMEND: answer (soft) | followed")
+        self.assertEqual(run["recommendations"], {"total": 1, "answer": 1, "defer": 0, "pass": 0})
+        self.assertEqual((run["decisions"]["total"], run["decisions"]["followed"]), (1, 1))
+
+    def test_cynic_field_numbered_recommend_on_an_overruled_line(self):
+        run = self.recs_of("- 22:30 | d | r | cynic-3 RECOMMEND: answer (conditional on x) | overruled: y")
+        self.assertEqual(run["recommendations"], {"total": 1, "answer": 1, "defer": 0, "pass": 0})
+        self.assertEqual((run["decisions"]["total"], run["decisions"]["overruled"]), (1, 1))
+
+    def test_cynic_field_colon_after_cynic_name(self):
+        run = self.recs_of("- 00:08 | d | r | cynic-4: RECOMMEND: pass, option (a) | followed")
+        self.assertEqual(run["recommendations"], {"total": 1, "answer": 0, "defer": 0, "pass": 1})
+
+    def test_cynic_field_multiplier_counts_n_outcomes(self):
+        run = self.recs_of("- 00:08 | d1; d2 | r | cynic-4: RECOMMEND: defer (x2) | followed")
+        self.assertEqual(run["recommendations"], {"total": 2, "answer": 0, "defer": 2, "pass": 0})
+        self.assertEqual(run["decisions"]["total"], 1)
+
+    def test_cynic_field_none_counts_nothing(self):
+        run = self.recs_of(
+            "- 09:00 | d | r | none | followed",
+            "- 09:01 | d naming RECOMMEND: answer | r | none | followed",
+            "- 09:02 | d | r | cynic-4 correctness flag | followed",
+            "- 09:03 | d | r | RECOMMEND: defer | followed (deferred)",
+        )
+        self.assertEqual(run["recommendations"], {"total": 1, "answer": 0, "defer": 1, "pass": 0})
+        self.assertEqual(run["decisions"]["total"], 4)
+
+    def test_line_form_still_counts_beside_cynic_field_form_without_double_counting(self):
+        run = self.recs_of(
+            "- 09:10 | cynic-1 RECOMMEND answer: x | followed",
+            "- 09:11 | cynic-1 RECOMMEND defer: y | followed (deferred)",
+            "- 09:12 | d | r | cynic-1 RECOMMEND: pass | followed",
+        )
+        self.assertEqual(run["recommendations"], {"total": 3, "answer": 1, "defer": 1, "pass": 1})
+        self.assertEqual(run["decisions"]["total"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
