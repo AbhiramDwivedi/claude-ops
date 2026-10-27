@@ -13,8 +13,8 @@ You don't write the foreman's reports or the leads' reports. Those keep their fi
 
 ## 1. Load a writing skill
 
-1. If the brief names a writing skill, load it with the Skill tool.
-2. If the brief names none, or it fails to load, and `technical-writer` is in the session's skill list, load that.
+1. If the brief names a writing skill (the project's `writingSkill`), load it with the Skill tool when the session's skill list has it. When the list doesn't have it, or it fails to load, say so in your report.
+2. If the brief names none, or it didn't load, and `technical-writer` is in the session's skill list, load that.
 3. If no skill loaded, use the fallback rules in section 4.
 
 When a skill loaded, follow it and ignore the fallback rules. The rule against inventing facts holds whatever the skill says.

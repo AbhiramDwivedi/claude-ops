@@ -17,7 +17,9 @@ You decide, and you log every decision. Ask the owner only when two choices lead
 
 `<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
-Append one line per decision to `<foundry dir>/decisions.md`: time, decision, reason, the cynic's recommendation (or "none"), and "followed" or "overruled: <reason>", in the form `- HH:MM | decision | reason | cynic's recommendation | followed`. Write it with Edit or Write, never Bash: the plugin then replaces the `HH:MM` on each new line with the clock's local time, and a line already logged keeps its time.
+When the run starts, before its first decision line, append its heading to `<foundry dir>/decisions.md`, in the form `## Run <start> | <goal>`: `<start>` is what `date -u +%Y-%m-%dT%H:%M:%SZ` prints, and `<goal>` is the goal as the owner gave it, on one line. A session dir that holds several runs gets one heading per run, so the retro can split them.
+
+Under it, append one line per decision: time, decision, reason, the cynic's recommendation (or "none"), and the outcome, in the form `- HH:MM | decision | reason | cynic's recommendation | followed`. The outcome is `followed`, `followed (deferred)` or `overruled: <reason>`. Write the heading and the lines with Edit or Write, never Bash: the plugin then replaces the `HH:MM` on each new line with the clock's local time, and a line already logged keeps its time.
 
 ## The cynic
 
@@ -34,13 +36,28 @@ Agent({
 })
 ```
 
-For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each `RECOMMEND:` line into `decisions.md`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. Clear a `BLOCKED:` yourself when you can inside frozen scope, for example from the plan, the decision log or something you know: a missing input, a collision with another crew. Every other `BLOCKED:` goes to the owner, and none is ever deferred. A production promotion, a change to frozen scope, and every push or PR (unless the project grants you merge ownership, section 10) go to the owner whatever the cynic recommends.
+When `promptOverrides` sets a `cynic` file (section 0), every cynic brief also carries this line: "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold."
+
+For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a suggested answer. The cynic runs outside every crew, so the plugin doesn't save its report: read its hand-back directly and copy each item's `RECOMMEND:` into `decisions.md` as one line, `- HH:MM | cynic-<n> RECOMMEND <answer|defer|pass>: <text> | <outcome>`: `<n>` is that cynic's number, `<text>` is the item and the cynic's reason on one line, and `<outcome>` is `followed`, `followed (deferred)` for a `defer` you follow, or `overruled: <reason>`. Follow it by default: `answer` means you send the suggested answer to the lead, `defer` puts the item on the end-of-run list, `pass` puts it to the owner. To overrule, log a one-line reason. Clear a `BLOCKED:` yourself when you can inside frozen scope, for example from the plan, the decision log or something you know: a missing input, a collision with another crew. Every other `BLOCKED:` goes to the owner, and none is ever deferred. A production promotion, a change to frozen scope, and every push or PR (unless the project grants you merge ownership, section 10) go to the owner whatever the cynic recommends.
 
 ## 0. Check for the architecture doc
 
 The plan is built on the project's architecture doc. Its path is the `architecture` key of `<repo>/.claude/foundry.json`, where `<repo>` is `git rev-parse --show-toplevel` in the session's working directory. If that file is missing, or the doc it names doesn't exist, run the `foundry:init` skill with the Skill tool before anything else. It starts the architect in `init` mode, shows the owner what the architect wrote, and stops. Then ask the owner whether to go on with the run, and continue at section 1 when they say yes. If init stopped because `.claude/foundry.json` is invalid or has no `architecture` key, the run can't go on: tell the owner, and stop until they fix the file.
 
-Read the rest of `.claude/foundry.json` now. Each key the owner hasn't set takes its default: `agentCap` 40, `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch.
+Read the rest of `.claude/foundry.json` now. Each key the owner hasn't set takes its default: `agentCap` 40, `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch. The newer keys are optional too, and leaving one out keeps 0.3.0 behaviour:
+
+- `roles` maps a job (`build`, `test`, `review`, `search`, `docs`, `deploy`) to a full agent type, such as `build: kit:builder`. You use it in sections 3 and 4.
+- `deploy` is `{target, command, production}`. It goes to the devops member, through the lead's brief.
+- `writingSkill` names a skill, such as `technical-writer`. It goes to the writer, through the lead's brief.
+- `promptOverrides` maps a foundry role (`lead`, `judge`, `cynic`, `writer`, `devops`, `architect`) to a file `.claude/foundry/prompts/<name>.md`. The file adds to that role's prompt; it never replaces it. Section 6 says which brief carries which file. Check that each named file exists; a missing one you report to the owner and skip, as if it weren't set.
+
+Check the file against `<plugin>/docs/foundry-config.schema.json` (`<plugin>` as in section 4), for example with `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats --all-errors --errors=json -s <schema> -d .claude/foundry.json`. Report each problem to the owner once, by its path, and carry on:
+
+- An undeclared key, at any depth outside `deploy`, is ignored.
+- **`deploy` fails closed, as a whole.** Any error at or inside `/deploy` (a wrong type, a missing or bad field, an undeclared key) unsets the whole `deploy` key, so the devops member asks its lead, as when `deploy` is absent. Never fill in or default one field of `deploy`: a missing or non-boolean `production` is never read as `false`.
+- **`roles` unsets only the bad entry.** A job whose agent type fails the schema is picked from the inventory, as if it weren't listed; the other jobs keep their mapping. When `roles` itself is rejected (not an object, or empty), every job is picked from the inventory.
+- **`promptOverrides` unsets only the bad entry.** A role whose file fails the pattern has no override; the other roles keep theirs. When `promptOverrides` itself is rejected, no role has an override.
+- Any other declared key whose value fails the schema is unset, so its default applies.
 
 Crews work in worktrees, which see only committed files. If the architecture doc, its ADRs or `.claude/foundry.json` have uncommitted changes, ask the owner to commit them before any lead starts.
 
@@ -62,6 +79,10 @@ The answers go into the architect's brief (section 4) and shape the crews it dra
 ## 3. Find the agents and skills you can use
 
 List the agent types this session can start: the project's (`.claude/agents/*.md`), the owner's (`~/.claude/agents/`) and plugin agents (such as `kit:builder` or `foundry:judge`). For each type that could do crew work, note what it does, whether it edits files, and its model if its definition fixes one. With no project agents, members run as `general-purpose` with a prompt that says what the job is ("Write tests for ..."). Say so in the plan.
+
+When `roles` in `.claude/foundry.json` maps a job to an agent type, that type does the job: `build` for builders, `test` for test-writers, `review` for reviewers, `search` for lookups, `docs` for writers, `deploy` for devops. Choose the jobs it doesn't map from the inventory, as above. Every crew's judge is still `foundry:judge`.
+
+Check whether `<repo>/.claude/kit/manifest.json` marks `foundry:judge` and `foundry:cynic` read-only. When it doesn't, or there is no manifest, worktrees still gives every judge and cynic a worktree (and runs any setup script for it), unless the owner lists them in worktrees' `noIsolateAgents` setting. Say so in the plan, once.
 
 List the project's skills too (`.claude/skills/`, plugin skills in the Skill tool's listing), and match each useful one to the crews that need it. Leads pass them to members.
 
@@ -86,7 +107,8 @@ Run it in the foreground. The plugin doesn't save its report, so read its hand-b
 - the foundry dir: the architect writes `<foundry dir>/plan.json` and `<foundry dir>/plan.md` there;
 - the architecture doc's path, from `.claude/foundry.json`;
 - `agentCap` and `maxParallelCrews`, from `.claude/foundry.json` or the defaults;
-- the plan schema's absolute path, `<plugin>/docs/plan.schema.json`, where `<plugin>` is two levels above this skill's base directory (`<plugin>/skills/run`).
+- the plan schema's absolute path, `<plugin>/docs/plan.schema.json`, where `<plugin>` is two levels above this skill's base directory (`<plugin>/skills/run`);
+- when `promptOverrides` sets an `architect` file, the line "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold." The `architect-plan-2` brief carries it too.
 
 The architect gives each module the goal touches a verdict, `extend` by default or `change`, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. Its draft sets `approval` to `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise, and sets every crew's `status` to `"planned"`. An owner draft leaves `approvedAt` null; an auto draft carries the architect's write time there, because `plan.schema.json` requires a date-time when `approval` is `"auto"`. That time isn't an approval: you overwrite it with your own log time when you auto-start. From here you own both files: you set `approvedAt` and each crew's `status`, and you add mid-run design slices.
 
@@ -118,7 +140,7 @@ The plan gives each crew its slug, wave, verdict, modules, owned paths, done-che
 - **slug**: the plan's slug names the crew, its goal file and its first lead, and its members' names start with their lead's name.
 - **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work; Opus builders start at `medium`. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. The plan's judge effort is a starting value: the lead may raise it as its builders climb the ladder, up to xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline. A `design` crew's lead starts the architect in `design` mode as one of its members.
 - **high-impact paths**: files under auth, money, migrations, CI or lockfiles. Suggest a red team (an Opus member whose job is to break the crew's work) for every crew that has any.
-- **resources**: a port range and a database or temp directory of its own, so parallel end-to-end tests don't collide.
+- **resources**: a database or temp directory of its own, so parallel end-to-end tests don't collide, and its ports as exactly one of two lines. When the repo has a `.claude/worktree-setup.*`, it is `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`: worktrees gives each worktree its own `PORT_BASE`, and the setup script passes it on, for example in `.env`. When the repo has none, it is `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`. Never invent a port range. A crew that needs a port in a repo without a setup script raises a `QUESTION:`.
 
 ## 5. Show the plan, approve it, freeze the scope
 
@@ -141,9 +163,9 @@ Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, 
 
 **Run with a wave 0 (`approval: "owner"`).** Leave `approvedAt` null and show the plan as a table, with the ADRs the wave-0 crews will write:
 
-| Crew | Wave | Verdict | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Est. agents | Resources (port range; DB or temp dir) |
+| Crew | Wave | Verdict | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Est. agents | Resources (ports line; DB or temp dir) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `auth` | 1 | `extend` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | 6 | ports 4100-4109; temp dir `.tmp/auth` |
+| `auth` | 1 | `extend` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | 6 | `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`; temp dir `.tmp/auth` |
 
 Ask the owner two more things:
 
@@ -156,7 +178,7 @@ Either way, expand the scope here, once: the altitude, the depth pass and the re
 
 ## 6. Write the goal files and start the leads by wave
 
-For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its wave and verdict, its done-check, the files it owns, its high-impact paths, whether it gets a red team, and its resource slice. It also names the architecture doc's path and this run's ADRs; the lead and the judge read them from there. A `design` crew's goal file also lists the `change` verdicts it carries out and their modules. The lead re-reads the goal file during the run.
+For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its wave and verdict, its done-check, the files it owns, its high-impact paths, whether it gets a red team, and its resource slice. It also names the architecture doc's path and this run's ADRs; the lead and the judge read them from there. It ends with a `Prompt overrides:` line naming the role and the file for every role `promptOverrides` sets, such as `Prompt overrides: lead .claude/foundry/prompts/lead.md; judge .claude/foundry/prompts/judge.md`, or `Prompt overrides: none`. The line names files only, never prompt text. A `design` crew's goal file also lists the `change` verdicts it carries out and their modules. When `plan.md` says a crew's done-check is proved red only after an earlier wave merges, its goal file says so, and its lead re-runs the check before any member starts. The lead re-reads the goal file during the run.
 
 Start leads by wave, and within a wave in queue order:
 
@@ -183,7 +205,9 @@ The lead can't see this conversation, so the brief carries:
 - its wave and verdict, the architecture doc's path and this run's ADRs. Crews never edit the architecture doc or ADRs, except a `design` crew, whose lead starts the architect in `design` mode; a design change any other crew needs comes to you as `PROPOSAL:`;
 - the files it owns, the files it must not touch, and its high-impact paths;
 - its members (role, agent type, model, effort each), whether it gets a red team, a writer or devops, and the skills matched to it;
-- its resource slice;
+- its resource slice, with its ports line;
+- for a crew with devops, `deploy` from `.claude/foundry.json` as read in section 0, or "deploy: unset"; for a crew with a writer, `writingSkill`, or "writingSkill: unset";
+- when `promptOverrides` sets a `lead` file, the line "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold." The goal file's `Prompt overrides:` line gives the lead the files for its judge, writer and devops;
 - the other crews: slug, what they own, and their lead's name, for collisions only;
 - the merge mode, the target branch and the check commands;
 - the owner's decisions that bear on this crew;

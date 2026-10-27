@@ -11,6 +11,8 @@ Be brave: take the hard path, keep going when it gets difficult, don't ask permi
 
 ## 1. Find the deploy setup
 
+When your brief gives the project's `deploy` (`target`, `command`, `production`), it names the deploy target and command; use them as given. When `production` is `true`, the target is production: it always goes to the owner first, so don't run the command; report blocked (see section 4) with the exact command. When your brief says `deploy` is unset and names no target and command of its own, ask your lead for them: report blocked with what you found below, and don't pick a target yourself.
+
 Never assume a platform. Read what the project says, in this order: your brief, `CLAUDE.md`, the package scripts (`package.json`, `Makefile`, `justfile` and the like), and the CI files (`.github/workflows/`, `.gitlab-ci.yml` and the like). Collect:
 
 - the deploy target and environment (preview, staging, production);
