@@ -1,6 +1,6 @@
 import { expect } from 'claude-code/testing'
 
-import { EFFORT_REFUSAL, HANDBACK_REFUSAL, ROLL_BYTES, markerOf } from '../hooks/register'
+import { EFFORT_REFUSAL, EVENT_BACKLOG_MAX, EVENT_WAIT_MS, HANDBACK_REFUSAL, ROLL_BYTES, markerOf } from '../hooks/register'
 import { NOW, ROOT, handBack, quiet, startSession, stop, world, test } from './harness'
 
 // foundry 0.4.0 event log (ADR-0003 s1) and the HH:MM stamp (s2), past what contract.test.ts pins: tag and report
@@ -226,16 +226,129 @@ test('with the event log hung, every stall wake and idle-lead wake still goes ou
   expect(w.prompts.filter(p => p.startsWith('[foundry] idle lead: auth ')).length).toBe(1)
 })
 
-test('an append that hangs is dropped after the bound and logged; the appends after it land', async ($, on) => {
+// ---------- the event log stays serial: a slow write delays the appends after it, never clobbers them ----------
+
+const FAILED = 'foundry: event log failed, letting the call through:'
+const spawn = (w: W, name: string) => w.agentCall('A1', { subagent_type: 'kit:builder', name, model: 'sonnet', effort: 'low' })
+// holds the next write of the live log until released
+const gate = (w: W) => {
+  let release = () => {}
+  w.writeHolds.set(EVENTS, new Promise<void>(r => (release = r)))
+  return () => release()
+}
+const OLD = `${JSON.stringify({ v: 1, ts: new Date(NOW - 60 * MIN).toISOString(), event: 'stall', crew: 'auth', agent: 'old', kind: 'agent', minutes: 15 })}\n`
+const isOld = (l: string) => (JSON.parse(l) as { agent: string }).agent === 'old'
+// lets queued appends run until the live log holds `want` lines; moving the clock by 0 settles the event loop
+const drain = async (w: W, want: number) => {
+  for (let i = 0; i < 200 && lines(w).length < want; i++) await w.clock.advance(0)
+}
+
+test('an append that hangs holds the appends after it, in order, and none is lost once it answers', async ($, on) => {
   const w = world($, on)
   await startSession($)
-  hang(w)
-  await returnsWithin(w, () => w.agentCall('A1', { subagent_type: 'kit:builder', name: 'auth-1', model: 'sonnet', effort: 'low' }))
-  w.holds.delete(EVENTS)
-  await w.agentCall('A1', { subagent_type: 'kit:builder', name: 'auth-2', model: 'sonnet', effort: 'low' })
+  const release = gate(w)
+  let r: { context?: unknown } | undefined
+  expect(
+    await returnsWithin(w, async () => {
+      r = await spawn(w, 'auth-1')
+    }),
+  ).toBe(true)
+  expect(r?.context).toEqual([`[foundry] If auth-1's report does not reach you, read ${ROOT}/reports/auth/auth-1.md once it stops.`])
+  // the later calls return within the bound too, their appends queued behind the hung one
+  expect(await returnsWithin(w, () => spawn(w, 'auth-2'))).toBe(true)
+  expect(await returnsWithin(w, () => spawn(w, 'auth-3'))).toBe(true)
+  // long after, still under the stall bound, so no wake adds a line of its own
+  await w.clock.advance(10 * MIN)
   await settle()
-  expect(events(w).map(e => e.agent)).toEqual(['auth-2'])
-  expect(w.logs.filter(l => l.startsWith('foundry: event log failed')).length).toBe(1)
+  expect(lines(w)).toEqual([])
+  expect(w.logs.filter(l => l === `${FAILED} no answer in ${EVENT_WAIT_MS}ms`).length).toBe(3)
+  release()
+  await drain(w, 3)
+  expect(events(w).map(e => e.agent)).toEqual(['auth-1', 'auth-2', 'auth-3'])
+  // and the queue runs on as normal afterwards
+  await spawn(w, 'auth-4')
+  await settle()
+  expect(events(w).map(e => e.agent)).toEqual(['auth-1', 'auth-2', 'auth-3', 'auth-4'])
+})
+
+test('red team B1: a write that lands after the bound does not clobber an append made in the meantime', async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  w.files.set(EVENTS, OLD)
+  const release = gate(w)
+  void spawn(w, 'auth-1')
+  await settle()
+  await w.clock.advance(EVENT_WAIT_MS + 1)
+  await settle()
+  void spawn(w, 'auth-2')
+  await settle()
+  await w.clock.advance(EVENT_WAIT_MS + 1)
+  await settle()
+  release()
+  await settle()
+  await spawn(w, 'auth-3')
+  await settle()
+  expect(lines(w).filter(isOld).length).toBe(1)
+  expect(events(w).map(e => e.agent).filter(a => a !== 'old')).toEqual(['auth-1', 'auth-2', 'auth-3'])
+})
+
+test('red team B2: a write that lands after the bound near ROLL_BYTES does not roll the old lines twice', async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  // just under ROLL_BYTES: one spawn line takes the live log past it
+  const n = Math.floor(ROLL_BYTES / OLD.length) - 1
+  const fill = ROLL_BYTES - 60 - OLD.length * n
+  const padded = `${JSON.stringify({ ...(JSON.parse(OLD) as object), pad: 'x'.repeat(fill - 140) })}\n`
+  w.files.set(EVENTS, OLD.repeat(n) + padded)
+  expect((w.files.get(EVENTS) ?? '').length).toBeLessThan(ROLL_BYTES)
+  const release = gate(w)
+  void spawn(w, 'auth-1')
+  await settle()
+  await w.clock.advance(EVENT_WAIT_MS + 1)
+  await settle()
+  for (const name of ['auth-2', 'auth-3']) {
+    void spawn(w, name)
+    await settle()
+    await w.clock.advance(EVENT_WAIT_MS + 1)
+    await settle()
+  }
+  release()
+  await settle()
+  await spawn(w, 'auth-4')
+  await settle()
+  const files = [...w.files.keys()].filter(k => /\/events\.\d+\.jsonl$/.test(k)).sort()
+  const all = [...files, EVENTS].flatMap(k => lines(w, k))
+  expect(all.filter(isOld).length).toBe(n + 1)
+  expect(all.filter(l => !isOld(l)).map(l => (JSON.parse(l) as { agent: string }).agent)).toEqual(['auth-1', 'auth-2', 'auth-3', 'auth-4'])
+  expect(files).toEqual([`${ROOT}/events.1.jsonl`])
+})
+
+test('past EVENT_BACKLOG_MAX queued appends a new event is dropped and logged; the queued ones land once the fs answers', async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  const release = gate(w)
+  // the first append's write is held; every call after it queues behind it. Started in batches of 50, as many calls
+  // at once cost the kit far more; the whole hold must stay inside the kit's 10 s real-time budget for one hook
+  // (HookBudget.ms), past which the held fs.write hook is skipped.
+  const calls: Promise<unknown>[] = []
+  for (let i = 0; i < EVENT_BACKLOG_MAX; i++) {
+    calls.push(spawn(w, `q-${i}`))
+    if (i % 50 === 49) await w.clock.advance(0)
+  }
+  expect(lines(w)).toEqual([])
+  // dropped at once, without waiting on the clock
+  await spawn(w, 'over')
+  expect(w.logs.filter(l => l === `${FAILED} ${EVENT_BACKLOG_MAX} appends already queued`).length).toBe(1)
+  release()
+  await drain(w, EVENT_BACKLOG_MAX)
+  // every queued call returns once its append lands
+  await Promise.all(calls)
+  expect(lines(w).length).toBe(EVENT_BACKLOG_MAX)
+  // the backlog has drained: a new event is queued again (the mock's agent ids all repeat, so lines are counted)
+  await spawn(w, 'after')
+  await drain(w, EVENT_BACKLOG_MAX + 1)
+  expect(lines(w).length).toBe(EVENT_BACKLOG_MAX + 1)
+  expect(w.logs.filter(l => l.startsWith(FAILED)).length).toBe(1)
 })
 
 test('a roll whose live rewrite fails is not copied again by the next append', async ($, on) => {

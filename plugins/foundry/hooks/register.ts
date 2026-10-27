@@ -10,8 +10,11 @@ export const MAIN = 'main'
 export const QUESTION = 'QUESTION:'
 // past this size the message log is rolled to messages.<n>.jsonl, well under what one $.fs.read takes
 export const ROLL_BYTES = 3 * 1024 * 1024
-// longest a call, stop or later append waits on one event-log append (ADR-0003 s1, P5)
+// longest a call or stop waits on one event-log append (ADR-0003 s1, P5); the append itself still lands later
 export const EVENT_WAIT_MS = 2000
+// most event-log appends queued at once; past it new events are dropped, so a hung fs cannot grow memory without end.
+// Events come seconds apart, so 200 queued means the fs has been stuck for a long while.
+export const EVENT_BACKLOG_MAX = 200
 // idle this long while running = stalled
 export const STALL_MS = 15 * 60_000
 // the stall check timer period
@@ -630,8 +633,10 @@ type State = {
   mainActive?: number
   // this session's foundry folder, resolved once from the session's working directory
   root?: string
-  // appends to the event log, one at a time; /clear leaves it be
+  // appends to the event log, one at a time, each starting once the one before has settled; /clear leaves it be
   events: Promise<unknown>
+  // how many of those appends are queued or running
+  eventsPending: number
 }
 
 const LIMIT_RESET_REF = { plugin: 'foundry', key: 'limitReset' } as const
@@ -763,18 +768,19 @@ async function appendMessage($: $, state: State, entry: { from: string; to: stri
   await appendLine($, messagesPath(dir), n => rolledPath(dir, n), line)
 }
 
-// one line onto the event log, under docs/events.schema.json; rolls as the message log does. `dropped` true: the
-// append overran EVENT_WAIT_MS and was given up, so it writes nothing more.
-async function appendEvent($: $, state: State, event: FoundryEvent, dropped: () => boolean) {
+// one line onto the event log, under docs/events.schema.json; rolls as the message log does
+async function appendEvent($: $, state: State, event: FoundryEvent) {
   const dir = await rootOf($, state)
   if (dir === undefined) return
   const { event: name, ...fields } = event
   const line = JSON.stringify({ v: 1, ts: new Date(await $.clock.now()).toISOString(), event: name, ...fields })
-  await appendLine($, eventsPath(dir), n => rolledEventsPath(dir, n), line, dropped)
+  await appendLine($, eventsPath(dir), n => rolledEventsPath(dir, n), line)
 }
 
 // Resolves once `step` settles or after `ms` on the engine clock, whichever is first, calling `late` in the second
 // case; never rejects. The timer is cancelled once the step settles. With no clock it resolves at once.
+// Known limitation (red team B3): if another hook refuses $.clock.after without throwing, the timer never fires, so a
+// step that never settles holds the caller with it.
 function settledWithin($: $, ms: number, step: Promise<unknown>, late: () => void = () => {}): Promise<void> {
   return new Promise(resolve => {
     let timer: Timer
@@ -796,34 +802,36 @@ function settledWithin($: $, ms: number, step: Promise<unknown>, late: () => voi
 }
 
 // Queues one event-log line behind the ones before it and waits for it, at most EVENT_WAIT_MS. Never throws: a failed
-// append is logged and changes nothing else (P5). An append still running after EVENT_WAIT_MS is logged as failed and
-// given up, so a hung read or write of the log neither holds the caller nor the appends queued after it.
+// append is logged and changes nothing else (P5). The queue is strictly serial and never released on a timer: an
+// append starts only once the one before it has settled, so a slow write that completes late can't clobber a newer
+// line. A caller whose wait runs out logs it and goes on; its line still lands later, in order, if the fs answers.
+// Past EVENT_BACKLOG_MAX queued appends, a new event is dropped and logged.
 function logEvent($: $, state: State, event: FoundryEvent): Promise<void> {
-  let dropped = false
-  const link = state.events.then(() =>
-    settledWithin(
-      $,
-      EVENT_WAIT_MS,
-      safely($, 'event log', () => appendEvent($, state, event, () => dropped)),
-      () => {
-        dropped = true
-        try {
-          $.ui.log(`foundry: event log failed, letting the call through: no answer in ${EVENT_WAIT_MS}ms`, { to: 'debug' })
-        } catch {
-          // nothing left to do
-        }
-      },
-    ),
-  )
+  const failed = (reason: string) => {
+    try {
+      $.ui.log(`foundry: event log failed, letting the call through: ${reason}`, { to: 'debug' })
+    } catch {
+      // nothing left to do
+    }
+  }
+  if (state.eventsPending >= EVENT_BACKLOG_MAX) {
+    failed(`${EVENT_BACKLOG_MAX} appends already queued`)
+    return Promise.resolve()
+  }
+  state.eventsPending++
+  const settled = () => {
+    state.eventsPending--
+  }
+  // safely never rejects, so the chain never breaks on a failed append
+  const link = state.events.then(() => safely($, 'event log', () => appendEvent($, state, event))).then(settled, settled)
   state.events = link
-  return settledWithin($, EVENT_WAIT_MS, link)
+  return settledWithin($, EVENT_WAIT_MS, link, () => failed(`no answer in ${EVENT_WAIT_MS}ms`))
 }
 
 // `$.fs` has no append: read the log, and past ROLL_BYTES copy it to the first free rolled path and start it over.
 // A roll whose copy landed but whose rewrite of the live log failed leaves the newest rolled file equal to the live
-// log; the next append finds that and only starts the live log over, so no line is rolled twice. `dropped` true: stop
-// before the next write.
-async function appendLine($: $, path: string, rolled: (n: number) => string, line: string, dropped: () => boolean = () => false) {
+// log; the next append finds that and only starts the live log over, so no line is rolled twice.
+async function appendLine($: $, path: string, rolled: (n: number) => string, line: string) {
   let before = ''
   if (await $.fs.exists(path)) {
     const text = String(await $.fs.read(path))
@@ -831,14 +839,12 @@ async function appendLine($: $, path: string, rolled: (n: number) => string, lin
       let n = 1
       while (await $.fs.exists(rolled(n))) n++
       const copied = n > 1 && String(await $.fs.read(rolled(n - 1))) === text
-      if (dropped()) return
       if (!copied) await $.fs.write(rolled(n), text)
     } else {
       before = text
     }
   }
   const sep = before === '' || before.endsWith('\n') ? '' : '\n'
-  if (dropped()) return
   await $.fs.write(path, `${before}${sep}${line}\n`)
 }
 
@@ -1143,6 +1149,7 @@ export const register: Register = on => {
     stints: new Map(),
     stopped: new Set(),
     events: Promise.resolve(),
+    eventsPending: 0,
   }
   const wakes: Wakes = { checking: false, fired: new Set(), work: Promise.resolve() }
   // appends to the messages log, one at a time
