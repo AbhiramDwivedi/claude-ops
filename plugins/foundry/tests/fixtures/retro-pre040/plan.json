@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "goal": "synthetic goal for the retro contract test",
+  "architecture": "docs/architecture.md",
+  "approval": "owner",
+  "approvedAt": "2026-10-26T07:00:00Z",
+  "agentCap": 20,
+  "maxParallelCrews": 3,
+  "crews": [
+    { "slug": "slate", "wave": 1, "verdict": "change", "modules": ["slate"], "owns": ["src/slate/**"], "doneCheck": "npm test", "doneCheckProved": true, "estAgents": 3, "status": "merged" },
+    { "slug": "embedder", "wave": 1, "verdict": "extend", "modules": ["embed"], "owns": ["src/embed/**"], "doneCheck": "npm test", "doneCheckProved": true, "estAgents": 4, "status": "merged" },
+    { "slug": "gateway", "wave": 2, "verdict": "change", "modules": ["gateway"], "owns": ["src/gateway/**"], "doneCheck": "npm test", "doneCheckProved": false, "estAgents": 5, "status": "failed" }
+  ]
+}

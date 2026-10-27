@@ -1,0 +1,24 @@
+# Decisions
+
+- 2026-10-26 | Probe the platform before planning | owner said the foreman decides | cynic: n/a (not built yet) | —
+- 2026-10-26 | Merge mode single, integration branch from the base | avoid swapping hooks under the session | — | —
+- 2026-10-26 | Red team is the judge in red-team mode | one definition beats per-lead prompts | cynic: n/a | followed
+- 2026-10-26 hooks: background tasks count only when they belong to the lead's own descendants.
+- 2026-10-26 protocol: accepted at 0000001. The judge file starts VERDICT: PASS and names that head.
+- Finding for the end report: members ran unnamed, so their reports were saved under agent ids.
+- Mismatch decisions:
+  - Red team: the lead prompt is right; fix the judge prompt.
+  - Effort: low is allowed for lookups.
+  - 09:00 | an indented structured line | sub-bullet | cynic: none | followed
+- 2026-10-26T09:20:20Z king: plan approved, wave 1 starts
+- 2026-10-26T09:21:00Z | wave 1 starts with three crews | plan approved | cynic: none | followed
+- 14:10 | synthetic run starts: plan approved, wave 0 starts | owner approval | cynic: n/a (owner decided) | followed
+- 14:25 | merge hooks before protocol | the skill relies on the dir note | cynic: n/a | overruled: owner wanted protocol first
+- HH:MM | architect plan accepted | plan gate passed | cynic: none | followed
+- HH:MM | outlet cap raised to five | owner answer | cynic: none | followed
+- 07:30 | embedder tiers are whole-run | mixing spaces breaks clustering | cynic: none | followed
+- 09:10 | cynic-1 RECOMMEND answer: the kinds check is the agreed measurement | followed
+- 09:10 | cynic-1 RECOMMEND defer: duplicated wording in the role file | followed (deferred)
+- 09:10 | cynic-1 RECOMMEND answer: no handoff needed before the merge | followed
+- 09:12 | cynic-2 RECOMMEND pass: the owner already answered this | overruled: asked the owner anyway
+- 10:00 | merge slate after judge PASS | judge PASS at 0000002 | cynic: none | followed (deferred)
