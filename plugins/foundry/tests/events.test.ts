@@ -271,6 +271,38 @@ test('an append that hangs holds the appends after it, in order, and none is los
   expect(events(w).map(e => e.agent)).toEqual(['auth-1', 'auth-2', 'auth-3', 'auth-4'])
 })
 
+// ---------- the cross-crew message log is bounded the same way ----------
+
+const MESSAGES = `${ROOT}/messages.jsonl`
+const MSG_FAILED = 'foundry: message log failed, letting the call through:'
+const msgs = (w: W) => lines(w, MESSAGES).map(l => (JSON.parse(l) as { summary: string }).summary)
+
+test('with the message log hung, a cross-crew SendMessage returns within the bound and logs it', async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  w.files.set(MESSAGES, '')
+  w.holds.set(MESSAGES, never)
+  expect(await returnsWithin(w, () => w.send('L1', 'billing'))).toBe(true)
+  expect(w.ran.filter(c => c.tool === 'SendMessage').length).toBe(1)
+  expect(w.logs.filter(l => l === `${MSG_FAILED} no answer in ${EVENT_WAIT_MS}ms`).length).toBe(1)
+})
+
+test('a message append that hangs holds the message appends after it, in order, and none is lost once it answers', async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  let release = () => {}
+  w.writeHolds.set(MESSAGES, new Promise<void>(r => (release = r)))
+  const send = (s: string) => $.tool.call({ tool: 'SendMessage', to: 'billing', message: 'm', summary: s, agentId: 'L1' } as never)
+  expect(await returnsWithin(w, () => send('one'))).toBe(true)
+  expect(await returnsWithin(w, () => send('two'))).toBe(true)
+  expect(await returnsWithin(w, () => send('three'))).toBe(true)
+  expect(msgs(w)).toEqual([])
+  expect(w.logs.filter(l => l === `${MSG_FAILED} no answer in ${EVENT_WAIT_MS}ms`).length).toBe(3)
+  release()
+  for (let i = 0; i < 200 && msgs(w).length < 3; i++) await w.clock.advance(0)
+  expect(msgs(w)).toEqual(['one', 'two', 'three'])
+})
+
 test('red team B1: a write that lands after the bound does not clobber an append made in the meantime', async ($, on) => {
   const w = world($, on)
   await startSession($)

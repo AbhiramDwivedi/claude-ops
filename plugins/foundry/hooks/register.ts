@@ -1224,8 +1224,16 @@ export const register: Register = on => {
     }
     if (decided.crossCrew) {
       const entry = { from: decided.fromCrew, to: decided.toCrew, summary: typeof input.summary === 'string' ? input.summary : '' }
+      // same shape as logEvent: the chain stays serial and is never released on a timer, so a late write can't clobber
+      // a newer line; the call waits at most EVENT_WAIT_MS for it, and the line still lands later if the fs answers
       appending = appending.then(() => safely($, 'message log', () => appendMessage($, state, entry)))
-      await appending
+      await settledWithin($, EVENT_WAIT_MS, appending, () => {
+        try {
+          $.ui.log(`foundry: message log failed, letting the call through: no answer in ${EVENT_WAIT_MS}ms`, { to: 'debug' })
+        } catch {
+          // nothing left to do
+        }
+      })
     }
     return result
   }).catch(failOpen)
