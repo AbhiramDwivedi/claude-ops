@@ -322,7 +322,7 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 | Extension point: `.claude/kit/manifest.json`, kit 0.2.0 (checks, agents with `readOnly`, risky paths, setup scripts) | kit (`scripts/kit_manifest.py`, only after the owner approves) | worktrees, kit's stop gate, foundry init | `plugins/kit/docs/manifest.schema.json` | 0012, 0013 |
 | Extension point: `kit:init` with `declare read-only: <type>, ...`, kit 0.2.0 | kit | foundry init | `plugins/kit/skills/init/SKILL.md` | 0012, 0013 |
 | Extension point: read-only types declared through kit's manifest, worktrees 0.6.0 | worktrees | Claude Code `Agent` calls | `plugins/worktrees/README.md` | 0012, 0014 |
-| `<foundry dir>/events.jsonl` and the `decisions.md` grammar, foundry 0.4.0 | foundry hooks, foreman | `scripts/retro.py` | `plugins/foundry/docs/events.schema.json`; module doc "On disk" | foundry 0003 |
+| Extension point: `<foundry dir>/events.jsonl` and the `decisions.md` grammar, foundry 0.4.0 | foundry hooks, foreman | `scripts/retro.py` | `plugins/foundry/docs/events.schema.json`; module doc "On disk" | foundry 0003 |
 | `.claude/worktree-setup.sh` / `.ps1` and its env | kit (writes), project owner | worktrees (runs); from foundry 0.4.0, crews read `PORT_BASE` through what the script writes | `plugins/worktrees/README.md`, "The `.claude/worktree-setup` contract" | 0005 |
 | `.claude/worktrees/<name>`, branch `worktree-<name>` | worktrees | kit init (ignore entries), `kit_mine.py`, workflow-audit project mapping, foundry | worktrees README; `CONTRACT.md` metrics version 3 note | 0005 |
 | `<git common dir>/claude-worktrees/slots.json` | worktrees | worktrees in other sessions | type in `register.ts` | 0006 |

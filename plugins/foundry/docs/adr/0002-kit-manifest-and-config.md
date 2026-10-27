@@ -23,6 +23,8 @@ After step 1 (the doc check), init looks at `<repo>/.claude/kit/manifest.json` (
 | `kit:init` not listed | Says `kit is not installed; foundry init carries on without a kit manifest (0.3.0 behaviour)` and carries on. |
 | A manifest that isn't JSON, fails the schema or has another `version` | Says `kit manifest unreadable, carrying on without it: <reason>` and carries on as if there were none. It doesn't rerun `kit:init` over it. |
 
+The rows don't overlap, because init decides on the manifest before it looks at the skill list. The first and last rows depend on the manifest alone. A valid manifest that already holds both declarations means there is nothing to do, whatever kit's install state: init uses it and says nothing about kit, even when `kit:init` isn't listed. An unreadable manifest gets the `unreadable` line, listed or not. Only when the manifest is absent, or valid but without the declarations, does the skill list decide: `kit:init` listed means the second or third row, and not listed means the `kit is not installed` line.
+
 The judge and cynic are the declared types because both are `tools: Read, Grep, Glob, Bash`. The writer, devops, lead and architect edit files and stay isolated. Once kit records them, worktrees gives them no worktree (repo [ADR-0014](../../../../docs/adr/0014-worktrees-declared-read-only-agents.md)) and kit's stop gate skips them.
 
 ### 2. New foundry.json keys
