@@ -814,3 +814,75 @@ test('an unreadable slots.json is reported to the user with one toast per sessio
   expect(w.toasts).toHaveLength(1)
   expect(w.toasts[0]).toContain('slots.json')
 })
+
+// ---------------- fourth red team: one read of slots.json per decision, and an unreadable read removes nothing ----------------
+const liveTidyWorld = (on: On, hook?: CleanupOpts['hook']) =>
+  cleanupWorld(on, { files: { [metaFile(NEW)]: META_RUNNING(NEW.id) }, gone: [NEW.path], porcelain: PORC_NEW, merged: () => true, answer: tidyGit, hook })
+// the sweep's world: only the new live agent's branch is merged, so nothing else is removable
+const liveSweepWorld = (on: On, hook?: CleanupOpts['hook']) =>
+  cleanupWorld(on, { files: { [metaFile(NEW)]: META_RUNNING(NEW.id) }, gone: [NEW.path], porcelain: PORC_NEW, merged: b => b === NEW.branch, hook })
+const removedAnything = (w: CleanupWorld) => [...w.ran.filter(r => r.includes('worktree remove')), ...w.ran.filter(r => /branch -[dD] /.test(r))]
+
+test('tidy removes nothing for a live agent when slots.json stays readable during the fetch', async ($, on) => {
+  const w = liveTidyWorld(on)
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  await tidyRun($)
+  expect(removedAnything(w)).toEqual([])
+})
+
+test('tidy removes nothing when slots.json becomes unreadable during git fetch', async ($, on) => {
+  let armed = false
+  const w = liveTidyWorld(on, args => {
+    if (armed && args.includes('fetch --prune origin')) w.files.set(slashed(SLOTS_PATH), '')
+    return undefined
+  })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  armed = true
+  await tidyRun($)
+  expect(removedAnything(w)).toEqual([])
+})
+
+test('the merge sweep removes nothing for a live agent when slots.json stays readable during the worktree list', async ($, on) => {
+  const w = liveSweepWorld(on)
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  await cleanupSweep(w, $, MAIN)
+  expect(removedAnything(w)).toEqual([])
+})
+
+test('the merge sweep removes nothing when slots.json becomes unreadable during git worktree list', async ($, on) => {
+  let armed = false
+  const w = liveSweepWorld(on, args => {
+    if (armed && args === 'git worktree list --porcelain') w.files.set(slashed(SLOTS_PATH), '')
+    return undefined
+  })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  armed = true
+  await cleanupSweep(w, $, MAIN)
+  expect(removedAnything(w)).toEqual([])
+})
+
+for (const [label, active] of [['null', null], ['an array', []]] as const) {
+  test(`tidy removes nothing and says slots.json is unreadable when active is ${label}`, async ($, on) => {
+    const w = liveTidyWorld(on)
+    await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+    const st = JSON.parse(w.files.get(slashed(SLOTS_PATH)) as string) as { slots: object }
+    w.files.set(slashed(SLOTS_PATH), JSON.stringify({ slots: st.slots, active }))
+    const text = await tidyRun($)
+    expect(removedAnything(w)).toEqual([])
+    expect(text).toContain('slots.json unreadable')
+    expect(w.toasts).toHaveLength(1)
+  })
+}
+
+test('removing an agent worktree with a truncated slots.json tells the user once and leaves the file alone', async ($, on) => {
+  const w = liveTidyWorld(on)
+  on('classic.WorktreeRemove', async () => ({}))
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  const trunc = SLOTS_JSON.slice(0, SLOTS_JSON.indexOf('a4other'))
+  w.files.set(slashed(SLOTS_PATH), trunc)
+  const before = w.toasts.length
+  await $.classic.WorktreeRemove({ worktree_path: NEW.path, cwd: MAIN } as never)
+  expect(w.toasts.length - before).toBe(1)
+  expect(w.toasts[w.toasts.length - 1]).toContain('slots.json')
+  expect(w.files.get(slashed(SLOTS_PATH))).toBe(trunc)
+})
