@@ -852,6 +852,24 @@ function planWithin($: $, state: State, ms: number): Promise<Plan | undefined> {
   })
 }
 
+// `step`'s value, or undefined when it hasn't settled within `ms` on the engine clock, as planWithin bounds the plan
+// read; a step that rejects rejects. For the ADR-0004 reads, so a hung read lets the call or stop through.
+function within<T>($: $, ms: number, step: () => Promise<T>): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const timer = $.clock.after(ms, () => resolve(undefined))
+    step().then(
+      value => {
+        timer.cancel()
+        resolve(value)
+      },
+      (err: unknown) => {
+        timer.cancel()
+        reject(err)
+      },
+    )
+  })
+}
+
 // the agent list, merged into what was seen before. `listed` is every agent the list returned, whatever its
 // status (a completed or killed agent can still be listed); test isLive for an agent that is still at work.
 async function agentsOf($: $, state: State): Promise<{ all: Agent[]; listed: Agent[] }> {
@@ -1073,13 +1091,15 @@ async function judgeFilesOf($: $, dir: string, crew: string, since: number, with
 
 // The crew's judge FAILs this run, with the plan's budget rule; undefined when the plan sets none (v1, no or a bad
 // repairBudget, an approvedAt that doesn't parse, no foundry dir).
+// A plan read or judge-folder read that overruns its bound counts as no rule.
 async function failsOf($: $, state: State, crew: string): Promise<{ plan: Plan; fails: number } | undefined> {
-  const plan = await planOf($, state)
+  const plan = await planWithin($, state, PLAN_READ_MS)
   const since = runStart(plan)
   if (plan === undefined || repairBudgetOf(plan) === undefined || since === undefined) return undefined
   const dir = await rootOf($, state)
   if (dir === undefined) return undefined
-  return { plan, fails: judgeFails(crew, await judgeFilesOf($, reportDir(dir, crew), crew, since, true), since) }
+  const files = await within($, EVENT_WAIT_MS, () => judgeFilesOf($, reportDir(dir, crew), crew, since, true))
+  return files === undefined ? undefined : { plan, fails: judgeFails(crew, files, since) }
 }
 
 // ADR-0004 s5: a judge-named Agent call from inside a crew whose repair budget is spent is refused
@@ -1100,6 +1120,12 @@ async function budgetRecord($: $, state: State, crew: string, agent: string) {
 }
 
 const GIT_MS = 15_000
+
+// A ref git resolves against the checkout it runs in (HEAD, @, ORIG_HEAD and the like, or a revision expression):
+// in the session cwd it names the main checkout's commit, not the crew's, so the head guard treats it as unknown.
+function checkoutRelativeRef(ref: string): boolean {
+  return ref === '@' || /^[A-Z_]*HEAD$/.test(ref) || ['@{', '^', '~', ':'].some(c => ref.includes(c))
+}
 
 // the commit `branch` names, or undefined when git fails or prints anything but a 40-hex SHA
 async function headOf($: $, cwd: string | undefined, branch: string): Promise<string | undefined> {
@@ -1128,8 +1154,9 @@ async function patchOf($: $, cwd: string | undefined, base: string, branch: stri
 
 // ADR-0004 s4 and s6, on a lead's text that would pass by its Proof section: on a v>=2 plan, the Examined headings,
 // then, for an untagged report, the head guard. Undefined: the stop goes through.
+// A plan read or judge-folder read that overruns its bound lets the stop through.
 async function finalReportVerdict($: $, state: State, id: string, text: string): Promise<{ block: string; rule: string } | undefined> {
-  const plan = await planOf($, state)
+  const plan = await planWithin($, state, PLAN_READ_MS)
   if (!planAtLeastV2(plan)) return undefined
   const examined = examinedVerdict(plan, text)
   if (examined !== undefined) return { ...examined, rule: 'examined headings missing' }
@@ -1138,13 +1165,17 @@ async function finalReportVerdict($: $, state: State, id: string, text: string):
   const dir = await rootOf($, state)
   if (isTagged(text) || since === undefined || crew === undefined || dir === undefined) return undefined
   const reports = reportDir(dir, crew.crew)
-  const latest = latestJudge(crew.crew, await judgeFilesOf($, reports, crew.crew, since, false), since)
-  const ruling = latest === undefined ? undefined : judgeRuling(String(await $.fs.read(`${reports}/${latest.name}`)))
+  const read = await within($, EVENT_WAIT_MS, async () => {
+    const latest = latestJudge(crew.crew, await judgeFilesOf($, reports, crew.crew, since, false), since)
+    return { ruling: latest === undefined ? undefined : judgeRuling(String(await $.fs.read(`${reports}/${latest.name}`))) }
+  })
+  if (read === undefined) return undefined
+  const { ruling } = read
   // the rows that need no git: no clean PASS, or a PASS without its head lines
   const early = headVerdict(plan, ruling, undefined, undefined)
   if (early !== undefined) return { ...early, rule: early.block === NO_HEAD_REASON ? 'judge PASS has no head lines' : 'no clean judge PASS this run' }
   const where = branchOf(text)
-  if (ruling === undefined || where === undefined) return undefined
+  if (ruling === undefined || where === undefined || checkoutRelativeRef(where.branch) || checkoutRelativeRef(where.base)) return undefined
   const cwd = await $.session.cwd()
   const head = await headOf($, cwd, where.branch)
   if (head === undefined || head === ruling.head) return undefined
@@ -1525,7 +1556,7 @@ export const register: Register = on => {
     const type: unknown = e.subagent_type
     if (e.agentId === undefined && typeof type === 'string' && type.startsWith('foundry:')) {
       const refused = await safely($, 'main-session rule', async () => {
-        const verdict = mainCallVerdict(await planOf($, state), e.agentId, type, e.model, e.effort)
+        const verdict = mainCallVerdict(await planWithin($, state, PLAN_READ_MS), e.agentId, type, e.model, e.effort)
         if (verdict !== undefined) await logRule($, `main-session rule refused a ${type} call: ${verdict.deny === MAIN_MODEL_REFUSAL ? 'no model' : 'no allowed effort'}`)
         return verdict
       })
@@ -1613,7 +1644,7 @@ export const register: Register = on => {
         if (crew.isLead && !leadStopPasses(message)) return
         // on a v>=2 plan, one the Examined check will send back is not its report either (ADR-0004 s6); no git here
         if (crew.isLead && !isTagged(message)) {
-          const held = await safely($, 'examined check', async () => examinedVerdict(await planOf($, state), message))
+          const held = await safely($, 'examined check', async () => examinedVerdict(await planWithin($, state, PLAN_READ_MS), message))
           if (held !== undefined) {
             state.withheld.add(id)
             await logRule($, `examined check held back the hand-back of the lead of crew ${crew.crew}: headings missing`)
@@ -1698,10 +1729,12 @@ export const register: Register = on => {
     const tags = gate?.interim !== true
     // the hand-back already holds this stop's report; the agent's next stop is captured again
     if (state.handedBack.delete(id)) {
-      if (gate?.lead === true && handBack !== undefined && (!leadStopPasses(handBack) || withheld)) {
-        // a lead's hand-back the gate could have sent back was held; this stop went through, so it is the report
+      // a lead's hand-back the gate could have sent back was held; this stop went through, so it is the report. One
+      // the Examined check held is written even when the gate step failed (P5), by the agents last seen if the list fails
+      if (handBack !== undefined && (withheld || (gate?.lead === true && !leadStopPasses(handBack)))) {
         await safely($, 'report capture', async () => {
-          const crew = crewOf(id, (await agentsOf($, state)).all)
+          const all = (await safely($, 'agent list', async () => (await agentsOf($, state)).all)) ?? [...state.known.values()]
+          const crew = crewOf(id, all)
           if (crew !== undefined) await writeReport($, state, crew, id, handBack, tags)
         })
       }
