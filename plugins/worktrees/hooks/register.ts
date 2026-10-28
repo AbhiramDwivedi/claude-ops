@@ -71,24 +71,34 @@ const asciiLower = (s: string): string => s.replace(/[A-Z]/g, c => c.toLowerCase
 // the case-folded full name of each entry with `readOnly: true` and a name the schema allows. A bad entry adds
 // nothing and the rest still count. A file that isn't JSON, isn't an object, has a version other than 1 or has no
 // agents array declares nothing and says why in `error`.
-export function declaredReadOnly(text: string): { types: Set<string>; error?: string } {
+// Types that edit files, so a manifest can't make them skip their worktree (ADR-0014, amendment of 2026-10-27).
+// ADR-0013 carries the same list; plugins share no code, so this is its own copy.
+export const REFUSED_READ_ONLY_TYPES = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer']
+
+// An entry naming a refused type (full name, case-folded) is left out of `types` and its name, as written, goes to
+// `refused` in file order; `refused` is [] when `error` is set.
+export function declaredReadOnly(text: string): { types: Set<string>; refused: string[]; error?: string } {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch (error) {
-    return { types: new Set(), error: String(error) }
+    return { types: new Set(), refused: [], error: String(error) }
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { types: new Set(), error: 'not a JSON object' }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { types: new Set(), refused: [], error: 'not a JSON object' }
   const file = parsed as { version?: unknown; agents?: unknown }
-  if (file.version !== 1) return { types: new Set(), error: `version ${JSON.stringify(file.version)}, not 1` }
-  if (!Array.isArray(file.agents)) return { types: new Set(), error: 'no agents array' }
+  if (file.version !== 1) return { types: new Set(), refused: [], error: `version ${JSON.stringify(file.version)}, not 1` }
+  if (!Array.isArray(file.agents)) return { types: new Set(), refused: [], error: 'no agents array' }
   const types = new Set<string>()
+  const refused: string[] = []
   for (const entry of file.agents as unknown[]) {
     if (typeof entry !== 'object' || entry === null) continue
     const { name, readOnly } = entry as { name?: unknown; readOnly?: unknown }
-    if (readOnly === true && typeof name === 'string' && MANIFEST_AGENT_NAME.test(name)) types.add(asciiLower(name))
+    if (readOnly === true && typeof name === 'string' && MANIFEST_AGENT_NAME.test(name)) {
+      if (REFUSED_READ_ONLY_TYPES.includes(asciiLower(name))) refused.push(name)
+      else types.add(asciiLower(name))
+    }
   }
-  return { types }
+  return { types, refused }
 }
 
 // the Agent call's arguments with isolation set, and nothing else of the envelope
@@ -727,6 +737,13 @@ async function declaredByKit($: $, input: Record<string, unknown>): Promise<bool
     }
     const declared = declaredReadOnly(text)
     if (declared.error !== undefined) throw new Error(declared.error)
+    if (declared.refused.length > 0) {
+      try {
+        await $.ui.log(`worktrees: kit manifest declares editing types read-only, ignoring them: ${declared.refused.join(', ')}`, { to: 'debug' })
+      } catch {
+        // the log is best effort: the call goes on as today
+      }
+    }
     return declared.types.has(asciiLower(type))
   } catch (error) {
     try {
