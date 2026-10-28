@@ -8,6 +8,12 @@ Since 0.3.0 an architect agent plans each run against your project's architectur
 
 [docs/architecture.md](docs/architecture.md) covers the internals: who talks to whom, the files on disk, each hook, and how a run recovers from failures. [ADR-0001](docs/adr/0001-design-phase.md) records the 0.3.0 design phase and why it exists. [ADR-0002](docs/adr/0002-kit-manifest-and-config.md) records the 0.4.0 changes to init, the config and ports, and [ADR-0003](docs/adr/0003-event-log-and-retro.md) the event log, the decision-log grammar and the retro.
 
+## What changed in 0.5.1
+
+- The mid-run design slice goes in the earliest wave whose crews it doesn't depend on, not in a new wave after the last, which deadlocked.
+- `/foundry:init` proposes a short foreman section for the project's `CLAUDE.md`, written only on the owner's approval.
+- Builders default to Sonnet (Opus only after a Sonnet failure), deterministic steps run as scripts, and member briefs name exact files and lines.
+
 ## What changed in 0.5.0
 
 0.5.0 closes the gaps run 3 found: claims no one scoped, repairs with no end, a PASS bound to a head that had since moved, and judges raised without anyone asking. The rules are in the prompts and, for the part a hook can see, in the hooks. See [ADR-0004](docs/adr/0004-scope-repair-and-head-gates.md).
