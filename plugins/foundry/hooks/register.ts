@@ -1056,10 +1056,12 @@ async function logRule($: $, line: string): Promise<void> {
   }
 }
 
-// The crew's judge files modified at or after `since`, from reports/<crew>/. Texts are read only when `withText`;
-// a list, stat or read that throws rejects, and the caller's safely lets the call through.
+// The crew's judge files modified at or after `since`, from reports/<crew>/. Texts are read only when `withText`.
+// No folder means no judge files (ADR-0004 s5: 0 FAILs; s6: no PASS). A list, stat or read that throws rejects, and
+// the caller's safely lets the call through.
 async function judgeFilesOf($: $, dir: string, crew: string, since: number, withText: boolean): Promise<JudgeFile[]> {
   const files: JudgeFile[] = []
+  if (!(await $.fs.exists(dir))) return files
   for (const f of await $.fs.list(dir)) {
     if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew, f.name)) continue
     const { mtimeMs } = await $.fs.stat(`${dir}/${f.name}`)
