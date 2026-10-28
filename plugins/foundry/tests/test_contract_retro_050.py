@@ -66,7 +66,7 @@ class RetroBudgetsSpent(unittest.TestCase):
                 self.assertEqual(self.retro(name)["retro"], 1)
 
     def test_top_level_keys_unchanged(self):
-        want = {"retro", "dir", "split", "runs", "judgeFiles", "plan", "eventsSkipped", "eventsOutsideRuns"}
+        want = {"leftovers", "retro", "dir", "split", "runs", "judgeFiles", "plan", "eventsSkipped", "eventsOutsideRuns"}
         self.assertEqual(set(self.retro("spent").keys()), want)
 
     def test_spawns_counted_from_spawn_lines_only(self):
