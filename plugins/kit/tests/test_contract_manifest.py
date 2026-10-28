@@ -272,15 +272,28 @@ class ManifestContract(unittest.TestCase):
         """The declaredBy a name's prefix needs, or 'project' for a bare name."""
         return name.split(":", 1)[0] if ":" in name else "project"
 
+    @staticmethod
+    def clean_facts(agents=None):
+        """Inline facts for the refused-types cases (no fixture file), with no case-folded duplicate among the
+        agents, so the refusal is the only bad-input code the script can reach."""
+        return {
+            "checks": [{"name": "unit", "kind": "test", "command": "npm test", "gate": "stop"}],
+            "agents": agents if agents is not None else [
+                {"name": "kit:reviewer", "readOnly": True, "declaredBy": "kit"},
+                {"name": "kit:scout", "readOnly": True, "declaredBy": "kit"},
+                {"name": "migrator", "readOnly": False, "declaredBy": "project"},
+            ],
+            "riskyPaths": [{"path": "db/migrations/", "why": "a wrong migration corrupts production data"}],
+            "setupScripts": [".claude/worktree-setup.sh"],
+        }
+
     def facts_with(self, name, read_only, declared_by=None):
-        facts = facts_from_fixture()
-        facts["agents"] = [a for a in facts["agents"] if a["name"] != name]
-        facts["agents"].append({"name": name, "readOnly": read_only, "declaredBy": declared_by or self.declarer(name)})
-        return facts
+        """Facts whose only agent is `name`, so no exact or case-folded duplicate exists."""
+        return self.clean_facts([{"name": name, "readOnly": read_only, "declaredBy": declared_by or self.declarer(name)}])
 
     def store(self, extra_agents):
         """Write a good manifest, then add hand-written agents to it (bypassing the script's input guard)."""
-        self.ok_json(self.write())
+        self.ok_json(self.write(self.clean_facts()))
         m = load(self.manifest)
         m["agents"] = sorted(m["agents"] + extra_agents, key=lambda a: a["name"])
         with open(self.manifest, "w", encoding="utf-8", newline="\n") as f:
@@ -299,7 +312,7 @@ class ManifestContract(unittest.TestCase):
                 self.assertFalse(os.path.exists(os.path.join(self.repo, ".claude")), "%s wrote something" % name)
 
     def test_write_refusal_leaves_an_existing_manifest_untouched(self):
-        self.ok_json(self.write())
+        self.ok_json(self.write(self.clean_facts()))
         before = self.manifest_bytes()
         r = self.write(self.facts_with("foundry:lead", True))
         self.assert_error(r, self.CODE, 2)
@@ -351,7 +364,7 @@ class ManifestContract(unittest.TestCase):
                 self.assert_error(r, self.CODE, 2)
                 self.assertIn(name, r.stderr)
                 self.assertFalse(os.path.exists(self.manifest))
-        self.ok_json(self.write())
+        self.ok_json(self.write(self.clean_facts()))
         before = self.manifest_bytes()
         for by, name in (("foundry", "foundry:lead"), ("foundry", "foundry:LEAD"), ("kit", "kit:test-writer"),
                          ("foundry", "foundry:judge,foundry:lead")):
@@ -360,17 +373,17 @@ class ManifestContract(unittest.TestCase):
                 self.assertEqual(self.manifest_bytes(), before)
 
     def test_declare_qualified_prefix_mismatch_beats_the_refusal(self):
-        self.ok_json(self.write())
+        self.ok_json(self.write(self.clean_facts()))
         self.assert_error(self.declare("foundry", "Foundry:Lead"), "DECLARER_MISMATCH", 2)
 
     def test_declare_non_refused_name_still_works(self):
-        self.ok_json(self.write())
+        self.ok_json(self.write(self.clean_facts()))
         self.ok_json(self.declare("foundry", "foundry:judge"))
         self.assertIn("foundry:judge", [a["name"] for a in load(self.manifest)["agents"]])
 
     def test_stored_refused_read_only_entry_reads_fine_and_plain_write_repairs_it(self):
         self.store([{"name": "general-purpose", "readOnly": True, "declaredBy": "project"}])
-        r = self.write()
+        r = self.write(self.clean_facts())
         out = self.ok_json(r)  # not MANIFEST_CORRUPT (exit 3)
         self.assertIs(out["changed"], True)
         bad = [a for a in load(self.manifest)["agents"] if a["readOnly"] and a["name"].casefold() in self.REFUSED]
@@ -379,7 +392,7 @@ class ManifestContract(unittest.TestCase):
 
     def test_carried_over_refused_entry_is_dropped_by_write(self):
         self.store([{"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"}])
-        r = self.write()
+        r = self.write(self.clean_facts())
         out = self.ok_json(r)
         self.assertIs(out["changed"], True)
         self.assertNotIn("foundry:lead", [a["name"] for a in load(self.manifest)["agents"]])
@@ -398,14 +411,14 @@ class ManifestContract(unittest.TestCase):
     def test_several_dropped_entries_warn_in_stored_order(self):
         self.store([{"name": "foundry:writer", "readOnly": True, "declaredBy": "foundry"},
                     {"name": "foundry:architect", "readOnly": True, "declaredBy": "foundry"}])
-        r = self.write()
+        r = self.write(self.clean_facts())
         self.ok_json(r)
         self.assertEqual(r.stderr.strip().splitlines(),
                          [self.warning("foundry:architect", "foundry"), self.warning("foundry:writer", "foundry")])
 
     def test_carried_over_refused_name_at_read_only_false_is_kept(self):
         self.store([{"name": "foundry:lead", "readOnly": False, "declaredBy": "foundry"}])
-        r = self.write()
+        r = self.write(self.clean_facts())
         self.ok_json(r)
         self.assertIn({"name": "foundry:lead", "readOnly": False, "declaredBy": "foundry"}, load(self.manifest)["agents"])
         self.assertNotIn("dropped", r.stderr)
@@ -418,7 +431,7 @@ class ManifestContract(unittest.TestCase):
         gate = os.path.join(self.repo, ".claude", "kit", "stop-gate.sh")
         with open(gate, "w", encoding="utf-8", newline="\n") as f:
             f.write(self.gate_template())
-        out = self.ok_json(self.write())
+        out = self.ok_json(self.write(self.clean_facts()))
         self.assertEqual(out["gates"]["stop-gate.sh"], "updated")
         with open(gate, encoding="utf-8") as f:
             rendered = f.read()
