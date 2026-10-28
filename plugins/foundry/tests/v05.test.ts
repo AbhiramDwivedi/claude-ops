@@ -907,3 +907,17 @@ test('regression D: a judge named AUTH-JUDGE handing back a FAIL with budget 0 w
   expect(lines.length).toBe(1)
   expect([lines[0]?.agent, lines[0]?.crew]).toEqual(['AUTH-JUDGE', 'auth'])
 })
+
+test('regression D: a judge file saved as AUTH-JUDGE.md is read by the head guard (case-sensitive fs)', async ($, on) => {
+  const reason = str('NO_PASS_REASON')
+  const b = build($ as never, on as never, { git: gitAt(H1, P1) })
+  setPlan(b.w, 2, 2)
+  await startSession($ as never)
+  // a FAIL under the upper-case name: sent back
+  setJudge(b.w, 'AUTH-JUDGE', judgeText('FAIL'), SINCE + 1000)
+  expect(await lead($ as never, report())).toBe(reason)
+  // control: a clean PASS under the same name, head equal to git's head: through
+  reset(b)
+  setJudge(b.w, 'AUTH-JUDGE', judgeText('PASS'), SINCE + 1000)
+  expect(await lead($ as never, report())).toBeUndefined()
+})
