@@ -53,7 +53,7 @@ Commit the script to the repo. The mod runs it once, right after it creates a wo
 
 A typical script writes ports from `PORT_BASE` into `.env` and installs dependencies. It may take up to 10 minutes. If it fails, the worktree is kept, you get a toast, and the agent works in it anyway.
 
-Slots are recorded in `<git common dir>/claude-worktrees/slots.json`, written under a lock directory beside it so parallel sessions never draw the same slot. A slot is freed when its worktree is removed, or once its folder is gone. A `slots.json` that does not parse is never overwritten: slots, self-clean and `/tidy` pause and a toast says so, and the fix is to delete the file once no agents are running.
+Slots are recorded in `<git common dir>/claude-worktrees/slots.json`, written under a lock directory beside it so parallel sessions never draw the same slot. A slot is freed when its worktree is removed, or once its folder is gone. A `slots.json` that does not parse is never overwritten: slots, self-clean and `/tidy` pause and a toast says so, and the fix is to repair the file, or delete it once no agents are running.
 
 ## Workspaces of nested repos
 
