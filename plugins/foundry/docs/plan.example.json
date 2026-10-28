@@ -1,11 +1,12 @@
 {
-  "version": 1,
+  "version": 2,
   "goal": "Add rate limiting to the public API, with per-key quotas stored in Postgres",
   "architecture": "docs/architecture.md",
   "approval": "owner",
   "approvedAt": null,
   "agentCap": 40,
   "maxParallelCrews": 4,
+  "repairBudget": 2,
   "crews": [
     {
       "slug": "ratelimit-design",
