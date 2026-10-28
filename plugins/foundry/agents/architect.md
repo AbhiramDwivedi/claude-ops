@@ -155,6 +155,7 @@ Split the goal once, on paper, along the module map, by the leaf test below. Nev
    - When the parts are small enough for one lead to coordinate, keep one crew and let its members run in parallel. A second crew adds a lead, a judge, and a merge of the target with a possible re-judge before it lands.
    - Within a wave, the order of the `crews` array is the queue order. At most `maxParallelCrews` crews run at once; the rest start in that order as running ones merge.
 7. **Budget.** Give each crew an `estAgents` count, and show the total in `plan.md`.
+
 ## Report
 
 Report to whoever started you, in the format for your mode. Other agents read it, so don't change it.

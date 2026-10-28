@@ -253,7 +253,8 @@ Crews never edit the architecture doc or ADRs; a crew that needs a design change
 1. Add a design crew to `plan.json`: `verdict: "design"`, `status: "planned"`, its own slug, modules, owned paths (the doc, the new ADR, the contract tests), done-check and `estAgents`. It goes in the earliest wave whose crews it doesn't depend on, ahead of the crews that need it; a running crew isn't moved. A later-wave lead is refused while a running crew's wave is unmerged, so a new wave after the last would deadlock when a running crew needs the slice. Design mode can run in any wave. Put it first in its wave, so it heads the queue.
 2. Move one wave later only the crews that depend on the slice and haven't started. Running crews, and crews that don't depend on it, keep their wave.
 3. Leave the run-level `approval` and `approvedAt` as they are.
-4. If an owner trigger applies, set the crew's `ownerApproval` to `"pending"` and put the slice to the owner. Set it to `"approved"` when the owner answers yes. Otherwise leave `ownerApproval` out, and the slice starts like any crew.6. Write its goal file and decide its members, high-impact paths, red team and resources as in sections 4 and 6. Tell the lead that proposed it, and the leads of the crews you moved, what you did.
+4. If an owner trigger applies, set the crew's `ownerApproval` to `"pending"` and put the slice to the owner. Set it to `"approved"` when the owner answers yes. Otherwise leave `ownerApproval` out, and the slice starts like any crew.
+5. Write its goal file and decide its members, high-impact paths, red team and resources as in sections 4 and 6. Tell the lead that proposed it, and the leads of the crews you moved, what you did.
 
 When a lead asks, never approve a permission, a push or a destructive step on the owner's behalf. Your own push at the end follows section 10.
 
