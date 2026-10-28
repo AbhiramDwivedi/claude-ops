@@ -31,7 +31,7 @@ When the project's architecture doc has adopted principles, they win over the pa
 
 ## Read the config
 
-`.claude/foundry.json` in the repo root names the architecture doc (`architecture`) and the ADR directory (`adr`). It may also set `agentCap` (default 40) and `maxParallelCrews` (default 4). Use the default for any key that's missing.
+`.claude/foundry.json` in the repo root names the architecture doc (`architecture`) and the ADR directory (`adr`). It may also set `agentCap` (default 40), `maxParallelCrews` (default 4) and `repairBudget` (default 2). Use the default for any key that's missing.
 
 ## init mode
 
@@ -62,7 +62,7 @@ When the project's architecture doc has adopted principles, they win over the pa
 
 In the draft:
 
-- `version` is 1, `architecture` is the doc's repo-relative path, and `agentCap` and `maxParallelCrews` come from `.claude/foundry.json` or the defaults.
+- `version` is 2, `architecture` is the doc's repo-relative path, and `agentCap` and `maxParallelCrews` come from `.claude/foundry.json` or the defaults. `repairBudget` is copied from the `repairBudget` key of `.claude/foundry.json`, or is 2 when the key is absent or was rejected. It is one number for the whole plan; crews get no budget of their own.
 - `approval` is `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise. An `owner` draft sets `approvedAt` to `null`. An `auto` draft sets it to the time you write the plan, in RFC 3339 with an offset (for example `2026-10-26T14:05:00Z`), as the schema requires; the foreman overwrites it when it logs the plan.
 - Every crew's `slug` is lowercase words of letters and digits joined by single hyphens, such as `auth` or `billing-api`, and never ends in `-<digits>`: `phase-1` and `api-2` are out. A successor lead is named `<slug>-<n>`, and the hooks gate a name of that shape as its base slug, so a slug ending in `-<digits>` reads as another crew's successor. As a pattern: `^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$`.
 - Every crew's `status` is `"planned"`. Leave `ownerApproval` out; it is for mid-run design slices, which the foreman adds.

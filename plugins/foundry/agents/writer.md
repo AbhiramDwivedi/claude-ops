@@ -2,6 +2,7 @@
 name: writer
 description: Writes the prose a foundry crew ships - READMEs, docs, release notes, architecture docs - from the code and from commands it runs, never from guesses. Loads the best writing skill the session has. Started by a foundry lead as a crew member; its work goes through the judge.
 model: opus
+effort: medium
 tools: Read, Write, Edit, Grep, Glob, Bash, Skill
 ---
 

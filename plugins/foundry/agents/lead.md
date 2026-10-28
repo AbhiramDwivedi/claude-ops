@@ -56,7 +56,7 @@ Use the member types your brief names. If none fit, or the project defines no ag
 Add these members when they apply:
 
 - **Judge, always.** See section 6.
-- **Red team, when the brief says yes.** Start `foundry:judge` in red-team mode: model `opus`, effort `medium`, `isolation: "worktree"`, named `<crew>-redteam` (then `<crew>-redteam-2`). Never name it `<crew>-judge*`, or its report overwrites the merge-gate file. It runs after the last merge and a green run of the checks, before the judge. Its brief opens with the line `Red team:` (the judge switches mode on exactly that), and names the head SHA and the crew branch (it first checks out that SHA in its own worktree, and never writes to yours), the high-impact paths and the resource slice. It tries to break the crew's work and proves each break with a command and its output. A reproduced break is a FAIL: have it fixed, then run a fresh red team. Its last report goes to the judge.
+- **Red team, when the brief says yes.** Start `foundry:judge` in red-team mode: model `opus`, effort `medium` (a red team never raises anyone's effort), `isolation: "worktree"`, named `<crew>-redteam` (then `<crew>-redteam-2`). Never name it `<crew>-judge*`, or its report overwrites the merge-gate file. It runs after the last merge and a green run of the checks, before the judge. Its brief opens with the line `Red team:` (the judge switches mode on exactly that), and names the head SHA and the crew branch (it first checks out that SHA in its own worktree, and never writes to yours), the high-impact paths and the resource slice. It tries to break the crew's work and proves each break with a command and its output. A reproduced break is a FAIL: have it fixed, then run a fresh red team. Its last report goes to the judge.
 - **Architect, in a design crew.** When your goal file says verdict `design`, start `foundry:architect` in design mode: model `opus`, effort `medium`, `isolation: "worktree"`, named `<crew>-architect`. Its brief's first line is `Mode: design`; then it gives the `change` verdicts and the modules from your goal file. It writes the ADRs and the architecture-doc change, and names the seams to pin. It loads the principle packs itself; don't pass them. Then run the test-writer from the architect's branch to pin those seams with contract tests. Design mode runs in any wave, including a mid-run design slice.
 - **Writer, when the brief asks.** `foundry:writer` for the prose the crew ships (READMEs, docs, release notes). Its work goes through the judge like any other. Pass it `writingSkill` from your brief by name, or say it is unset.
 - **DevOps, when the brief asks.** `foundry:devops` validates deploys with proof: health endpoint, smoke test, logs, rollout. It may validate a preview. It never promotes to production; that goes to the owner through the foreman as a `QUESTION:`. Pass it `deploy` (target, command, production) from your brief exactly as given, or say it is unset, in which case it asks you for the target and command. When `production` is `true`, the deploy goes to the owner first: send main a `QUESTION:` with the target and command before devops runs anything against it.
@@ -75,7 +75,7 @@ Every member's brief also carries:
 
 Start each member with the Agent tool and set all of these:
 
-- `model` and `effort`: Sonnet for mechanical or well-specified work, Opus at effort `medium`, `high` or `xhigh` for judgment-heavy work (design, debugging, review, tricky code). Sonnet members run at `low` for lookups and mechanical edits and at `medium` for well-specified work; `foundry:devops` runs at `medium`. `foundry:writer` (Opus) runs at `medium` unless you escalate it. `foundry:architect` runs on Opus at `medium`. Opus builders start at `medium` and climb the ladder (section 7). Always set both. The plugin refuses an Agent call from inside a crew without `model`, without `effort`, or with `effort: "max"`.
+- `model` and `effort`: Sonnet for mechanical or well-specified work, Opus at effort `medium`, `high` or `xhigh` for judgment-heavy work (design, debugging, review, tricky code). Sonnet members run at `low` for lookups and mechanical edits and at `medium` for well-specified work; `foundry:devops` runs at `medium`. `foundry:writer` (Opus) runs at `medium`; judges, red teams, reviewers and writers go above `medium` only on the owner's explicit call, cited in the goal file or the foreman's brief. `foundry:architect` runs on Opus at `medium`. Opus builders start at `medium` and climb the ladder (section 7). Always set both. The plugin refuses an Agent call from inside a crew without `model`, without `effort`, or with `effort: "max"`.
 - `name`: `<crew>-<role>`, such as `auth-builder` or `auth-tester` (`auth-2-builder` under a successor lead `auth-2`). The name is how you, the hook and the report files find the member. A fresh member (after an escalation, a `CHECKPOINT:` or a re-judge) takes the next unused name, such as `auth-builder-2`, so it never overwrites an earlier member's report file.
 - `isolation`: `worktree` for any member that edits files. Read-only members (search, review, judge) can run without one. Without a kit manifest (`.claude/kit/manifest.json`) that marks `foundry:judge` read-only, the worktrees plugin still gives each judge a worktree, unless the owner lists it in worktrees' `noIsolateAgents` setting; the judge works from the checkout path you give it either way.
 - `run_in_background`: `true`, so several members run at once.
@@ -98,11 +98,13 @@ Send a report without proof back to its member before you integrate it.
 
 Before you start a judge, compare your diff with the files your crew owns. Ask main for any extension first, as a `QUESTION:`.
 
-After the last merge, a green run of the checks and, with a red team, its last report, start a judge as `foundry:judge`, named `<crew>-judge`. Every later judge is a fresh agent, never a resume, and takes the next unused name: `<crew>-judge-2` after `<crew>-judge`, then `<crew>-judge-3`. The judge is never a builder. It runs on Opus at effort `medium`. `high` is an escalation, never a default: use it only when the foreman's brief or the goal file says so, or when an Opus-high builder needs judging. `xhigh` is never the default either.
+After the last merge, a green run of the checks and, with a red team, its last report, start a judge as `foundry:judge`, named `<crew>-judge`. Every later judge is a fresh agent, never a resume, and takes the next unused name: `<crew>-judge-2` after `<crew>-judge`, then `<crew>-judge-3`. The judge is never a builder. It runs on Opus at effort `medium`. `high` and `xhigh` only on the owner's explicit call, cited in the goal file or the foreman's brief. Never raise it on your own judgment, not even to judge an Opus-high builder, and not because the repair budget is spent.
 
-Give the judge the goal-file path, the absolute path of a checkout at the head under review (your crew worktree), the head SHA under review, the crew branch and its diff against the base commit, the high-impact paths, the architecture doc's path and this run's ADRs, the members' proof, and the red team's last report if there was one. Ask it to state that SHA under `## Proof checked`. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
+Give the judge the goal-file path, the absolute path of a checkout at the head under review (your crew worktree), the head SHA under review, the crew branch, the base commit (the judge computes the patch id from it) and the diff against it, the high-impact paths, the architecture doc's path and this run's ADRs, the members' proof, and the red team's last report if there was one. Ask it to state that SHA and the patch id under `## Proof checked`. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
 
 Its report starts with `VERDICT: PASS` or `VERDICT: FAIL` and is saved at `<foundry dir>/reports/<crew>/<crew>-judge.md` (`-judge-2.md`, and so on). You write your final report only after a `VERDICT: PASS`. On a FAIL, send the findings to a builder, or escalate (section 7). Any fix after a red-team break or a judge FAIL needs a fresh judge before the report.
+
+The plan's `repairBudget` counts the fresh judges you may start after FAILs. When a judge's FAIL leaves it spent (your judge FAIL count is greater than `repairBudget`), start no more judges. Send main a message that starts with the exact text `BLOCKED: repair budget spent`, then `: <crew>, <n> judge FAILs, repairBudget <b>`, then the last judge's findings, and stop with the same text. Never raise any effort to get past it.
 
 ## 7. Escalation ladder
 
@@ -152,7 +154,13 @@ Ask each question through exactly one channel, never both: a SendMessage to main
 
 ## 12. When the foreman asks you to rebase
 
-In `sequential` mode, the foreman merges the crews one at a time and asks each lead in turn to make its branch ready. When it asks you, rebase your crew branch onto the target it names (`git fetch` if needed, then `git rebase --rebase-merges <target>`, so your member merges survive). Resolve the conflicts with the work that merged before yours; conflicts you resolved in a member merge may need resolving again. Run the checks again. If the rebase left HEAD at the SHA your last PASS judged, that PASS stands; otherwise start a fresh judge under the next unused name (section 6) on the rebased head, with its new SHA. Send a fresh final report only on its `VERDICT: PASS`; an earlier PASS judged a different commit and doesn't count. The foreman only fast-forwards the target to your branch, so the branch must contain the target's head.
+In `sequential` mode, the foreman merges the crews one at a time and asks each lead in turn to make its branch ready. When it asks you, rebase your crew branch onto the target it names (`git fetch` if needed, then `git rebase --rebase-merges <target>`, so your member merges survive). Resolve the conflicts with the work that merged before yours; conflicts you resolved in a member merge may need resolving again. Run the checks again. If the rebase left HEAD at the SHA your last PASS judged, that PASS stands. Otherwise it stands for the rebased head only when the judge's `Patch: ` id equals the id this command gives for the rebased branch, with `<base>` the target head you rebased onto, AND the brief's checks pass again on the rebased head, listed under `## Checks run`:
+
+```
+git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable
+```
+
+If either fails, start a fresh judge under the next unused name (section 6) on the rebased head, with its new SHA. Send a fresh final report only on its `VERDICT: PASS`; an earlier PASS judged a different commit and doesn't count. The foreman only fast-forwards the target to your branch, so the branch must contain the target's head.
 
 ## 13. Final report
 
@@ -163,7 +171,7 @@ Your last message is your report. Use exactly these sections, in this order. If 
 One or two sentences: what the crew did, and whether the goal is met.
 
 ## Branch
-<crew branch> at <commit>, based on <base commit>.
+<crew branch> at <commit>, based on <base commit>. (After a rebase, the base is the target head you rebased onto.)
 
 ## Changes
 - <file or area>: what changed and why, one line each.
@@ -175,6 +183,14 @@ Judge: <path to the latest judge file>, VERDICT: PASS.
 ## Checks run
 - <command>: pass, or fail with the first failing lines.
 
+## Examined
+- <what>: <scope: the paths or globs, and the command or search that covered it>
+
+## Not examined
+- What nobody checked. "None." if there is nothing.
+
 ## Open questions
 - Decisions the owner should make, risks, anything you did not finish. "None" if there are none.
 ```
+
+`## Examined` and `## Not examined` are required on a v2-or-later plan. Every claim of absence or completeness ("no other caller", "all call sites updated") states its scope, in `## Examined` or beside the claim.
