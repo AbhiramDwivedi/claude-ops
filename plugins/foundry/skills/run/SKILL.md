@@ -44,7 +44,7 @@ For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a sug
 
 The plan is built on the project's architecture doc. Its path is the `architecture` key of `<repo>/.claude/foundry.json`, where `<repo>` is `git rev-parse --show-toplevel` in the session's working directory. If that file is missing, or the doc it names doesn't exist, run the `foundry:init` skill with the Skill tool before anything else. It starts the architect in `init` mode, shows the owner what the architect wrote, and stops. Then ask the owner whether to go on with the run, and continue at section 1 when they say yes. If init stopped because `.claude/foundry.json` is invalid or has no `architecture` key, the run can't go on: tell the owner, and stop until they fix the file.
 
-Read the rest of `.claude/foundry.json` now. Each key the owner hasn't set takes its default: `agentCap` 40, `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch. The newer keys are optional too, and leaving one out keeps 0.3.0 behaviour:
+Read the rest of `.claude/foundry.json` now. Each key the owner hasn't set takes its default: `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch. The newer keys are optional too, and leaving one out keeps 0.3.0 behaviour:
 
 - `roles` maps a job (`build`, `test`, `review`, `search`, `docs`, `deploy`) to a full agent type, such as `build: kit:builder`. You use it in sections 3 and 4.
 - `deploy` is `{target, command, production}`. It goes to the devops member, through the lead's brief.
@@ -106,7 +106,7 @@ Run it in the foreground. The plugin doesn't save its report, so read its hand-b
 - the goal the owner chose in section 1, and your depth-pass answers;
 - the foundry dir. The architect doesn't write there: it hands `plan.json` and `plan.md` back as two fenced blocks in its report, and foundry's hook writes them to `<foundry dir>/plan.json` and `<foundry dir>/plan.md`;
 - the architecture doc's path, from `.claude/foundry.json`;
-- `agentCap` and `maxParallelCrews`, from `.claude/foundry.json` or the defaults;
+- `maxParallelCrews`, from `.claude/foundry.json` or the defaults;
 - the plan schema's absolute path, `<plugin>/docs/plan.schema.json`, where `<plugin>` is two levels above this skill's base directory (`<plugin>/skills/run`);
 - `repairBudget` from `.claude/foundry.json` (default 2). The architect drafts a v2 plan and copies the number into it;
 - when `promptOverrides` sets an `architect` file, the line "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold." Every later plan architect's brief carries it too.
@@ -118,8 +118,7 @@ Check the draft before anyone sees it. To send it back, start a fresh plan archi
 - `approval` is wrong: it must be `"owner"` when the plan has a wave-0 crew and `"auto"` when it has none. Only you check this, here at plan time; the hooks don't;
 - two crews own the same file. Work that must share files goes in one crew, or in two waves;
 - a crew has a done-check it can game: it should run code the crew doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
-- a crew can't run its done-check with its own access (`doneCheckProved` is false);
-- the total of `estAgents` is over `agentCap`. The architect re-plans with fewer, larger crews or more waves.
+- a crew can't run its done-check with its own access (`doneCheckProved` is false).
 
 The architect never writes check code; a done-check is a test command; a check that needs logic is a contract test written by a crew's Sonnet test-writer.
 
@@ -149,7 +148,7 @@ The plan gives each crew its slug, wave, verdict, modules, owned paths, done-che
 
 Show the owner the budget and the queue whatever the run's approval:
 
-- **Budget:** each crew's `estAgents`, the total, and `agentCap`.
+- **Budget:** each crew's `estAgents`, and the total.
 - **Queue:** the crews wave by wave, in the order of the `crews` array, which is the queue order within a wave, and `maxParallelCrews`.
 
 Under them, list the files no crew owns that more than one crew might want (shared config, lockfiles, generated code), and say who gets them. Log the plan in `decisions.md`.
@@ -254,9 +253,7 @@ Crews never edit the architecture doc or ADRs; a crew that needs a design change
 1. Add a design crew to `plan.json`: `verdict: "design"`, `status: "planned"`, its own slug, modules, owned paths (the doc, the new ADR, the contract tests), done-check and `estAgents`. It goes in the earliest wave whose crews it doesn't depend on, ahead of the crews that need it; a running crew isn't moved. A later-wave lead is refused while a running crew's wave is unmerged, so a new wave after the last would deadlock when a running crew needs the slice. Design mode can run in any wave. Put it first in its wave, so it heads the queue.
 2. Move one wave later only the crews that depend on the slice and haven't started. Running crews, and crews that don't depend on it, keep their wave.
 3. Leave the run-level `approval` and `approvedAt` as they are.
-4. If an owner trigger applies, set the crew's `ownerApproval` to `"pending"` and put the slice to the owner. Set it to `"approved"` when the owner answers yes. Otherwise leave `ownerApproval` out, and the slice starts like any crew.
-5. If the slice takes the plan's total `estAgents` over `agentCap`, log it and go on: the cap is a budget for the plan, not a limit on the run.
-6. Write its goal file and decide its members, high-impact paths, red team and resources as in sections 4 and 6. Tell the lead that proposed it, and the leads of the crews you moved, what you did.
+4. If an owner trigger applies, set the crew's `ownerApproval` to `"pending"` and put the slice to the owner. Set it to `"approved"` when the owner answers yes. Otherwise leave `ownerApproval` out, and the slice starts like any crew.6. Write its goal file and decide its members, high-impact paths, red team and resources as in sections 4 and 6. Tell the lead that proposed it, and the leads of the crews you moved, what you did.
 
 When a lead asks, never approve a permission, a push or a destructive step on the owner's behalf. Your own push at the end follows section 10.
 
@@ -335,9 +332,9 @@ When the plan has more than one wave, integrate wave by wave. Once a wave's crew
 
 Before anything leaves the machine, report:
 
-- the plan: each crew's wave, verdict and status, the budget against `agentCap`, the ADRs the run wrote, and whether the run started on `approval: "auto"` or the owner's approval;
+- the plan: each crew's wave, verdict and status, the `estAgents` total, the ADRs the run wrote, and whether the run started on `approval: "auto"` or the owner's approval;
 - for an auto-started run, the merge mode and target you used, and where each came from;
-- each mid-run design slice, and any that took the total over `agentCap`;
+- each mid-run design slice;
 - each crew's summary, and what merged where;
 - the checks and their results, and each judge's verdict;
 - the decisions you made (from the log), and every cynic overrule with its reason;

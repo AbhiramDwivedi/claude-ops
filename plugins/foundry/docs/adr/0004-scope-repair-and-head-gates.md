@@ -43,7 +43,7 @@ There's also a fact about run scope. In this repo's session dir `40816bb1`, `rep
 
 ### 2. `.claude/foundry.json` gains `repairBudget`
 
-`foundry-config.schema.json` gets the property `repairBudget`: `{"type": "integer", "minimum": 0}`, with the description `How many fresh judges a crew may start after judge FAILs in one run, copied into a v2 plan.json. Default 2.` The schema states defaults in descriptions, as it does for `agentCap`. The default is 2; it is written by the owner, or by `foundry:init` on approval, which proposes it with the 0.4.0 keys. A rejected value is reported and unset, as ADR-0002 rules for every key, so the architect falls back to 2.
+`foundry-config.schema.json` gets the property `repairBudget`: `{"type": "integer", "minimum": 0}`, with the description `How many fresh judges a crew may start after judge FAILs in one run, copied into a v2 plan.json. Default 2.` The schema states defaults in descriptions, as it did for `agentCap` (retired in 0.7.0, see ADR-0001). The default is 2; it is written by the owner, or by `foundry:init` on approval, which proposes it with the 0.4.0 keys. A rejected value is reported and unset, as ADR-0002 rules for every key, so the architect falls back to 2.
 
 ### 3. The literals
 

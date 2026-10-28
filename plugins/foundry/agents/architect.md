@@ -32,7 +32,7 @@ When the project's architecture doc has adopted principles, they win over the pa
 
 ## Read the config
 
-`.claude/foundry.json` in the repo root names the architecture doc (`architecture`) and the ADR directory (`adr`). It may also set `agentCap` (default 40), `maxParallelCrews` (default 4) and `repairBudget` (default 2). Use the default for any key that's missing.
+`.claude/foundry.json` in the repo root names the architecture doc (`architecture`) and the ADR directory (`adr`). It may also set `maxParallelCrews` (default 4) and `repairBudget` (default 2). Use the default for any key that's missing. An `agentCap` key from an older config is ignored.
 
 ## init mode
 
@@ -65,7 +65,7 @@ The architect never writes check code; a done-check is a test command; a check t
 
 In the draft:
 
-- `version` is 2, `architecture` is the doc's repo-relative path, and `agentCap` and `maxParallelCrews` come from `.claude/foundry.json` or the defaults. `repairBudget` is copied from the `repairBudget` key of `.claude/foundry.json`, or is 2 when the key is absent or was rejected. It is one number for the whole plan; crews get no budget of their own.
+- `version` is 2, `architecture` is the doc's repo-relative path, and `maxParallelCrews` comes from `.claude/foundry.json` or the defaults. `repairBudget` is copied from the `repairBudget` key of `.claude/foundry.json`, or is 2 when the key is absent or was rejected. It is one number for the whole plan; crews get no budget of their own.
 - `approval` is `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise. An `owner` draft sets `approvedAt` to `null`. An `auto` draft sets it to the time you write the plan, in RFC 3339 with an offset (for example `2026-10-26T14:05:00Z`), so your scratch file passes the schema. The hook writes the plan with `approvedAt: null` whatever you send; only the foreman sets it, when it logs the plan.
 - Every crew's `slug` is lowercase words of letters and digits joined by single hyphens, such as `auth` or `billing-api`, and never ends in `-<digits>`: `phase-1` and `api-2` are out. A successor lead is named `<slug>-<n>`, and the hooks gate a name of that shape as its base slug, so a slug ending in `-<digits>` reads as another crew's successor. As a pattern: `^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$`.
 - Every crew's `status` is `"planned"`. Leave `ownerApproval` out; it is for mid-run design slices, which the foreman adds.
@@ -77,7 +77,7 @@ In the draft:
 - `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`, when the repo has a setup script;
 - `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`, when it doesn't. A crew that needs a port then raises a `QUESTION:`; say so in `plan.md`.
 
-`plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total against `agentCap`.
+`plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total.
 
 After the hook writes them, the foreman owns both files: it sets `approvedAt` and each crew's `status`. The hook never overwrites a plan on disk whose `approvedAt` is set. In the reconcile round you hand back the whole revised pair again, the same way.
 
@@ -154,8 +154,7 @@ Split the goal once, on paper, along the module map, by the leaf test below. Nev
    - A large module can split across crews whose parts own disjoint files, when one crew couldn't hold the module's work.
    - When the parts are small enough for one lead to coordinate, keep one crew and let its members run in parallel. A second crew adds a lead, a judge, and a merge of the target with a possible re-judge before it lands.
    - Within a wave, the order of the `crews` array is the queue order. At most `maxParallelCrews` crews run at once; the rest start in that order as running ones merge.
-7. **Budget.** Give each crew an `estAgents` count, and show the total in `plan.md`. If the total is over `agentCap`, re-plan with fewer, larger crews or more waves before you report. Nobody sees a plan over the cap.
-
+7. **Budget.** Give each crew an `estAgents` count, and show the total in `plan.md`.
 ## Report
 
 Report to whoever started you, in the format for your mode. Other agents read it, so don't change it.
@@ -176,7 +175,7 @@ TODO: <each gap, or "none">
 ```
 PLAN: <foundry dir>/plan.json, <foundry dir>/plan.md
 Approval: auto | owner
-Crews: <n> in <waves> waves; agents <total>/<agentCap>
+Crews: <n> in <waves> waves; agents <total>
 Verdicts: <module>: extend | change (<one-line reason>), one per module
 Done-checks not proved: <slug: why>, or "none"
 Schema check: <how you checked, and the result>

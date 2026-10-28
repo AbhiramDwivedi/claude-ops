@@ -18,7 +18,7 @@
       "minLength": 1
     },
     "agentCap": {
-      "description": "The most agents a plan may estimate. Default 40.",
+      "description": "Deprecated and ignored since foundry 0.7.0. Still accepted so older configs validate.",
       "type": "integer",
       "minimum": 1
     },

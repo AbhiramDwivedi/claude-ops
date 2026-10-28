@@ -4,7 +4,6 @@
   "architecture": "docs/architecture.md",
   "approval": "owner",
   "approvedAt": null,
-  "agentCap": 40,
   "maxParallelCrews": 4,
   "repairBudget": 2,
   "crews": [

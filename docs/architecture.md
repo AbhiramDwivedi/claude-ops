@@ -81,7 +81,7 @@ Model calls here are Claude Code's own: every agent, skill and the headless cata
 - **P24. The model reads summaries, not raw transcripts.** (ai 12, adapted; ADR-0004) Transcript text reaches a prompt only through a script's redacted, size-bounded output.
   Test: no new skill or agent prompt tells the model to open `~/.claude/projects/**.jsonl`.
 - **P25. Tests need no network and no model.** (ai 10) Test: `claude plugin test` and the unittest suites pass offline, with no API key set.
-- **P26. Agent work has a budget enforced in code.** (ai 13, adapted) subagent-limits caps subagent context (`nudgeAtK`, `stopAtK`); foundry caps a plan's agents (`agentCap`) and parallel crews (`maxParallelCrews`); the catalog refresh caps spend (`BUDGET_USD`).
+- **P26. Agent work has a budget enforced in code.** (ai 13, adapted) subagent-limits caps subagent context (`nudgeAtK`, `stopAtK`); foundry caps parallel crews (`maxParallelCrews`; the `agentCap` total was retired in 0.7.0); the catalog refresh caps spend (`BUDGET_USD`).
   Test: a new feature that starts agents or headless runs is covered by one of these caps or adds its own, enforced by a hook or the script.
 
 Dropped: ai 1, 2 and 3 (evals with checked-in baselines and graders). There is no eval set; prompt changes are checked by the hook tests and by acceptance runs, as foundry's 0.3.0 commits show ("acceptance friction fixes"). This is a known gap, not a choice to keep. Ai 6 and 7 (tracing and one client wrapper): Claude Code makes every model call and writes the transcript, which workflow-audit reads. Ai 14 (latency budget with fallback): no plugin makes a model call it could time out; foundry's 15-minute stall wake (`STALL_MS`) is the nearest thing.
@@ -336,7 +336,7 @@ foundry's internals are in its [module doc](../plugins/foundry/docs/architecture
 
 | File | Written by | Read by |
 | --- | --- | --- |
-| `<repo>/.claude/foundry.json` | `foundry:init` via the architect (keys `architecture`, `adr`); the owner adds `agentCap`, `maxParallelCrews`, `merge`, `target` | the run skill and the architect. The hooks don't read it. |
+| `<repo>/.claude/foundry.json` | `foundry:init` via the architect (keys `architecture`, `adr`); the owner adds `maxParallelCrews`, `merge`, `target` | the run skill and the architect. The hooks don't read it. |
 | the architecture doc and ADR directory it names | the architect (`init` and `design` modes) | the architect, leads, judges, cynic |
 | `<git common dir>/foundry/<session id>/` | foreman (`decisions.md`, `plan.md`, `goals/`), architect (draft `plan.json`, `plan.md`, until 0.5.1; from 0.6.0 the hooks write them from its hand-back), hooks (`reports/`, `messages*.jsonl`) | foreman, hooks, `/foundry`; layout in the module doc, "On disk" (ADR-0006) |
 | `plan.json` | architect (0.5.1), or the hooks from the plan-mode architect's hand-back with `approvedAt: null` (0.6.0, ADR-0015 item 9); then the foreman | hooks (plan gates); contract `docs/plan.schema.json`, example `docs/plan.example.json`, rules in foundry ADR-0001 section 8 |

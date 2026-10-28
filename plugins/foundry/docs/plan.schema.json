@@ -10,7 +10,6 @@
     "architecture",
     "approval",
     "approvedAt",
-    "agentCap",
     "maxParallelCrews",
     "crews"
   ],
@@ -39,7 +38,7 @@
       "format": "date-time"
     },
     "agentCap": {
-      "description": "The most agents the plan may estimate in total; a plan over it is re-planned. The total is the sum of the crews' estAgents and isn't stored. Default 40, from agentCap in <repo>/.claude/foundry.json.",
+      "description": "Deprecated and ignored since foundry 0.7.0: nothing requires or enforces it. Still accepted so older plans validate. The total of the crews' estAgents isn't stored.",
       "type": "integer",
       "minimum": 1
     },

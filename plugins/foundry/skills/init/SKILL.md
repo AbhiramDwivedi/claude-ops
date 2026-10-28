@@ -17,7 +17,7 @@ The design is foundry's ADR-0002 (`<this skill's base dir>/../../docs/adr/0002-k
 2. Read `<repo>/.claude/foundry.json`.
 3. The doc is **present** when that file exists and the `architecture` key it holds names a file that exists, read as a path relative to `<repo>`.
 4. The doc is **missing** when there is no `<repo>/.claude/foundry.json`, or the file it names doesn't exist.
-5. If `foundry.json` exists but isn't valid JSON, or has no `architecture` key, tell the owner what's wrong with it and stop. The owner may have added keys to it by hand (`agentCap`, `maxParallelCrews`, `merge`, `target`, and from 0.4.0 the keys in step 6), so don't have it rewritten.
+5. If `foundry.json` exists but isn't valid JSON, or has no `architecture` key, tell the owner what's wrong with it and stop. The owner may have added keys to it by hand (`maxParallelCrews`, `merge`, `target`, and from 0.4.0 the keys in step 6), so don't have it rewritten.
 
 If the doc is present, tell the owner: "Architecture doc: `<path>`, ADRs in `<adr>`, from `.claude/foundry.json`." Then go to step 5.
 
@@ -114,4 +114,4 @@ Show the owner each proposed key with its value and where it came from, and ask 
 2. Tell the owner the files are not committed. Crews work in git worktrees, which see only committed files, so a foundry run needs these files committed before its crews start.
 3. Stop. Don't commit. When a foundry run called this skill, the run skill says what happens next; otherwise don't start a run.
 
-The owner can then edit the doc, or add the optional keys to `.claude/foundry.json` by hand. Each has a default: `agentCap` 40, `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch. A 0.4.0 key left out keeps 0.3.0 behaviour.
+The owner can then edit the doc, or add the optional keys to `.claude/foundry.json` by hand. Each has a default: `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch. A 0.4.0 key left out keeps 0.3.0 behaviour.

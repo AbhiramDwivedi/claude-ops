@@ -121,6 +121,8 @@ The architect splits the goal once, on paper, along the module map. Agents never
    - When a wave has more crews ready to run than `maxParallelCrews` allows (default 4, set in `.claude/foundry.json`), the extra crews queue within the wave and start as running ones merge.
    - The plan shows the queue order.
 7. **Budget.** The plan gives an estimated agent count per crew and a total. A plan over the cap (default 40 agents, set in `.claude/foundry.json` as `agentCap`) is re-planned with fewer, larger crews or more waves before anyone sees it.
+
+   *Note, 2026-10-28:* the cap is retired in foundry 0.7.0. It had no real basis, `maxParallelCrews` already limits load, and in run 4 it was raised twice and never caught the one overrun (an unbounded red-team loop). The plan still gives `estAgents` per crew and a total, as information for the foreman. `agentCap` is deprecated and ignored; the schemas still accept it. The `agentCap` lines in the plan examples in sections 1 and 8 are history.
 8. **Leads split members by the same leaf test** and never re-split the design. Work that doesn't fit goes to the foreman as `PROPOSAL:`.
 
 ### 6. Approval only when the design changes

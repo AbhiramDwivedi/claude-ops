@@ -175,7 +175,7 @@ class RetroEdges(unittest.TestCase):
                                 '{"wave":1,"estAgents":3},{"estAgents":true},{"estAgents":1.5}]}')
         plan = self.run_raw()["plan"]
         self.assertEqual(plan["estAgents"], 3)
-        self.assertIsNone(plan["agentCap"])
+        self.assertEqual(plan["agentCap"], "not recorded")
         self.assertEqual(plan["crews"], 4)
 
     def test_plan_huge_ints_do_not_crash(self):
@@ -183,7 +183,11 @@ class RetroEdges(unittest.TestCase):
         self.write("plan.json", '{"agentCap": %s, "crews":[{"estAgents":%s},{"estAgents":%s},{"estAgents":2}]}' % (n, n, n))
         plan = self.run_raw()["plan"]
         self.assertEqual(plan["estAgents"], 2)
-        self.assertIsNone(plan["agentCap"])
+        self.assertEqual(plan["agentCap"], "not recorded")
+
+    def test_plan_without_agent_cap_says_not_recorded(self):
+        self.write("plan.json", '{"crews":[{"wave":1,"estAgents":2}]}')
+        self.assertEqual(self.run_raw()["plan"]["agentCap"], "not recorded")
 
     def test_plan_valid_agent_cap_is_copied(self):
         self.write("plan.json", '{"agentCap": 12, "crews":[]}')

@@ -389,7 +389,7 @@ def read_plan(directory):
         key = st if isinstance(st, str) and st else "unset"
         status[key] = status.get(key, 0) + 1
     return {"crews": len(crews), "waves": len(waves), "estAgents": est,
-            "agentCap": plan.get("agentCap") if good_int(plan.get("agentCap")) else None, "status": status}
+            "agentCap": plan.get("agentCap") if good_int(plan.get("agentCap")) else "not recorded", "status": status}
 
 
 GIT_TIMEOUT = 30
