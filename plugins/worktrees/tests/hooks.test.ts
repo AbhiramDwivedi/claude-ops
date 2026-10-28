@@ -289,6 +289,8 @@ function sessionRepo(on: On, answer: (args: string) => { stdout?: string; exitCo
     return { value: undefined }
   })
   on('fs.exists', async (_, e) => ({ value: files.has(key(e.path)) }))
+  // ADR-0015 amendment 2026-10-28 (a): every sweep lists the session's subagents dir; this world has no other agent metas
+  on('fs.list', async () => ({ value: [] }))
   on('fs.read', async (_, e) => ({ value: files.get(key(e.path)) ?? '' }))
   on('fs.write', async (_, e) => {
     files.set(key(e.path), e.text)
@@ -315,7 +317,7 @@ function sessionRepo(on: On, answer: (args: string) => { stdout?: string; exitCo
   return { ran, toasts, files, clock }
 }
 
-const bash = (command: string, tool_name = 'Bash') => ({ tool_name, tool_input: { command }, tool_response: '', tool_use_id: 't1', cwd: 'C:/r' }) as never
+const bash = (command: string, tool_name = 'Bash') => ({ tool_name, tool_input: { command }, tool_response: '', tool_use_id: 't1', cwd: 'C:/r', transcript_path: 'C:/t/s.jsonl' }) as never
 
 test('sweeps nothing on a command without merge, or another tool', async ($, on) => {
   const { ran, clock, files } = sessionRepo(on)
@@ -345,7 +347,8 @@ test("removes the session's own merged agent worktree and branch after a merge, 
   // its agent stopped: SubagentStop's cleanup marked it done
   files.set(STATE, JSON.stringify({ slots: {}, active: zzActive }))
   ran.length = 0
-  await $.classic.PostToolUse(bash('gh pr merge 12 --squash', 'PowerShell'))
+  // ADR-0015 amendment 2026-10-28 (c): only a real git merge sweeps, so this is a git merge from PowerShell
+  await $.classic.PostToolUse(bash('git merge --ff-only worktree-agent-x1', 'PowerShell'))
   await clock.settle()
   expect(ran).toContain(`git -c core.longpaths=true worktree remove ${X1}`)
   expect(ran).toContain('git branch -d worktree-agent-x1')

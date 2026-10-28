@@ -516,7 +516,9 @@ const OWN: SelfCleanFacts = {
   isSession: false,
   active: false,
   dirty: false,
-  merged: true,
+  inMain: 'ancestor',
+  membersRunning: false,
+  mainBranch: 'main',
 }
 
 test("removes this session's agent worktree once it is done, clean and merged into HEAD", async () => {
@@ -535,7 +537,7 @@ test('skips a worktree for each condition it fails, forgetting only those that c
   expect(skip({ locked: 'in use' })).toEqual(['locked (in use)', false])
   expect(skip({ active: true })).toEqual(['its agent has not stopped yet', false])
   expect(skip({ dirty: true })).toEqual(['uncommitted changes', false])
-  expect(skip({ merged: false })).toEqual(["worktree-agent-a1 is not merged into the session's HEAD", false])
+  expect(skip({ inMain: undefined })).toEqual(["worktree-agent-a1 is not in the main checkout's HEAD yet", false])
 })
 
 const SEVEN = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer']
@@ -613,15 +615,16 @@ test('a manifest declaring general-purpose still gives unset, empty and cased ge
 // --- worktrees-cleanup: pure helpers ---
 
 test('decideSelfClean: deleteFlag is -D only for a tree or cherry merge', async () => {
-  const flag = (mergedBy?: 'ancestor' | 'tree' | 'cherry') => {
-    const plan = decideSelfClean({ ...OWN, mergedBy })
+  const flag = (inMain?: 'ancestor' | 'tree' | 'cherry') => {
+    const plan = decideSelfClean({ ...OWN, inMain })
     return plan.kind === 'remove' ? plan.deleteFlag : plan.kind
   }
   expect(flag('ancestor')).toBe('-d')
-  expect(flag(undefined)).toBe('-d')
+  // ADR-0015 amendment 2026-10-28 (d): not in main's HEAD is a skip, never a delete
+  expect(flag(undefined)).toBe('skip')
   expect(flag('tree')).toBe('-D')
   expect(flag('cherry')).toBe('-D')
-  expect(decideSelfClean({ ...OWN, mergedBy: 'tree' })).toEqual({ kind: 'remove', path: OWN.path, branch: 'worktree-agent-a1', deleteFlag: '-D' })
+  expect(decideSelfClean({ ...OWN, inMain: 'tree' })).toEqual({ kind: 'remove', path: OWN.path, branch: 'worktree-agent-a1', deleteFlag: '-D' })
 })
 
 test('decideSelfClean: check order is session, registered, branch, active, locked, dirty, merged', async () => {
@@ -632,9 +635,9 @@ test('decideSelfClean: check order is session, registered, branch, active, locke
   // active now beats locked and dirty, so a locked or dirty skip means the agent is not live
   expect(reason({ active: true, locked: 'in use' })).toBe('its agent has not stopped yet')
   expect(reason({ active: true, dirty: true })).toBe('its agent has not stopped yet')
-  expect(reason({ active: true, locked: 'in use', dirty: true, merged: false })).toBe('its agent has not stopped yet')
-  expect(reason({ locked: 'in use', dirty: true, merged: false })).toBe('locked (in use)')
-  expect(reason({ dirty: true, merged: false })).toBe('uncommitted changes')
+  expect(reason({ active: true, locked: 'in use', dirty: true, inMain: undefined })).toBe('its agent has not stopped yet')
+  expect(reason({ locked: 'in use', dirty: true, inMain: undefined })).toBe('locked (in use)')
+  expect(reason({ dirty: true, inMain: undefined })).toBe('uncommitted changes')
   // earlier checks still beat active
   expect(reason({ isSession: true, active: true })).toBe('the session works in it')
   expect(reason({ registered: false, active: true })).toBe('no longer a registered worktree')

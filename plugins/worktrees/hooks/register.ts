@@ -385,6 +385,150 @@ export function metaFinished(text: string | undefined): boolean {
   }
 }
 
+// Whether `agent-<id>` has a member (a direct child, by `parentAgentId`) still running, from the other metas of the
+// session's subagents dir (ADR-0015 amendment 2026-10-28, a). `metas` is undefined when the dir could not be listed.
+// Any signal that can't be read counts as a running member: the sweep keeps the candidate.
+export function membersRunning(id: string, metas: readonly { name: string; text: string | undefined }[] | undefined): boolean {
+  if (metas === undefined) return true
+  const own = `agent-${id}.meta.json`
+  for (const m of metas) {
+    if (m.name === own) continue
+    let raw: unknown
+    try {
+      raw = JSON.parse(m.text ?? '')
+    } catch {
+      return true
+    }
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return true
+    const meta = raw as { parentAgentId?: unknown; finished?: unknown }
+    if (meta.parentAgentId === id && meta.finished !== true) return true
+  }
+  return false
+}
+
+// Drops heredoc bodies (`<<WORD`, `<<-WORD`, quoted or not) and PowerShell here-strings (`@'` ... `'@`); an
+// unterminated body removes the rest of the command.
+function withoutBodies(command: string): string {
+  const lines = command.split('\n')
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const ps = /@['"][ \t\r]*$/.exec(line)
+    if (ps) {
+      out.push(line.slice(0, ps.index))
+      let j = i + 1
+      while (j < lines.length && !/^['"]@/.test(lines[j])) j++
+      if (j >= lines.length) break
+      const rest = lines[j].slice(2)
+      if (rest.trim() !== '') out.push(rest)
+      i = j
+      continue
+    }
+    out.push(line)
+    const ends: { word: string; dash: boolean }[] = []
+    for (const m of line.matchAll(/(?<!<)<<(?!<)(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|([A-Za-z_]\w*))/g)) ends.push({ word: m[2] ?? m[3] ?? m[4], dash: m[1] === '-' })
+    let stop = false
+    for (const end of ends) {
+      let j = i + 1
+      while (j < lines.length && (end.dash ? lines[j].replace(/\r$/, '').replace(/^\t+/, '') : lines[j].replace(/\r$/, '')) !== end.word) j++
+      if (j >= lines.length) {
+        stop = true
+        break
+      }
+      i = j
+    }
+    if (stop) break
+  }
+  return out.join('\n')
+}
+
+// Whether the command runs `git merge` (ADR-0015 amendment 2026-10-28, c): some command of it, not text inside a
+// quote or a heredoc, starts with git (any path form), then global options, then exactly `merge`.
+export function isGitMerge(command: string): boolean {
+  const text = withoutBodies(command)
+  type Frame = { kind: 'top' | 'sub' | 'bt'; words: string[]; word: string; has: boolean; q: '' | "'" | '"'; depth: number }
+  const frame = (kind: Frame['kind']): Frame => ({ kind, words: [], word: '', has: false, q: '', depth: 0 })
+  const stack: Frame[] = [frame('top')]
+  const cmds: string[][] = []
+  const flush = (f: Frame) => {
+    if (f.has) f.words.push(f.word)
+    f.word = ''
+    f.has = false
+  }
+  const end = (f: Frame) => {
+    flush(f)
+    if (f.words.length > 0) cmds.push(f.words)
+    f.words = []
+  }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    const f = stack[stack.length - 1]
+    const next = text[i + 1]
+    if (f.q === "'") {
+      if (c === "'") f.q = ''
+      else f.word += c
+      continue
+    }
+    if (f.q === '"') {
+      if (c === '"') f.q = ''
+      else if (c === '\\') {
+        if (next !== undefined && '\\"$`'.includes(next)) {
+          f.word += next
+          i++
+        } else f.word += c
+      } else if (c === '$' && next === '(') {
+        stack.push(frame('sub'))
+        i++
+      } else if (c === '`') stack.push(frame('bt'))
+      else f.word += c
+      continue
+    }
+    if (c === "'" || c === '"') {
+      f.q = c
+      f.has = true
+    } else if (c === '\\') {
+      if (next !== undefined) {
+        f.word += next
+        f.has = true
+        i++
+      }
+    } else if (c === '$' && next === '(') {
+      end(f)
+      f.depth++
+      i++
+    } else if (c === '(') {
+      end(f)
+      f.depth++
+    } else if (c === ')') {
+      end(f)
+      if (f.depth > 0) f.depth--
+      else if (f.kind === 'sub') stack.pop()
+    } else if (c === '`') {
+      end(f)
+      if (f.kind === 'bt') stack.pop()
+    } else if (c === '\n' || c === ';' || c === '|' || c === '&') end(f)
+    else if (c === ' ' || c === '\t' || c === '\r') flush(f)
+    else {
+      f.word += c
+      f.has = true
+    }
+  }
+  if (stack.length !== 1 || stack[0].q !== '') return false
+  end(stack[0])
+  return cmds.some(words => {
+    let k = 0
+    while (k < words.length && /^[A-Za-z_]\w*=/.test(words[k])) k++
+    const exe = words[k]
+    if (exe === undefined || !(exe === 'git' || exe === 'git.exe' || /[\\/]git(\.exe)?$/.test(exe))) return false
+    for (k++; k < words.length; k++) {
+      const w = words[k]
+      if (!w.startsWith('-')) return w === 'merge'
+      if (['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env'].includes(w)) k++
+    }
+    return false
+  })
+}
+
 // `git cherry` output where every commit of the branch has an equivalent upstream (every line starts `- `).
 export function cherryMerged(r: { exitCode: number; stdout: string }): boolean {
   if (r.exitCode !== 0) return false
@@ -575,10 +719,13 @@ export type SelfCleanFacts = {
   active: boolean
   // `git status --porcelain` printed something, or failed
   dirty: boolean
-  // its branch is in the session checkout's HEAD: an ancestor, or merging it gives HEAD's own tree
-  merged: boolean
-  // how it was found merged
-  mergedBy?: 'ancestor' | 'tree' | 'cherry'
+  // how its branch is in the main checkout's HEAD (the one ref, ADR-0015 amendment 2026-10-28): an ancestor, the same
+  // tree, or patch-equivalent; undefined when it is not
+  inMain?: 'ancestor' | 'tree' | 'cherry'
+  // another agent's meta in the session says this agent has a member still running
+  membersRunning: boolean
+  // the main checkout's own branch
+  mainBranch?: string
 }
 
 // `forget`: the path drops out of the session's tracking, as it can never qualify again
@@ -592,8 +739,12 @@ export function decideSelfClean(f: SelfCleanFacts): SelfCleanPlan {
   if (f.active) return skip('its agent has not stopped yet')
   if (f.locked !== undefined) return skip(`locked (${f.locked})`)
   if (f.dirty) return skip('uncommitted changes')
-  if (!f.merged) return skip(`${f.branch} is not merged into the session's HEAD`)
-  return { kind: 'remove', path: f.path, branch: f.branch, deleteFlag: f.mergedBy === 'tree' || f.mergedBy === 'cherry' ? '-D' : '-d' }
+  if (f.membersRunning) return skip('a member of it is still running')
+  if (f.inMain === undefined) return skip(`${f.branch} is not in the main checkout's HEAD yet`)
+  if (f.inMain === 'ancestor') return { kind: 'remove', path: f.path, branch: f.branch, deleteFlag: '-d' }
+  // tree and cherry proofs earn -D, but not while the main checkout sits on a crew branch
+  if (f.mainBranch?.startsWith('worktree-')) return skip(`${f.branch} is not in the main checkout's HEAD yet`)
+  return { kind: 'remove', path: f.path, branch: f.branch, deleteFlag: '-D' }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -901,8 +1052,8 @@ const isPlainObject = (v: unknown) => typeof v === 'object' && v !== null && !Ar
 // not parse, is empty, is not an object, or holds `active` or `slots` as anything but a plain object is undefined.
 async function loadState($: $, repo: Repo): Promise<State | undefined> {
   if (!(await $.fs.exists(stateFile(repo)))) return parseState(undefined)
-  const text = (await $.fs.read(stateFile(repo))) as string
   try {
+    const text = (await $.fs.read(stateFile(repo))) as string
     const raw = JSON.parse(text) as Record<string, unknown> | null
     if (!isPlainObject(raw)) return undefined
     const top = raw as Record<string, unknown>
@@ -1085,7 +1236,7 @@ type SweepEvent = { cwd?: string; transcriptPath?: string }
 
 // Removes the agent worktrees (`<main checkout>/.claude/worktrees/agent-<id>`, from `git worktree list`, so native
 // and auto-isolated ones count and a restart loses nothing) whose agent is done, that are clean, and whose branch is
-// merged into the HEAD of the merge checkout or of the main checkout (repo ADR-0015); then their branch. A dirty or
+// in the main checkout's HEAD (repo ADR-0015, amendment 2026-10-28) and that have no member still running; then their branch. A dirty or
 // locked one is kept and reported. One write of slots.json retires finished, gone and stale `active` entries.
 // `tracked` is only a hint: removed paths drop out of it. Answers what it removed and what it kept, for the toasts.
 async function selfClean($: $, tracked: Map<string, string>, base: number, ev: SweepEvent, warn?: Warn): Promise<{ removed: string[]; kept: string[] }> {
@@ -1094,37 +1245,52 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   if (found === undefined) return { removed: [], kept: [] }
   const repo: Repo = { top: found.main, common: found.common, mainRoot: found.main }
   const log = (line: string) => $.ui.log(`worktrees: ${line}`, { to: 'debug' })
-  // the refs: the checkout the merge ran in (when it is in a work tree), then the main checkout; each ref is that
-  // checkout's HEAD, and every git command for it runs there
-  const refs: string[] = []
+  // the checkouts a sweep never removes: the one the merge ran in (when it is in a work tree) and the main checkout.
+  // Only the main checkout's HEAD is a merged-into ref (ADR-0015 amendment 2026-10-28, b): an agent worktree is never one.
+  const skipRoots: string[] = []
   if (typeof ev.cwd === 'string' && ev.cwd !== '') {
     const top = await git($, ev.cwd, 'rev-parse', '--show-toplevel')
-    if (top.ok && top.out !== '') refs.push(top.out)
+    if (top.ok && top.out !== '') skipRoots.push(top.out)
   }
-  if (!refs.some(r => normPath(r, windows) === normPath(found.main, windows))) refs.push(found.main)
-  const isRef = (path: string) => refs.some(r => normPath(r, windows) === normPath(path, windows))
-  const trees = new Map<string, string>()
-  const treeOf = async (ref: string) => {
-    if (!trees.has(ref)) {
-      const t = await git($, ref, 'rev-parse', 'HEAD^{tree}')
-      trees.set(ref, t.ok ? t.out : '')
+  if (!skipRoots.some(r => normPath(r, windows) === normPath(found.main, windows))) skipRoots.push(found.main)
+  const isRef = (path: string) => skipRoots.some(r => normPath(r, windows) === normPath(path, windows))
+  let mainTree: string | undefined
+  // how the branch is in the main checkout's HEAD: an ancestor, the same tree, then (when allowed) patch-equivalent
+  const inMainBy = async (branch: string, cherry: boolean): Promise<'ancestor' | 'tree' | 'cherry' | undefined> => {
+    if ((await git($, found.main, 'merge-base', '--is-ancestor', branch, 'HEAD')).ok) return 'ancestor'
+    if (mainTree === undefined) {
+      const t = await git($, found.main, 'rev-parse', 'HEAD^{tree}')
+      mainTree = t.ok ? t.out : ''
     }
-    return trees.get(ref) as string
-  }
-  // how the branch counts as merged: an ancestor, the same tree, then (when allowed) patch-equivalent
-  const mergedBy = async (branch: string, cherry: boolean): Promise<'ancestor' | 'tree' | 'cherry' | undefined> => {
-    for (const ref of refs) if ((await git($, ref, 'merge-base', '--is-ancestor', branch, 'HEAD')).ok) return 'ancestor'
-    for (const ref of refs) {
-      const tree = await treeOf(ref)
-      if (tree !== '' && (await mergesToSameTree($, ref, 'HEAD', tree, branch)) === true) return 'tree'
-    }
+    if (mainTree !== '' && (await mergesToSameTree($, found.main, 'HEAD', mainTree, branch)) === true) return 'tree'
     if (cherry) {
-      for (const ref of refs) {
-        const r = await run($, ['git', 'cherry', 'HEAD', branch], ref, 60_000)
-        if (cherryMerged({ exitCode: r.exitCode, stdout: r.stdout })) return 'cherry'
-      }
+      const r = await run($, ['git', 'cherry', 'HEAD', branch], found.main, 60_000)
+      if (cherryMerged({ exitCode: r.exitCode, stdout: r.stdout })) return 'cherry'
     }
     return undefined
+  }
+  let mainBranch: string | undefined
+  let mainBranchRead = false
+  // the other metas of the session's subagents dir; undefined when it can't be listed (every candidate is then kept)
+  let metas: { name: string; text: string | undefined }[] | undefined
+  if (typeof ev.transcriptPath === 'string' && ev.transcriptPath !== '') {
+    const dir = metaPathFor(ev.transcriptPath, 'x').replace(/\/[^/]*$/, '')
+    try {
+      const entries = (await $.fs.list(dir)) as { name: string }[]
+      metas = []
+      for (const entry of entries) {
+        if (!entry.name.endsWith('.meta.json')) continue
+        let text: string | undefined
+        try {
+          text = (await $.fs.read(`${dir}/${entry.name}`)) as string
+        } catch {
+          text = undefined
+        }
+        metas.push({ name: entry.name, text })
+      }
+    } catch {
+      metas = undefined
+    }
   }
 
   const worktrees = parseWorktrees((await git($, found.main, 'worktree', 'list', '--porcelain')).out)
@@ -1160,9 +1326,14 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
       const status = await git($, wt.path, 'status', '--porcelain')
       dirty = !status.ok || status.out !== ''
     }
-    // a dirty or locked worktree is reported only when its branch is merged: unmerged work is not a leak
-    const by = await mergedBy(branch, wt.locked === undefined && !dirty)
-    if (by === undefined) continue
+    // a lead with a member still running is live, whatever its own meta says (ADR-0015 amendment 2026-10-28, a)
+    const members = membersRunning(id, metas)
+    const inMain = members ? undefined : await inMainBy(branch, wt.locked === undefined && !dirty)
+    if (!mainBranchRead) {
+      mainBranchRead = true
+      const b = await git($, found.main, 'branch', '--show-current')
+      mainBranch = b.ok && b.out !== '' ? b.out : undefined
+    }
     const plan = decideSelfClean({
       path: wt.path,
       registered: true,
@@ -1171,12 +1342,14 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
       isSession: false,
       active: false,
       dirty,
-      merged: true,
-      mergedBy: by,
+      inMain,
+      membersRunning: members,
+      mainBranch,
     })
     if (plan.kind === 'skip') {
       await log(`self-clean kept ${wt.path}: ${plan.reason}`)
-      kept.push(`${wt.path} (${plan.reason})`)
+      // a dirty or locked worktree is reported to the owner only when its branch is in main: unmerged work is not a leak
+      if (inMain !== undefined) kept.push(`${wt.path} (${plan.reason})`)
       continue
     }
     const notes = await cleanWorktree($, repo, wt.path, base, true, warn)
@@ -1725,7 +1898,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if ((e.tool_name !== 'Bash' && e.tool_name !== 'PowerShell')) return result
     const command = (e.tool_input as { command?: unknown } | null)?.command
-    if (typeof command !== 'string' || !/\bmerge\b/.test(command)) return result
+    if (typeof command !== 'string' || !isGitMerge(command)) return result
     const ev = e as unknown as { cwd?: string; transcript_path?: string }
     $.clock.after(0, () => void sweep($, own, base, { cwd: ev.cwd, transcriptPath: ev.transcript_path }))
     return result
