@@ -878,6 +878,17 @@ async function commitLeftovers($: $, wt: AgentWorktree, dirty: DirtyWorktree, ag
 const stateFile = (repo: Repo) => `${repo.common}/claude-worktrees/slots.json`
 const lockDir = (repo: Repo) => `${repo.common}/claude-worktrees/slots.lock`
 
+// slots.json exists but its text is not a JSON object: the sweep must not read that as "nothing is live"
+async function stateUnreadable($: $, repo: Repo): Promise<boolean> {
+  if (!(await $.fs.exists(stateFile(repo)))) return false
+  try {
+    const raw = JSON.parse((await $.fs.read(stateFile(repo))) as string) as unknown
+    return typeof raw !== 'object' || raw === null || Array.isArray(raw)
+  } catch {
+    return true
+  }
+}
+
 async function readState($: $, repo: Repo): Promise<State> {
   return parseState((await $.fs.exists(stateFile(repo))) ? ((await $.fs.read(stateFile(repo))) as string) : undefined)
 }
@@ -899,7 +910,8 @@ async function dropLock($: $, repo: Repo, windows: boolean): Promise<void> {
 // State writes run one at a time: in this process by a promise chain, across sessions by the lock directory,
 // with slots.json read again under the lock, so parallel agents never draw the same slot.
 let stateChain: Promise<unknown> = Promise.resolve()
-function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>): Promise<T> {
+// `keepUnreadable`: a slots.json that does not parse is left alone and fn does not run (answers undefined).
+function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>, keepUnreadable = false): Promise<T> {
   const step = stateChain.then(async () => {
     const windows = await isWindows($)
     for (let tries = 0; !(await takeLock($, repo, windows)); tries++) {
@@ -909,6 +921,7 @@ function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: S
       else await $.clock.sleep(100)
     }
     try {
+      if (keepUnreadable && (await stateUnreadable($, repo))) return undefined as T
       const { state, value } = await fn(await readState($, repo))
       await $.fs.write(stateFile(repo), serializeState(state))
       return value
@@ -1045,6 +1058,10 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   if (found === undefined) return { removed: [], kept: [] }
   const repo: Repo = { top: found.main, common: found.common, mainRoot: found.main }
   const log = (line: string) => $.ui.log(`worktrees: ${line}`, { to: 'debug' })
+  if (await stateUnreadable($, repo)) {
+    await log('self-clean skipped: slots.json unreadable')
+    return { removed: [], kept: [] }
+  }
   // the refs: the checkout the merge ran in (when it is in a work tree), then the main checkout; each ref is that
   // checkout's HEAD, and every git command for it runs there
   const refs: string[] = []
@@ -1147,7 +1164,7 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   for (const [key, v] of Object.entries(state.active)) {
     if (!registered.has(key) && !(await $.fs.exists(v.path))) gone.push(v.path)
   }
-  await withState($, repo, async s => ({ state: sweepActive(s, { now, finished: finishedPaths, gone }, windows), value: undefined }))
+  await withState($, repo, async s => ({ state: sweepActive(s, { now, finished: finishedPaths, gone }, windows), value: undefined }), true)
   return { removed, kept }
 }
 
@@ -1500,10 +1517,19 @@ export const register: Register = (on, options) => {
   // copied, and the repo's setup script runs with a slot of ports.
   on('classic.WorktreeCreate', async ($, e, next) => {
     const windows = await isWindows($)
-    const repo = await repoAt($, e.cwd)
+    // ADR-0015 section 4: the checkout the hook runs in, else the project repo (cwd may be inside the git dir)
+    let repo = await repoAt($, e.cwd)
+    if (repo === undefined) {
+      const found = await projectRepo($, e.cwd)
+      if (found !== undefined) repo = { top: found.main, common: found.common, mainRoot: found.main }
+    }
     if (repo === undefined || !/^[A-Za-z0-9._-]+$/.test(e.name)) return next(e)
     const path = `${repo.mainRoot}/.claude/worktrees/${e.name}`
     const branch = `worktree-${e.name}`
+    // recorded before anything is created, so a sweep while git and the file copies run sees the agent as live
+    const now = await $.clock.now()
+    await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }))
+    tracked.set(normPath(path, windows), path)
     const head = await git($, e.cwd, 'rev-parse', '--verify', '--quiet', 'HEAD')
     const plan = planCreate({
       pathExists: await $.fs.exists(path),
@@ -1519,14 +1545,13 @@ export const register: Register = (on, options) => {
       if (!added.ok) {
         await $.ui.toast(`worktrees: git worktree add failed; using the default worktree`)
         await $.ui.log(`worktrees: git worktree add ${path}: ${added.err}`, { to: 'debug' })
+        await withState($, repo, async state => ({ state: markDone(state, path, windows), value: undefined }))
+        tracked.delete(normPath(path, windows))
         return next(e)
       }
       const copied = await copyIncluded($, repo, path, windows)
       if (copied !== '') await $.ui.log(`worktrees: ${copied}`, { to: 'debug' })
     }
-    const now = await $.clock.now()
-    await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }))
-    tracked.set(normPath(path, windows), path)
     const script = `${repo.top}/.claude/worktree-setup.${windows ? 'ps1' : 'sh'}`
     if (!(await $.fs.exists(script))) return { worktreePath: path }
 
