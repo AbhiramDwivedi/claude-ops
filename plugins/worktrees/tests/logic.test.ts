@@ -29,6 +29,7 @@ import {
   parseSlots,
   parseWindowsSnapshot,
   parseWorktrees,
+  REFUSED_READ_ONLY_TYPES,
   portRange,
   childDirs,
   ignoredDirs,
@@ -509,4 +510,76 @@ test('skips a worktree for each condition it fails, forgetting only those that c
   expect(skip({ active: true })).toEqual(['its agent has not stopped yet', false])
   expect(skip({ dirty: true })).toEqual(['uncommitted changes', false])
   expect(skip({ merged: false })).toEqual(["worktree-agent-a1 is not merged into the session's HEAD", false])
+})
+
+const SEVEN = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer']
+const ro = (...names: string[]) => names.map((name) => ({ name, readOnly: true, declaredBy: 'kit' }))
+
+test('REFUSED_READ_ONLY_TYPES is the ADR list, in order, lower-case', async () => {
+  expect([...REFUSED_READ_ONLY_TYPES]).toEqual(SEVEN)
+})
+
+test('refused is [] when nothing is refused, and when the manifest is broken', async () => {
+  const none = declaredReadOnly(kitManifest(ro('foundry:judge')))
+  expect(none.error).toBeUndefined()
+  expect(none.refused).toEqual([])
+  const broken = declaredReadOnly('{not json')
+  expect(typeof broken.error).toBe('string')
+  expect(broken.refused).toEqual([])
+  // fails the schema: error is set, so refused stays empty even though a refused name is present
+  const schema = declaredReadOnly(kitManifest(ro('general-purpose'), 2))
+  expect(typeof schema.error).toBe('string')
+  expect(schema.refused).toEqual([])
+  expect(schema.types.size).toBe(0)
+})
+
+test('each refused name at readOnly: true is left out of types and listed in refused, in file order', async () => {
+  for (const name of SEVEN) {
+    const r = declaredReadOnly(kitManifest(ro(name)))
+    expect(r.types.has(name)).toBe(false)
+    expect(r.refused).toEqual([name])
+  }
+  const all = declaredReadOnly(kitManifest(ro(...[...SEVEN].reverse())))
+  expect(all.types.size).toBe(0)
+  expect(all.refused).toEqual([...SEVEN].reverse())
+})
+
+test('refusal folds case, and refused keeps the spelling written in the file', async () => {
+  const r = declaredReadOnly(kitManifest(ro('General-Purpose', 'Foundry:Lead', 'KIT:BUILDER')))
+  expect(r.types.size).toBe(0)
+  expect(r.refused).toEqual(['General-Purpose', 'Foundry:Lead', 'KIT:BUILDER'])
+})
+
+test('lookalike names stay read-only and are not refused', async () => {
+  const names = ['plugin:general-purpose', 'lead', 'builder', 'foundry:judge', 'kit:reviewer']
+  const r = declaredReadOnly(kitManifest(ro(...names)))
+  expect([...r.types].sort()).toEqual([...names].sort())
+  expect(r.refused).toEqual([])
+})
+
+test('a refused name at readOnly: false is in neither list', async () => {
+  const r = declaredReadOnly(
+    kitManifest([
+      { name: 'kit:builder', readOnly: false, declaredBy: 'kit' },
+      { name: 'Foundry:Lead', readOnly: false, declaredBy: 'kit' },
+    ]),
+  )
+  expect(r.types.size).toBe(0)
+  expect(r.refused).toEqual([])
+})
+
+test('a mixed manifest keeps foundry:judge read-only beside the refused entries', async () => {
+  const r = declaredReadOnly(kitManifest(ro('kit:builder', 'foundry:judge', 'Foundry:Lead', 'helper', 'general-purpose')))
+  expect([...r.types].sort()).toEqual(['foundry:judge', 'helper'])
+  expect(r.refused).toEqual(['kit:builder', 'Foundry:Lead', 'general-purpose'])
+})
+
+test('a manifest declaring general-purpose still gives unset, empty and cased general-purpose calls a worktree', async () => {
+  const { types } = declaredReadOnly(kitManifest(ro('general-purpose', 'foundry:judge')))
+  const set = new Set([...RO, ...types])
+  expect(needsWorktree({}, true, set)).toBe(true)
+  expect(needsWorktree({ subagent_type: '' }, true, set)).toBe(true)
+  expect(needsWorktree({ subagent_type: 'general-purpose' }, true, set)).toBe(true)
+  expect(needsWorktree({ subagent_type: 'General-Purpose' }, true, set)).toBe(true)
+  expect(needsWorktree({ subagent_type: 'foundry:judge' }, true, set)).toBe(false)
 })
