@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect } from 'claude-code/testing'
 
-import { handBack, startSession, test, world } from './harness'
+import { handBack, slashed, startSession, test, world } from './harness'
 
 // ADR-0015 item 9: the plan-file route, the cases contract-roles.test.ts does not cover. Written from the ADR alone;
 // the helpers are copied, not imported.
@@ -183,15 +183,25 @@ test('a goal containing ../ still writes only the two fixed paths', async ($, on
 // the architect's agent.spawn fires and its SubagentHandback arrives BEFORE the Agent call's next() returns. The spawn
 // belongs to its Agent call by tool_use_id. The mock beneath foundry holds the Agent call open until the test releases
 // it (a hook module may not call $.agent.spawn itself, so the test drives the spawn and the hand-back meanwhile).
-type Held = { w: W; release: () => void; started: Promise<void>; denyHandBacks: { on: boolean; isError: boolean; agentThrows: boolean } }
+type Held = { w: W; release: () => void; started: Promise<void>; afterRead: { fn?: (path: string) => Promise<void> }; denyHandBacks: { on: boolean; isError: boolean; agentThrows: boolean } }
 const setupHeld = async ($: Engine, on: On): Promise<Held> => {
-  const wrapped = ((name: string, handler: unknown) => (name === 'session.id' || name === 'tool.call' ? undefined : (on as (n: string, h: unknown) => unknown)(name, handler))) as unknown as On
+  const wrapped = ((name: string, handler: unknown) => (name === 'session.id' || name === 'tool.call' || name === 'fs.read' ? undefined : (on as (n: string, h: unknown) => unknown)(name, handler))) as unknown as On
   const w = world($, wrapped)
   let release = () => {}
   let begun = () => {}
   const gate = new Promise<void>(r => (release = r))
   const started = new Promise<void>(r => (begun = r))
   const denyHandBacks = { on: false, isError: false, agentThrows: false }
+  const afterRead: Held['afterRead'] = {}
+  on('fs.read', async (_: Engine, e: { path: string }) => {
+    const p = slashed(e.path)
+    const held = w.holds.get(p)
+    if (held) await held
+    const value = w.files.get(p) ?? ''
+    // the value is taken first; a test may then stall the read before it returns, so the file can change under the reader
+    await afterRead.fn?.(p)
+    return { value }
+  })
   on('session.id', async () => ({ value: 'S1' }))
   on('agent.spawn', (async (_: Engine, e: { tool_use_id?: string }) => ({ agentId: e.tool_use_id === 'tu-other' ? 'other1' : 'new1', model: 'opus' })) as never)
   on('tool.call', (async (_: Engine, e: Record<string, unknown>) => {
@@ -202,10 +212,10 @@ const setupHeld = async ($: Engine, on: On): Promise<Held> => {
     if (denyHandBacks.agentThrows) throw new Error('agent call blew up')
     begun()
     await gate
-    return { result: { agentId: 'new1' } }
+    return { result: { agentId: e.tool_use_id === 'tu-other' ? 'other1' : 'new1' } }
   }) as never)
   await startSession($)
-  return { w, release, started, denyHandBacks }
+  return { w, release, started, denyHandBacks, afterRead }
 }
 const fullMessage = () => join(jsonBlock(jsonOf(CARRIED)), mdBlock(MD))
 const callTu = (w: W, prompt: string) => w.agentCall(undefined, { subagent_type: 'foundry:architect', prompt, name: 'planner', model: 'opus', effort: 'high', tool_use_id: 'tu-plan' })
@@ -346,4 +356,71 @@ test('an Agent call that throws beneath foundry leaves its tool_use_id unarmed: 
   await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
   await handBackFrom($, 'new1')
   expect(planKeys(h.w)).toEqual([])
+})
+
+// Races. The mock holds a write (writeHolds) or stalls a read after its value was taken (afterRead) so the overlap is
+// deterministic, not a matter of timing luck.
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+const waitFor = async (cond: () => boolean, what: string) => {
+  for (let i = 0; i < 400 && !cond(); i++) await sleep(5)
+  if (!cond()) throw new Error(`timed out waiting for ${what}`)
+}
+const callWith = (w: W, toolUseId: string) =>
+  w.agentCall(undefined, { subagent_type: 'foundry:architect', prompt: 'Mode: plan\nGoal: rate limiting', name: toolUseId, model: 'opus', effort: 'high', tool_use_id: toolUseId })
+
+test('two accepted plan hand-backs whose routes overlap leave plan.json and plan.md from the same hand-back', async ($, on) => {
+  const h = await setupHeld($, on)
+  const callA = callWith(h.w, 'tu-plan')
+  await h.started
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
+  const callB = callWith(h.w, 'tu-other')
+  await waitFor(() => h.w.ran.filter(r => r.tool === 'Agent').length === 2, 'both Agent calls')
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-other', 'other')
+  h.release()
+  await Promise.all([callA, callB])
+
+  const msgA = join(jsonBlock(jsonOf(planWith({ goal: 'Plan A' }))), mdBlock('# A'))
+  const msgB = join(jsonBlock(jsonOf(planWith({ goal: 'Plan B' }))), mdBlock('# B'))
+  // A's plan.md write stalls after its plan.json landed; B's whole route runs meanwhile
+  let releaseMd = () => {}
+  h.w.writeHolds.set(PLAN_MD, new Promise<void>(r => (releaseMd = r)))
+  const hbA = handBackFrom($, 'new1', msgA)
+  await waitFor(() => h.w.files.has(PLAN_JSON), "A's plan.json")
+  const hbB = handBackFrom($, 'other1', msgB)
+  await sleep(150)
+  releaseMd()
+  await Promise.all([hbA, hbB])
+
+  const json = h.w.files.get(PLAN_JSON)
+  const md = h.w.files.get(PLAN_MD)
+  expect(json).toBeDefined()
+  expect(md).toBeDefined()
+  const goal = (JSON.parse(json ?? '{}') as { goal?: string }).goal
+  expect(md).toBe(goal === 'Plan A' ? '# A' : '# B')
+})
+
+test('an approval written to plan.json after the route read it, before its write, is not overwritten', async ($, on) => {
+  const h = await readyArchitect($, on)
+  const unapproved = jsonOf(planWith({ approvedAt: null })) + '\n'
+  const approved = jsonOf(planWith({ approvedAt: '2026-10-28T16:00:00Z' })) + '\n'
+  h.w.files.set(PLAN_JSON, unapproved)
+  // the first read of plan.json returns the unapproved text, but only after the test has changed the file on disk
+  let reached = false
+  let letGo = () => {}
+  const gate = new Promise<void>(r => (letGo = r))
+  let first = true
+  h.afterRead.fn = async p => {
+    if (p !== PLAN_JSON || !first) return
+    first = false
+    reached = true
+    await gate
+  }
+  const hb = handBackFrom($, 'new1')
+  await waitFor(() => reached, 'the route to read plan.json')
+  h.w.files.set(PLAN_JSON, approved)
+  letGo()
+  await hb
+  expect(h.w.files.get(PLAN_JSON)).toBe(approved)
+  expect(h.w.files.has(PLAN_MD)).toBe(false)
+  expect(logged(h.w, KEPT).length).toBeGreaterThan(0)
 })
