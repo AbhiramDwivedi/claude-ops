@@ -908,6 +908,7 @@ async function loadState($: $, repo: Repo): Promise<State | undefined> {
     const top = raw as Record<string, unknown>
     if ('active' in top && !isPlainObject(top.active)) return undefined
     if ('slots' in top && !isPlainObject(top.slots)) return undefined
+    if (isPlainObject(top.active) && Object.values(top.active as Record<string, unknown>).some(e => !isPlainObject(e) || typeof (e as Record<string, unknown>).path !== 'string' || !Number.isFinite((e as Record<string, unknown>).at))) return undefined
     return parseState(text)
   } catch {
     return undefined
@@ -1498,7 +1499,7 @@ export const register: Register = (on, options) => {
   const warn: Warn = path => {
     if (toldUnreadable) return undefined
     toldUnreadable = true
-    return `worktrees: slots.json at ${path} is unreadable; worktree slots and cleanup are paused until it is deleted`
+    return `worktrees: slots.json at ${path} is unreadable; worktree slots and cleanup are paused. Fix it, or delete it once no agents are running.`
   }
   const own: Sweeps = { tracked: new Map(), chain: Promise.resolve(), warn }
   const tracked = own.tracked
