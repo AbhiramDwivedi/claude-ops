@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (...parts: string[]): string => {
@@ -83,22 +83,33 @@ test('run skill merge rule re-runs the lead checks when only the patch id matche
 })
 
 // ADR-0004 sections 3 and 6: each Head:/Patch: line is matched in full: the literal at column 0, exactly 40 chars of
-// [0-9a-f], then nothing but spaces or tabs. The hook's matcher is not exported, so this pins the regex the spec
-// defines against the text the judge template produces.
-const lineRe = (literal: string) => new RegExp(`^${literal}[0-9a-f]{40}[ \t]*$`)
+// [0-9a-f], then nothing but spaces or tabs. These tests run the hook's own matcher, judgeRuling, on judge-report text.
+type Ruling = { head?: string; patch?: string }
+let judgeRuling: (text: string) => Ruling
+try {
+  judgeRuling = ((await import(pathToFileURL(join(PLUGIN, 'hooks', 'register.ts')).href)) as { judgeRuling: (text: string) => Ruling }).judgeRuling
+} catch (err) {
+  judgeRuling = () => {
+    throw new Error(`hooks/register.ts did not load: ${String(err)}`)
+  }
+}
 const SHA = 'a'.repeat(20) + '0123456789'.repeat(2)
+const report = (head: string, patch: string) => `VERDICT: PASS\n\n## Proof checked\n${head}\n${patch}\n\n## Findings\nNone.\n`
+// the ruling of a report whose only variable line is `line`, under the literal's own slot
+const rulingOf = (literal: string, line: string): string | undefined => {
+  const r = literal === HEAD_LINE ? judgeRuling(report(line, `${PATCH_LINE}${SHA}`)) : judgeRuling(report(`${HEAD_LINE}${SHA}`, line))
+  return literal === HEAD_LINE ? r.head : r.patch
+}
 for (const literal of [HEAD_LINE, PATCH_LINE]) {
-  const re = lineRe(literal)
-  test(`${literal.trim()} line: bare 40 hex matches`, () => assert.ok(re.test(`${literal}${SHA}`)))
-  test(`${literal.trim()} line: trailing spaces and tabs match`, () => assert.ok(re.test(`${literal}${SHA}  \t`)))
-  test(`${literal.trim()} line: a parenthesised trailing note does not match`, () => assert.ok(!re.test(`${literal}${SHA} (rebased)`)))
-  test(`${literal.trim()} line: a dashed trailing note does not match`, () => assert.ok(!re.test(`${literal}${SHA} -- note`)))
-  test(`${literal.trim()} line: indented, uppercase, short and 64-digit values do not match`, () => {
-    assert.ok(!re.test(` ${literal}${SHA}`))
-    assert.ok(!re.test(`${literal}${SHA.toUpperCase()}`))
-    assert.ok(!re.test(`${literal}${SHA.slice(0, 39)}`))
-    assert.ok(!re.test(`${literal}${SHA}${SHA.slice(0, 24)}`))
-  })
+  const name = literal.trim()
+  test(`${name} line: bare 40 hex is accepted`, () => assert.equal(rulingOf(literal, `${literal}${SHA}`), SHA))
+  test(`${name} line: trailing spaces and tabs are accepted`, () => assert.equal(rulingOf(literal, `${literal}${SHA}  \t`), SHA))
+  test(`${name} line: a parenthesised trailing note is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA} (rebased)`), undefined))
+  test(`${name} line: a dashed trailing note is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA} -- note`), undefined))
+  test(`${name} line: an indented line is rejected`, () => assert.equal(rulingOf(literal, ` ${literal}${SHA}`), undefined))
+  test(`${name} line: uppercase hex is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA.toUpperCase()}`), undefined))
+  test(`${name} line: a 39-digit value is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA.slice(0, 39)}`), undefined))
+  test(`${name} line: a 64-digit value is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA}${SHA.slice(0, 24)}`), undefined))
 }
 
 test('judge.md template carries the bare Head: and Patch: lines and the trailing-whitespace rule', () => {
