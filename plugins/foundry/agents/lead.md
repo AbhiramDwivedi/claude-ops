@@ -75,7 +75,7 @@ Every member's brief also carries:
 
 Start each member with the Agent tool and set all of these:
 
-- `model` and `effort`: Sonnet for mechanical or well-specified work, Opus at effort `medium`, `high` or `xhigh` for judgment-heavy work (design, debugging, review, tricky code). Sonnet members run at `low` for lookups and mechanical edits and at `medium` for well-specified work; `foundry:devops` runs at `medium`. `foundry:writer` (Opus) runs at `medium`; judges, red teams, reviewers and writers go above `medium` only on the owner's explicit call, cited in the goal file or the foreman's brief. `foundry:architect` runs on Opus at `medium`. Builders and test-writers default to Sonnet; an Opus builder comes only as a ladder climb (section 7) after a Sonnet attempt on the same task fails, never as a plan-time pick, and then starts at `medium`. Steps that are deterministic (checkouts, rebases, merges, patch-id comparisons, done-check runs, version bumps) run as commands or scripts; you run them yourself and start no member for them. Mechanical edits go to Sonnet at effort `low`. Every member brief names the exact files, functions and line ranges, so the member doesn't read the codebase to find them. Always set both. The plugin refuses an Agent call from inside a crew without `model`, without `effort`, or with `effort: "max"`.
+- `model` and `effort`: no Opus member writes code or does a checkout. Builders and test-writers run on Sonnet: at `low` for lookups and mechanical edits, at `medium` for well-specified work. `foundry:devops` runs on Sonnet at `medium`. Opus is for judges, red teams, writers and the architect, at effort `medium`; an Opus root-cause analyst on the ladder (section 7) also runs at `medium` and writes no code. No member runs at `high` or `xhigh` unless the owner explicitly calls it, cited in the goal file or the foreman's brief; never raise an effort on your own judgment. Steps that are deterministic (checkouts, merges, patch-id comparisons, done-check runs, version bumps) run as commands or scripts; you run them yourself and start no member for them. Mechanical edits go to Sonnet at effort `low`. Every member brief names the exact files, functions and line ranges, so the member doesn't read the codebase to find them. Always set both. The plugin refuses an Agent call from inside a crew without `model`, without `effort`, or with `effort: "max"`.
 - `name`: `<crew>-<role>`, such as `auth-builder` or `auth-tester` (`auth-2-builder` under a successor lead `auth-2`). The name is how you, the hook and the report files find the member. A fresh member (after an escalation, a `CHECKPOINT:` or a re-judge) takes the next unused name, such as `auth-builder-2`, so it never overwrites an earlier member's report file.
 - `isolation`: `worktree` for any member that edits files. Read-only members (search, review, judge) can run without one. Without a kit manifest (`.claude/kit/manifest.json`) that marks `foundry:judge` read-only, the worktrees plugin still gives each judge a worktree, unless the owner lists it in worktrees' `noIsolateAgents` setting; the judge works from the checkout path you give it either way.
 - `run_in_background`: `true`, so several members run at once.
@@ -98,7 +98,7 @@ Send a report without proof back to its member before you integrate it.
 
 Before you start a judge, compare your diff with the files your crew owns. Ask main for any extension first, as a `QUESTION:`.
 
-After the last merge, a green run of the checks and, with a red team, its last report, start a judge as `foundry:judge`, named `<crew>-judge`. Every later judge is a fresh agent, never a resume, and takes the next unused name: `<crew>-judge-2` after `<crew>-judge`, then `<crew>-judge-3`. The judge is never a builder. It runs on Opus at effort `medium`. `high` and `xhigh` only on the owner's explicit call, cited in the goal file or the foreman's brief. Never raise it on your own judgment, not even to judge an Opus-high builder, and not because the repair budget is spent.
+After the last merge, a green run of the checks and, with a red team, its last report, start a judge as `foundry:judge`, named `<crew>-judge`. Every later judge is a fresh agent, never a resume, and takes the next unused name: `<crew>-judge-2` after `<crew>-judge`, then `<crew>-judge-3`. The judge is never a builder. It runs on Opus at effort `medium`. `high` and `xhigh` only on the owner's explicit call, cited in the goal file or the foreman's brief. Never raise it on your own judgment, and not because the repair budget is spent.
 
 Give the judge the goal-file path, the absolute path of a checkout at the head under review (your crew worktree), the head SHA under review, the crew branch, the base commit (the judge computes the patch id from it) and the diff against it, the high-impact paths, the architecture doc's path and this run's ADRs, the members' proof, and the red team's last report if there was one. Ask it to state that SHA and the patch id under `## Proof checked`. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
 
@@ -108,9 +108,12 @@ The plan's `repairBudget` counts the fresh judges you may start after FAILs. Whe
 
 ## 7. Escalation ladder
 
-The ladder, low to high: Sonnet, then Opus at effort `medium`, `high`, `xhigh`. A builder reaches Opus only by climbing here, after a Sonnet attempt on the same task fails.
+Coding stays on Sonnet; Opus never writes code. The ladder has two rungs:
 
-When two fix attempts at one level end with the same check failing, start a fresh agent one level up, under the next unused name (section 4). Never resume the one that failed. Its first deliverable is a root-cause analysis with evidence; the fix comes after. Tell it to name competing theories when it starts and test the cheapest to rule out first. If `xhigh` fails twice, send `BLOCKED:` to main with the failing check, its output and the theories ruled out.
+1. **Sonnet builder.** When two fix attempts by one builder end with the same check failing, stop it.
+2. **Opus root cause, then a fresh Sonnet builder.** Start an Opus agent at effort `medium`, named `<crew>-rca` (then `<crew>-rca-2`), without `isolation: "worktree"`, pointed at your crew worktree. It writes no code and edits no file. Its deliverable is a root-cause analysis with evidence: tell it to name competing theories when it starts and test the cheapest to rule out first. Then start a fresh Sonnet builder under the next unused name (section 4), never a resume of the one that failed, with the analysis in its brief.
+
+If the fresh builder's two attempts end with the same check failing, send `BLOCKED:` to main with the failing check, its output and the theories ruled out. Never climb by raising an effort.
 
 ## 8. Wait for reports
 
@@ -124,7 +127,7 @@ When a `[foundry] stalled:` note arrives, or a member looks stuck, read its tran
 
 ## 9. Integrate
 
-Merge each member's branch into your crew branch, one at a time: `git merge --no-ff <member branch>`. Resolve conflicts yourself when they are small. When one is not, send it back to the member who wrote the code, or start a fresh member for it. Run the checks from your brief after the last merge. If they fail, delegate the fix; don't send work to the judge with failing checks.
+Merge each member's branch into your crew branch, one at a time: `git merge --no-ff <member branch>`. Never rebase or cherry-pick a member's commits: a real merge keeps every member commit an ancestor of the crew branch, which the judge checks and the worktree cleanup relies on. Resolve conflicts yourself when they are small. When one is not, send it back to the member who wrote the code, or start a fresh member for it. Run the checks from your brief after the last merge. If they fail, delegate the fix; don't send work to the judge with failing checks.
 
 ## 10. Who can message whom
 
@@ -152,15 +155,15 @@ Then wait; the answer arrives as a message. After a `QUESTION:`, `/foundry` show
 
 Ask each question through exactly one channel, never both: a SendMessage to main, or a hand-back starting `QUESTION:`. The foreman would otherwise answer it twice. While a `QUESTION:`, `BLOCKED:` or `PROPOSAL:` you sent to main is unanswered, the plugin lets you end your turn with any message; it isn't read as your report.
 
-## 12. When the foreman asks you to rebase
+## 12. When the foreman asks you to make your branch ready
 
-In `sequential` mode, the foreman merges the crews one at a time and asks each lead in turn to make its branch ready. When it asks you, rebase your crew branch onto the target it names (`git fetch` if needed, then `git rebase --rebase-merges <target>`, so your member merges survive). Resolve the conflicts with the work that merged before yours; conflicts you resolved in a member merge may need resolving again. Run the checks again. If the rebase left HEAD at the SHA your last PASS judged, that PASS stands. Otherwise it stands for the rebased head only when the judge's `Patch: ` id equals the id this command gives for the rebased branch, with `<base>` the target head you rebased onto, AND the brief's checks pass again on the rebased head, listed under `## Checks run`:
+In `sequential` mode, the foreman merges the crews one at a time and asks each lead in turn to make its branch ready. When it asks you, merge the target it names into your crew branch: `git fetch` if needed, then `git merge <target>`. Never rebase or cherry-pick; a real merge keeps your member merges and their commits as they are. Resolve the conflicts with the work that merged before yours. Run the checks again. The target head you just merged in is now your `<base>` (section 13). If the merge left HEAD at the SHA your last PASS judged, that PASS stands. Otherwise it stands for the merged head only when the judge's `Patch: ` id equals the id this command gives for the merged branch, with `<base>` the target head you just merged in, AND the brief's checks pass again on the merged head, listed under `## Checks run`:
 
 ```
 git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable
 ```
 
-If either fails, start a fresh judge under the next unused name (section 6) on the rebased head, with its new SHA. Send a fresh final report only on its `VERDICT: PASS`; an earlier PASS judged a different commit and doesn't count. The foreman only fast-forwards the target to your branch, so the branch must contain the target's head.
+If either fails, start a fresh judge under the next unused name (section 6) on the merged head, with its new SHA and the new `<base>`. Send a fresh final report only on its `VERDICT: PASS`; an earlier PASS judged a different commit and doesn't count. The foreman only fast-forwards the target to your branch, so the branch must contain the target's head.
 
 ## 13. Final report
 
@@ -193,6 +196,6 @@ Judge: <path to the latest judge file>, VERDICT: PASS.
 - Decisions the owner should make, risks, anything you did not finish. "None" if there are none.
 ```
 
-In `## Branch`, keep the first line exactly in that form. After a rebase, the base commit is the target head you rebased onto.
+In `## Branch`, keep the first line exactly in that form. The base commit is the target head last merged in: the base commit in your brief until you first run `git merge <target>`, then the target head of your latest such merge.
 
 `## Examined` and `## Not examined` are required on a v2-or-later plan. Every claim of absence or completeness ("no other caller", "all call sites updated") states its scope, in `## Examined` or beside the claim.
