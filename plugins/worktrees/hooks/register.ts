@@ -412,6 +412,9 @@ export function sweepActive(state: State, f: { now: number; finished: readonly s
 // the lock beside slots.json: a lock older than this was left by a process that died holding it
 export const LOCK_STALE_MS = 10_000
 
+// an entry whose folder is missing counts as gone only after this long: a create records its entry before git makes the folder
+export const GONE_GRACE_MS = 10 * 60_000
+
 // what a writer does when it finds the lock taken, by the lock's age
 export function lockStep(ageMs: number): 'break' | 'wait' {
   return ageMs > LOCK_STALE_MS ? 'break' : 'wait'
@@ -910,8 +913,8 @@ async function dropLock($: $, repo: Repo, windows: boolean): Promise<void> {
 // State writes run one at a time: in this process by a promise chain, across sessions by the lock directory,
 // with slots.json read again under the lock, so parallel agents never draw the same slot.
 let stateChain: Promise<unknown> = Promise.resolve()
-// `keepUnreadable`: a slots.json that does not parse is left alone and fn does not run (answers undefined).
-function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>, keepUnreadable = false): Promise<T> {
+// A slots.json that exists but does not parse is never overwritten: fn does not run, nothing is written, the answer is undefined.
+function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>): Promise<T | undefined> {
   const step = stateChain.then(async () => {
     const windows = await isWindows($)
     for (let tries = 0; !(await takeLock($, repo, windows)); tries++) {
@@ -921,7 +924,10 @@ function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: S
       else await $.clock.sleep(100)
     }
     try {
-      if (keepUnreadable && (await stateUnreadable($, repo))) return undefined as T
+      if (await stateUnreadable($, repo)) {
+        await $.ui.log('worktrees: slots.json unreadable, left as is', { to: 'debug' })
+        return undefined
+      }
       const { state, value } = await fn(await readState($, repo))
       await $.fs.write(stateFile(repo), serializeState(state))
       return value
@@ -1162,9 +1168,9 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   const registered = new Set(worktrees.map(w => normPath(w.path, windows)))
   const gone: string[] = []
   for (const [key, v] of Object.entries(state.active)) {
-    if (!registered.has(key) && !(await $.fs.exists(v.path))) gone.push(v.path)
+    if (now - v.at >= GONE_GRACE_MS && !registered.has(key) && !(await $.fs.exists(v.path))) gone.push(v.path)
   }
-  await withState($, repo, async s => ({ state: sweepActive(s, { now, finished: finishedPaths, gone }, windows), value: undefined }), true)
+  await withState($, repo, async s => ({ state: sweepActive(s, { now, finished: finishedPaths, gone }, windows), value: undefined }))
   return { removed, kept }
 }
 
@@ -1559,6 +1565,8 @@ export const register: Register = (on, options) => {
       const claimed = claimSlot(state.slots, path, e.name, now, windows)
       return { state: { ...state, slots: claimed.table }, value: claimed.slot }
     })
+    // slots.json could not be read: no slot is drawn, so the setup script does not run; the worktree is there without it
+    if (slot === undefined) return { worktreePath: path }
     const [from, to] = portRange(base, slot)
     const env = { WORKTREE_PATH: path, WORKTREE_NAME: e.name, WORKTREE_SLOT: String(slot), PORT_BASE: String(from), REPO_ROOT: repo.mainRoot }
     const argvs = windows
