@@ -61,6 +61,27 @@ The writer doesn't write the king's reports or leads' reports. Those keep their 
 - **Prototype: `foundry init` extending `kit init`.** kit writes its manifest (checks, agents, risky paths). foundry adds role mapping, port slices, deploy target, the writing skill, prompt overrides per role. These describe jobs, not characters. If the manifest is missing, foundry runs `kit:init` first.
 - **`foundry retro`.** Reads the decision log and reports: escalations by level, cynic recommendations and overrules, stalls, interruptions of the owner, judge rejections. Proposes changes to the project's foundry config and prompts. Turning repeated work into skills goes to `kit:revise`.
 
+## Next: right-size the process per crew
+
+The owner's point, from run 4: not every goal needs a design wave and contract tests. The run and each lead should pick the steps the work needs. Some work needs no design change at all and is only implementation. The steps in the process are a toolbox to put together per crew, not a sequence to follow every time.
+
+Already flexible: the architect's `extend`/`change` verdict per module; an extend-only plan auto-approves with no wave 0; a lead splits members by the leaf test.
+
+Still applied every time:
+
+- Any `change` verdict brings a whole wave-0 design crew (architect, probe, test-writers, judge), even when the change is one ADR paragraph that a crew's own lead could write.
+- Contract tests are always written up front by a separate crew, even for a small change a crew can test itself.
+- Plan time always chains architect, cynic, reconcile round, cynic.
+- Every crew gets the full set: test-writer, builder, judge, repair judge.
+
+Proposal:
+
+- The architect gives each crew a rigour level with a one-line reason: `implement` (no design change; builder plus judge), `design-in-crew` (the lead starts the architect for a short ADR note inside the crew; no wave 0), or `design-wave` (today's wave 0). Wave 0 is only for design that several crews build against.
+- The lead may drop or add steps inside its crew and says which in its report, with a reason. The judge checks that the steps it dropped weren't needed for the proof.
+- Two things stay fixed: a done-check proved red before the work and green after it, and a judge who isn't the builder. Everything else is optional.
+- The cynic's verdict review runs only when the plan has a `change`, and the reconcile round only on a `disagree`.
+- Measure it: agents and wall-clock per merged crew, against run 4.
+
 ## Separately: technical-writer skill update (ai-tools repo)
 
 Add from Clarity: state logical relations with connectors, not by placing sentences side by side; chain paragraphs (test: cover the page and predict what comes next); give the strongest objection its own paragraph; name who did it; revise by reordering as well as cutting; interview the author when TODOs would outnumber facts. Credit Clarity in `craft.md`. Keep the existing rule against question openers. One agent can do this; it doesn't need a crew.
