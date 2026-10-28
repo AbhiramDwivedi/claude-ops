@@ -178,3 +178,105 @@ test('a goal containing ../ still writes only the two fixed paths', async ($, on
   expect([...w.files.keys()].filter(k => k.includes('..'))).toEqual([])
   expect(planKeys(w).sort()).toEqual([PLAN_JSON, PLAN_MD])
 })
+
+// Foreground and failure paths of the route. Claude Code runs a foreground Agent call's subagent inside the tool call:
+// the architect's agent.spawn fires and its SubagentHandback arrives BEFORE the Agent call's next() returns. The spawn
+// belongs to its Agent call by tool_use_id. The mock beneath foundry holds the Agent call open until the test releases
+// it (a hook module may not call $.agent.spawn itself, so the test drives the spawn and the hand-back meanwhile).
+type Held = { w: W; release: () => void; started: Promise<void>; denyHandBacks: { on: boolean } }
+const setupHeld = async ($: Engine, on: On): Promise<Held> => {
+  const wrapped = ((name: string, handler: unknown) => (name === 'session.id' || name === 'tool.call' ? undefined : (on as (n: string, h: unknown) => unknown)(name, handler))) as unknown as On
+  const w = world($, wrapped)
+  let release = () => {}
+  let begun = () => {}
+  const gate = new Promise<void>(r => (release = r))
+  const started = new Promise<void>(r => (begun = r))
+  const denyHandBacks = { on: false }
+  on('session.id', async () => ({ value: 'S1' }))
+  on('agent.spawn', (async (_: Engine, e: { tool_use_id?: string }) => ({ agentId: e.tool_use_id === 'tu-other' ? 'other1' : 'new1', model: 'opus' })) as never)
+  on('tool.call', (async (_: Engine, e: Record<string, unknown>) => {
+    w.ran.push(e)
+    if (e.tool === 'SubagentHandback' && denyHandBacks.on) return { deny: 'refused beneath foundry' }
+    if (e.tool !== 'Agent') return { result: 'ok' }
+    begun()
+    await gate
+    return { result: { agentId: 'new1' } }
+  }) as never)
+  await startSession($)
+  return { w, release, started, denyHandBacks }
+}
+const fullMessage = () => join(jsonBlock(jsonOf(CARRIED)), mdBlock(MD))
+const callTu = (w: W, prompt: string) => w.agentCall(undefined, { subagent_type: 'foundry:architect', prompt, name: 'planner', model: 'opus', effort: 'high', tool_use_id: 'tu-plan' })
+const spawnFor = ($: Engine, prompt: string, toolUseId: string, name = 'planner') =>
+  $.agent.spawn({ subagentType: 'foundry:architect', prompt, description: 'd', name, tool_use_id: toolUseId } as never)
+const handBackFrom = ($: Engine, id: string, message = fullMessage()) => handBack($, id, message)
+
+test('foreground: a plan-mode architect whose hand-back arrives before the Agent call returns is written', async ($, on) => {
+  const h = await setupHeld($, on)
+  const call = callTu(h.w, 'Mode: plan\nGoal: rate limiting')
+  await h.started
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
+  await handBackFrom($, 'new1')
+  h.release()
+  await call
+  expect(h.w.files.get(PLAN_JSON)).toBe(expectedJson(CARRIED))
+  expect(h.w.files.get(PLAN_MD)).toBe(MD)
+})
+
+test('foreground: the same flow with Mode: design writes nothing', async ($, on) => {
+  const h = await setupHeld($, on)
+  const call = callTu(h.w, 'Mode: design\nGoal: rate limiting')
+  await h.started
+  await spawnFor($, 'Mode: design\nGoal: rate limiting', 'tu-plan')
+  await handBackFrom($, 'new1')
+  h.release()
+  await call
+  expect(planKeys(h.w)).toEqual([])
+})
+
+test('foreground: an unrelated spawn (other tool_use_id) in between is not recorded; the plan architect still writes', async ($, on) => {
+  const h = await setupHeld($, on)
+  const call = callTu(h.w, 'Mode: plan\nGoal: rate limiting')
+  await h.started
+  // a background architect from another Agent call, with a Mode: plan prompt of its own
+  await spawnFor($, 'Mode: plan\nGoal: other', 'tu-other', 'other')
+  await handBackFrom($, 'other1')
+  expect(planKeys(h.w)).toEqual([])
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
+  await handBackFrom($, 'new1')
+  h.release()
+  await call
+  expect(h.w.files.get(PLAN_JSON)).toBe(expectedJson(CARRIED))
+  expect(h.w.files.get(PLAN_MD)).toBe(MD)
+})
+
+test('a hand-back that a hook beneath foundry denies writes no plan files; a later accepted one does', async ($, on) => {
+  const h = await setupHeld($, on)
+  const call = callTu(h.w, 'Mode: plan\nGoal: rate limiting')
+  await h.started
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
+  // the Agent call returns first, so this test is about the denial alone
+  h.release()
+  await call
+  h.denyHandBacks.on = true
+  await handBackFrom($, 'new1')
+  expect(planKeys(h.w)).toEqual([])
+  h.denyHandBacks.on = false
+  await handBackFrom($, 'new1')
+  expect(h.w.files.get(PLAN_JSON)).toBe(expectedJson(CARRIED))
+  expect(h.w.files.get(PLAN_MD)).toBe(MD)
+})
+
+test('plan.md failing after plan.json was written logs "wrote plan.json but not plan.md"', async ($, on) => {
+  const h = await setupHeld($, on)
+  h.w.failWrite = p => p === PLAN_MD
+  const call = callTu(h.w, 'Mode: plan\nGoal: rate limiting')
+  await h.started
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
+  h.release()
+  await call
+  await handBackFrom($, 'new1')
+  expect(h.w.files.has(PLAN_JSON)).toBe(true)
+  expect(h.w.files.has(PLAN_MD)).toBe(false)
+  expect(logged(h.w, 'foundry: plan-file route wrote plan.json but not plan.md:').length).toBeGreaterThan(0)
+})
