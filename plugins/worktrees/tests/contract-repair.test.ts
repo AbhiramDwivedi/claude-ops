@@ -156,14 +156,14 @@ type Dollar = Parameters<Parameters<typeof test>[1]>[0]
 type World = ReturnType<typeof world>
 
 // a merge by the main thread: the PostToolUse event, then the scheduled sweep run to completion
-async function sweep(w: World, $: Dollar, cwd: string, transcript: string | undefined = TRANSCRIPT, command = 'git merge --no-ff worktree-agent-a2member') {
+async function sweep(w: World, $: Dollar, cwd: string, transcript: string | null = TRANSCRIPT, command = 'git merge --no-ff worktree-agent-a2member') {
   await $.classic.PostToolUse({
     tool_name: 'Bash',
     tool_input: { command },
     tool_response: '',
     tool_use_id: 't1',
     cwd,
-    ...(transcript === undefined ? {} : { transcript_path: transcript }),
+    ...(transcript === null ? {} : { transcript_path: transcript }),
   } as never)
   await w.clock.settle()
 }
@@ -348,7 +348,7 @@ test('27. unreadable signal keeps every candidate (ADR-0015 amendment 2026-10-28
   expect(removed(w)).toEqual([])
   w.state.listThrows = false
   w.ran.length = 0
-  await sweep(w, $, MAIN, undefined)
+  await sweep(w, $, MAIN, null)
   expect(removed(w)).toEqual([])
 })
 
