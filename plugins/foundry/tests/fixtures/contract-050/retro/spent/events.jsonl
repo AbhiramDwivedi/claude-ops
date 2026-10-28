@@ -1,0 +1,6 @@
+{"v":1,"ts":"2026-10-27T09:01:00.000Z","event":"spawn","crew":"auth","agent":"auth","agentId":"e0","type":"foundry:lead","model":"opus","effort":"high","by":"main"}
+{"v":1,"ts":"2026-10-27T09:02:00.000Z","event":"spawn","crew":"auth","agent":"auth-judge","agentId":"e1","type":"foundry:judge","model":"sonnet","effort":"medium","by":"auth"}
+{"v":1,"ts":"2026-10-27T09:03:00.000Z","event":"spawn","crew":"billing","agent":"billing-judge","agentId":"e2","type":"foundry:judge","model":"sonnet","effort":"medium","by":"billing"}
+{"v":1,"ts":"2026-10-27T09:30:00.000Z","event":"budget-spent","crew":"auth","agent":"auth-judge-3"}
+{"v":1,"ts":"2026-10-27T09:31:00.000Z","event":"budget-spent","crew":"auth","agent":"auth-judge-3"}
+{"v":1,"ts":"2026-10-27T09:40:00.000Z","event":"budget-spent","crew":"billing","agent":"billing-judge-3"}
