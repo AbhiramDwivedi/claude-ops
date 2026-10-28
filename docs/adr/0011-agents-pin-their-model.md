@@ -37,7 +37,7 @@ The interface that couldn't take it: the decision above names each role's model 
 - **Writer.** `foundry:writer` runs on Sonnet, or on Opus at effort `low` or `medium`.
 - **kit:reviewer.** Its frontmatter gains `effort: medium` (kit 0.3.0). A crew never starts it beside a foundry judge on the same head: the judge is that head's review.
 - **Red team.** Only for a crew with a high-impact path: hooks, stored schemas and data shapes, auth or money code. It runs at Opus `medium`. This rule replaces the "high-impact paths" list in `run/SKILL.md:142` (auth, money, migrations, CI or lockfiles) as the red-team trigger, and having a red team no longer raises anyone's effort.
-- **The hook half** is foundry ADR-0004 (`plugins/foundry/docs/adr/`, written by the same design crew): the gate that refuses the main session's `foundry:*` Agent calls with no `model` or `effort` on plans with `version >= 2`, and the rule that a PASS survives a rebase only when the patch is unchanged (`git patch-id --stable`) and the checks pass again. This amendment doesn't restate either.
+- **The hook half** is foundry [ADR-0004](../../plugins/foundry/docs/adr/0004-scope-repair-and-head-gates.md): the gate that refuses the main session's `foundry:*` Agent calls with no `model` or `effort` on plans with `version >= 2`, and the rule that a PASS survives a rebase only when the patch is unchanged (`git patch-id --stable`) and the checks pass again. This amendment doesn't restate either.
 - **Retro's target.** In `/foundry:retro`'s `spawns.byModelEffort`, the target share for `opus/high` plus `opus/xhigh` is zero, unless the owner escalated or a builder climbed the ladder above. foundry ADR-0004 fixes how retro reports it.
 
 ### Consequences
