@@ -130,6 +130,8 @@ function world(on: On, opts: Opts = {}) {
     if (args.includes('--show-toplevel')) return cwd === MAIN ? out(`${MAIN}\n`) : inAgent ? out(`${inAgent[1]}\n`) : out('', 128)
     if (args.includes('--git-common-dir')) return out(`${COMMON}\n`)
     if (args.includes('--is-inside-work-tree')) return out(cwd.startsWith(COMMON) ? 'false\n' : 'true\n')
+    // ADR-0015 amendment 2026-10-28 (e): the sweep keeps everything unless the main checkout is on a branch
+    if (args === 'git branch --show-current') return out('main\n')
     if (args === 'git worktree list --porcelain') return out(opts.porcelain ?? WORKTREE_LIST_PORCELAIN)
     if (args.startsWith('git merge-base --is-ancestor')) {
       const branch = argv[argv.indexOf('--is-ancestor') + 1] as string

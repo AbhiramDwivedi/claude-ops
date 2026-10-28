@@ -308,8 +308,10 @@ function sessionRepo(on: On, answer: (args: string) => { stdout?: string; exitCo
     if (args.includes('--git-common-dir')) return out('C:/r/.git\n')
     if (args.endsWith('--verify --quiet HEAD')) return out(`${HEAD_SHA}\n`)
     if (args.includes('refs/heads/worktree-')) return out('', 1)
+    // ADR-0015 amendment 2026-10-28 (e): the sweep keeps everything unless the main checkout is on a branch
+    if (args === 'git branch --show-current') return out('main\n')
     if (args === 'git worktree list --porcelain') {
-      const wt = (path: string, branch: string) => `worktree ${path}\nHEAD ${HEAD_SHA}\nbranch refs/heads/${branch}\n`
+      const wt =(path: string, branch: string) => `worktree ${path}\nHEAD ${HEAD_SHA}\nbranch refs/heads/${branch}\n`
       return out([wt('C:/r', 'main'), wt(X1, 'worktree-agent-x1'), wt(ZZ, 'worktree-agent-zz')].join('\n'))
     }
     return out('')
@@ -532,6 +534,8 @@ function cleanupWorld(on: On, opts: CleanupOpts = {}) {
     if (args.includes('--show-toplevel')) return cwd === MAIN ? out(`${MAIN}\n`) : inAgent ? out(`${inAgent[1]}\n`) : out('', 128)
     if (args.includes('--git-common-dir')) return out(`${COMMON}\n`)
     if (args.includes('--is-inside-work-tree')) return out(cwd.startsWith(COMMON) ? 'false\n' : 'true\n')
+    // ADR-0015 amendment 2026-10-28 (e): the sweep keeps everything unless the main checkout is on a branch
+    if (args === 'git branch --show-current') return out('main\n')
     if (args === "git worktree list --porcelain") return out(opts.porcelainFn?.() ?? opts.porcelain ?? WORKTREE_LIST_PORCELAIN)
     if (args.startsWith('git merge-base --is-ancestor')) {
       const branch = argv[argv.indexOf('--is-ancestor') + 1] as string

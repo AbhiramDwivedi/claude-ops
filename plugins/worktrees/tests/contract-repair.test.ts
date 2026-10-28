@@ -137,6 +137,8 @@ function world(on: On, opts: Opts = {}) {
     if (args.includes('--show-toplevel')) return cwd === MAIN ? out(`${MAIN}\n`) : inAgent ? out(`${inAgent[1]}\n`) : out('', 128)
     if (args.includes('--git-common-dir')) return out(`${COMMON}\n`)
     if (args.includes('--is-inside-work-tree')) return out(cwd.startsWith(COMMON) ? 'false\n' : 'true\n')
+    // ADR-0015 amendment 2026-10-28 (e): the sweep keeps everything unless the main checkout is on a branch
+    if (args === 'git branch --show-current') return out('main\n')
     if (args === 'git worktree list --porcelain') return out(opts.porcelain ?? WORKTREE_LIST_PORCELAIN)
     if (args.startsWith('git merge-base --is-ancestor')) {
       const branch = argv[argv.indexOf('--is-ancestor') + 1] as string
@@ -306,6 +308,13 @@ test('25. decideSelfClean: tree or cherry never counts while main is on a worktr
   }
 })
 
+test('25. decideSelfClean: a main checkout on no branch keeps every candidate (ADR-0015 amendment 2026-10-28 (e))', () => {
+  for (const inMain of ['ancestor', 'tree', 'cherry']) {
+    const p = decide({ inMain, mainBranch: undefined })
+    expect([inMain, p.kind, p.reason]).toEqual([inMain, 'skip', 'the main checkout is on no branch (detached or unreadable)'])
+  }
+})
+
 // ---- seam 26 -------------------------------------------------------------------------------------------------
 
 // the e2e lead: its meta says finished, a member of it is running, and the sweep's cwd is the member's checkout
@@ -383,4 +392,30 @@ test('29. a refused branch delete is reported by name (ADR-0015 amendment 2026-1
   await sweep(w, $, MAIN)
   expect(removes(w, MEMBER).length).toBe(1)
   expect(w.toasts.some(t => t.includes(MEMBER.branch))).toBe(true)
+})
+
+// ---- amendment (e) -------------------------------------------------------------------------------------------
+
+test('30. main checkout detached (show-current prints nothing): nothing is removed or deleted (ADR-0015 amendment 2026-10-28 (e))', async ($, on) => {
+  const w = world(on, {
+    files: finished(MEMBER),
+    merged: (b, cwd) => b === MEMBER.branch && cwd === MAIN,
+    answer: args => (args === 'git branch --show-current' ? { stdout: '' } : undefined),
+  })
+  await sweep(w, $, MAIN)
+  expect(removes(w, MEMBER)).toEqual([])
+  expect(deletes(w, MEMBER)).toEqual([])
+  expect(w.ran.filter(r => r.includes('worktree remove') || /git branch -[dD]/.test(r))).toEqual([])
+})
+
+test('31. main checkout branch unreadable (show-current fails): nothing is removed or deleted (ADR-0015 amendment 2026-10-28 (e))', async ($, on) => {
+  const w = world(on, {
+    files: finished(MEMBER),
+    merged: (b, cwd) => b === MEMBER.branch && cwd === MAIN,
+    answer: args => (args === 'git branch --show-current' ? { exitCode: 128 } : undefined),
+  })
+  await sweep(w, $, MAIN)
+  expect(removes(w, MEMBER)).toEqual([])
+  expect(deletes(w, MEMBER)).toEqual([])
+  expect(w.ran.filter(r => r.includes('worktree remove') || /git branch -[dD]/.test(r))).toEqual([])
 })
