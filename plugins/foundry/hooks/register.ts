@@ -773,6 +773,7 @@ type State = {
   models: Map<string, string>
   // agents whose report was captured from their hand-back; their next stop leaves the file alone, once
   handedBack: Set<string>
+  planArchitects: Set<string>
   // each pending hand-back's message, by agent: what a lead's stop is judged on
   handBacks: Map<string, string>
   // leads whose pending hand-back was held back from the report file by the Examined check (ADR-0004 s6); the stop
@@ -820,6 +821,46 @@ async function rootOf($: $, state: State): Promise<string | undefined> {
   const root = foundryDir(await gitCommonDir($, await $.session.cwd()), await homeDir($), await $.session.id())
   if (root !== undefined) state.root = root
   return root
+}
+
+// The plan-file route (ADR-0015 s9): the inner lines of the first block that opens with exactly `open` and ends at the
+// next line that is exactly four backticks, joined with a newline. Undefined when there is no such block.
+function fencedBlock(message: string, open: string): string | undefined {
+  const lines = message.split('\n').map(l => l.replace(/\r$/, ''))
+  const start = lines.indexOf(open)
+  if (start < 0) return undefined
+  const end = lines.indexOf('````', start + 1)
+  return end < 0 ? undefined : lines.slice(start + 1, end).join('\n')
+}
+
+// A plan-mode architect's hand-back, written to the two fixed paths under the foundry dir; never over a plan that is
+// approved or unreadable. Says why in the debug log when it writes nothing.
+async function writePlanFiles($: $, state: State, message: string): Promise<void> {
+  const json = fencedBlock(message, '````json plan.json')
+  const md = fencedBlock(message, '````markdown plan.md')
+  if (json === undefined || md === undefined) return logRule($, `plan-file route wrote nothing: ${json === undefined ? 'no plan.json block' : 'no plan.md block'}`)
+  if (parsePlan(json) === undefined) return logRule($, 'plan-file route wrote nothing: the plan.json block is not a plan')
+  const dir = await rootOf($, state)
+  if (dir === undefined) return logRule($, 'plan-file route wrote nothing: no foundry dir')
+  let carried: unknown
+  try {
+    carried = JSON.parse(json.startsWith('\uFEFF') ? json.slice(1) : json)
+  } catch {
+    return logRule($, 'plan-file route wrote nothing: the plan.json block is not JSON')
+  }
+  if (!isRecord(carried)) return logRule($, 'plan-file route wrote nothing: the plan.json block is not an object')
+  if (await $.fs.exists(planPath(dir))) {
+    let existing: Plan | undefined
+    try {
+      existing = parsePlan(String(await $.fs.read(planPath(dir))))
+    } catch {
+      return logRule($, 'plan-file route kept the existing plan: it could not be read')
+    }
+    if (existing === undefined) return logRule($, 'plan-file route kept the existing plan: it is not a readable plan')
+    if (existing.approvedAt !== null) return logRule($, 'plan-file route kept the existing plan: it is approved')
+  }
+  await $.fs.write(planPath(dir), JSON.stringify({ ...carried, approvedAt: null }, null, 2) + '\n')
+  await $.fs.write(`${dir}/plan.md`, md)
 }
 
 // The session's plan, read fresh on every call so the foreman's edits count at once; never written here. Undefined
@@ -1454,6 +1495,7 @@ export const register: Register = on => {
     labels: new Map(),
     models: new Map(),
     handedBack: new Set(),
+    planArchitects: new Set(),
     handBacks: new Map(),
     withheld: new Set(),
     waiting: new Map(),
@@ -1478,6 +1520,7 @@ export const register: Register = on => {
     state.labels.clear()
     state.models.clear()
     state.handedBack.clear()
+    state.planArchitects.clear()
     state.handBacks.clear()
     state.withheld.clear()
     state.waiting.clear()
@@ -1596,9 +1639,12 @@ export const register: Register = on => {
       if (refused !== undefined) return refused
     }
     const result = await next(e)
-    if (result.deny !== undefined || (caller?.crew === undefined && !startsLead)) return result
+    if (result.deny !== undefined) return result
     const raw = (result.result as { agentId?: unknown } | undefined)?.agentId
     const id = typeof raw === 'string' ? raw : undefined
+    // a plan-mode architect from the main session (ADR-0015 s9): its hand-back is the plan to write
+    if (e.agentId === undefined && id !== undefined && e.subagent_type === 'foundry:architect' && typeof e.prompt === 'string' && e.prompt.split('\n')[0].replace(/[\r ]+$/, '') === 'Mode: plan') state.planArchitects.add(id)
+    if (caller?.crew === undefined && !startsLead) return result
     // the name agent.spawn recorded, which the report file will carry
     const name = (id === undefined ? undefined : state.labels.get(id)) ?? (typeof e.name === 'string' && e.name !== '' ? e.name : id)
     const note = await safely($, 'report note', async () => {
@@ -1637,6 +1683,7 @@ export const register: Register = on => {
       const inCrew = await safely($, 'hand-back check', async () => crewOf(id, (await agentsOf($, state)).all) !== undefined)
       if (inCrew === true) return { deny: HANDBACK_REFUSAL }
     }
+    if (state.planArchitects.delete(id)) await safely($, 'plan-file route', () => writePlanFiles($, state, message))
     if (message.trim() !== '') {
       // a real report is marked before any await, so a stop that races this capture never overwrites it
       state.handedBack.add(id)
