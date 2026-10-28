@@ -183,7 +183,7 @@ test('a goal containing ../ still writes only the two fixed paths', async ($, on
 // the architect's agent.spawn fires and its SubagentHandback arrives BEFORE the Agent call's next() returns. The spawn
 // belongs to its Agent call by tool_use_id. The mock beneath foundry holds the Agent call open until the test releases
 // it (a hook module may not call $.agent.spawn itself, so the test drives the spawn and the hand-back meanwhile).
-type Held = { w: W; release: () => void; started: Promise<void>; denyHandBacks: { on: boolean } }
+type Held = { w: W; release: () => void; started: Promise<void>; denyHandBacks: { on: boolean; isError: boolean; agentThrows: boolean } }
 const setupHeld = async ($: Engine, on: On): Promise<Held> => {
   const wrapped = ((name: string, handler: unknown) => (name === 'session.id' || name === 'tool.call' ? undefined : (on as (n: string, h: unknown) => unknown)(name, handler))) as unknown as On
   const w = world($, wrapped)
@@ -191,13 +191,15 @@ const setupHeld = async ($: Engine, on: On): Promise<Held> => {
   let begun = () => {}
   const gate = new Promise<void>(r => (release = r))
   const started = new Promise<void>(r => (begun = r))
-  const denyHandBacks = { on: false }
+  const denyHandBacks = { on: false, isError: false, agentThrows: false }
   on('session.id', async () => ({ value: 'S1' }))
   on('agent.spawn', (async (_: Engine, e: { tool_use_id?: string }) => ({ agentId: e.tool_use_id === 'tu-other' ? 'other1' : 'new1', model: 'opus' })) as never)
   on('tool.call', (async (_: Engine, e: Record<string, unknown>) => {
     w.ran.push(e)
     if (e.tool === 'SubagentHandback' && denyHandBacks.on) return { deny: 'refused beneath foundry' }
+    if (e.tool === 'SubagentHandback' && denyHandBacks.isError) return { isError: true, result: 'interrupted', text: 'interrupted' }
     if (e.tool !== 'Agent') return { result: 'ok' }
+    if (denyHandBacks.agentThrows) throw new Error('agent call blew up')
     begun()
     await gate
     return { result: { agentId: 'new1' } }
@@ -279,4 +281,69 @@ test('plan.md failing after plan.json was written logs "wrote plan.json but not 
   expect(h.w.files.has(PLAN_JSON)).toBe(true)
   expect(h.w.files.has(PLAN_MD)).toBe(false)
   expect(logged(h.w, 'foundry: plan-file route wrote plan.json but not plan.md:').length).toBeGreaterThan(0)
+})
+
+// Lifetime of a recorded plan architect. The Agent call returns first in these, so each is about the hand-backs alone.
+const readyArchitect = async ($: Engine, on: On): Promise<Held> => {
+  const h = await setupHeld($, on)
+  const call = callTu(h.w, 'Mode: plan\nGoal: rate limiting')
+  await h.started
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
+  h.release()
+  await call
+  return h
+}
+const KEPT = 'foundry: plan-file route kept the existing plan:'
+
+test('a hand-back that comes back isError from beneath foundry writes no plan files; a later accepted one writes', async ($, on) => {
+  const h = await readyArchitect($, on)
+  h.denyHandBacks.isError = true
+  await handBackFrom($, 'new1')
+  expect(planKeys(h.w)).toEqual([])
+  h.denyHandBacks.isError = false
+  await handBackFrom($, 'new1')
+  expect(h.w.files.get(PLAN_JSON)).toBe(expectedJson(CARRIED))
+  expect(h.w.files.get(PLAN_MD)).toBe(MD)
+})
+
+test('the foreman sends the architect back: a first hand-back that wrote nothing, then a valid one, writes both files', async ($, on) => {
+  const h = await readyArchitect($, on)
+  await handBackFrom($, 'new1', join(jsonBlock('{"crews": 3}'), mdBlock(MD)))
+  expect(planKeys(h.w)).toEqual([])
+  expect(logged(h.w, NOTHING).length).toBeGreaterThan(0)
+  await handBackFrom($, 'new1')
+  expect(h.w.files.get(PLAN_JSON)).toBe(expectedJson(CARRIED))
+  expect(h.w.files.get(PLAN_MD)).toBe(MD)
+})
+
+test('a second valid hand-back with a different goal replaces the first plan while approvedAt is null', async ($, on) => {
+  const h = await readyArchitect($, on)
+  await handBackFrom($, 'new1')
+  expect(h.w.files.get(PLAN_JSON)).toBe(expectedJson(CARRIED))
+  const second = planWith({ goal: 'A revised goal', crews: [crew('only', 0, 'change')] })
+  await handBackFrom($, 'new1', join(jsonBlock(jsonOf(second)), mdBlock('# Revised')))
+  expect(h.w.files.get(PLAN_JSON)).toBe(expectedJson(second))
+  expect(h.w.files.get(PLAN_MD)).toBe('# Revised')
+  expect(logged(h.w, KEPT)).toEqual([])
+})
+
+test('once the plan on disk is approved, a further hand-back keeps it and logs the keep', async ($, on) => {
+  const h = await readyArchitect($, on)
+  await handBackFrom($, 'new1')
+  const approved = jsonOf(planWith({ approvedAt: '2026-10-28T16:00:00Z' })) + '\n'
+  h.w.files.set(PLAN_JSON, approved)
+  const mdBefore = h.w.files.get(PLAN_MD)
+  await handBackFrom($, 'new1', join(jsonBlock(jsonOf(planWith({ goal: 'Too late' }))), mdBlock('# Too late')))
+  expect(h.w.files.get(PLAN_JSON)).toBe(approved)
+  expect(h.w.files.get(PLAN_MD)).toBe(mdBefore)
+  expect(logged(h.w, KEPT).length).toBeGreaterThan(0)
+})
+
+test('an Agent call that throws beneath foundry leaves its tool_use_id unarmed: a later spawn carrying it writes nothing', async ($, on) => {
+  const h = await setupHeld($, on)
+  h.denyHandBacks.agentThrows = true
+  await callTu(h.w, 'Mode: plan\nGoal: rate limiting').catch(() => undefined)
+  await spawnFor($, 'Mode: plan\nGoal: rate limiting', 'tu-plan')
+  await handBackFrom($, 'new1')
+  expect(planKeys(h.w)).toEqual([])
 })
