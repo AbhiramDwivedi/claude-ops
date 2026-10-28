@@ -1077,14 +1077,14 @@ async function logRule($: $, line: string): Promise<void> {
 // The crew's judge files modified at or after `since`, from reports/<crew>/. Texts are read only when `withText`.
 // No folder means no judge files (ADR-0004 s5: 0 FAILs; s6: no PASS). A list, stat or read that throws rejects, and
 // the caller's safely lets the call through.
-async function judgeFilesOf($: $, dir: string, crew: string, since: number, withText: boolean): Promise<JudgeFile[]> {
-  const files: JudgeFile[] = []
+async function judgeFilesOf($: $, dir: string, crew: string, since: number, withText: boolean): Promise<(JudgeFile & { path: string })[]> {
+  const files: (JudgeFile & { path: string })[] = []
   if (!(await $.fs.exists(dir))) return files
   for (const f of await $.fs.list(dir)) {
     if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew.toLowerCase(), f.name.toLowerCase())) continue
     const { mtimeMs } = await $.fs.stat(`${dir}/${f.name}`)
     if (!(mtimeMs >= since)) continue
-    files.push({ name: f.name.toLowerCase(), text: withText ? String(await $.fs.read(`${dir}/${f.name}`)) : '', mtimeMs })
+    files.push({ name: f.name.toLowerCase(), text: withText ? String(await $.fs.read(`${dir}/${f.name}`)) : '', mtimeMs, path: `${dir}/${f.name}` })
   }
   return files
 }
@@ -1173,7 +1173,7 @@ async function finalReportVerdict($: $, state: State, id: string, text: string):
   const reports = reportDir(dir, crew.crew)
   const read = await within($, EVENT_WAIT_MS, async () => {
     const latest = latestJudge(crew.crew.toLowerCase(), await judgeFilesOf($, reports, crew.crew, since, false), since)
-    return { ruling: latest === undefined ? undefined : judgeRuling(String(await $.fs.read(`${reports}/${latest.name}`))) }
+    return { ruling: latest === undefined ? undefined : judgeRuling(String(await $.fs.read((latest as JudgeFile & { path: string }).path))) }
   })
   if (read === undefined) return undefined
   const { ruling } = read
