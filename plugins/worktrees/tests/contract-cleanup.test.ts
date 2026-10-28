@@ -91,6 +91,12 @@ function world(on: On, opts: Opts = {}) {
     reads.push(p)
     return { value: files.has(p) || (!gone.has(p) && p.includes('/.claude/worktrees/agent-') && !p.endsWith('.json')) }
   })
+  // changed by ADR-0015 amendment 2026-10-28 (a): every sweep lists META_DIR, so the mock answers it with the metas in `files`
+  on('fs.list', async (_, e) => {
+    const dir = slashed(e.path).replace(/\/$/, '')
+    const entries = [...files.keys()].filter(p => p.startsWith(dir + '/') && !p.slice(dir.length + 1).includes('/')).map(p => p.slice(dir.length + 1))
+    return { value: entries.map(name => ({ name, kind: 'file', size: 0, isLink: false })) }
+  })
   on('fs.read', async (_, e) => {
     const p = slashed(e.path)
     reads.push(p)
@@ -166,14 +172,17 @@ const finished = (...as: AgentFixture[]) => Object.fromEntries(as.map(a => [meta
 
 const call = ($: Dollar, type: string) => $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: type } as never) as Promise<{ deny?: string }>
 
-test('1. member merged into the crew branch, crew HEAD as ref', async ($, on) => {
+test('1. member merged into the crew branch only is kept: only the main checkout is a ref', async ($, on) => {
+  // changed by ADR-0015 amendment 2026-10-28 (b)(d): no agent worktree's HEAD is a merged-into ref, so a member
+  // merged only into the crew branch is kept until main holds it (was: removed with the crew HEAD as ref)
   const w = world(on, {
     files: finished(MEMBER),
     merged: (branch, cwd) => branch === MEMBER.branch && cwd === LEAD.path,
   })
   await sweep(w, $, LEAD.path)
-  expect(w.ran).toContain(longpaths(MEMBER.path))
-  expect(w.ran).toContain(`git branch -d ${MEMBER.branch}`)
+  expect(removes(w, MEMBER)).toEqual([])
+  expect(branchDeletes(w, MEMBER)).toEqual([])
+  expect(w.logs).toContain(kept(MEMBER, `${MEMBER.branch} is not in the main checkout's HEAD yet`))
 })
 
 test('2. crew branch merged into an unpushed local target, origin behind', async ($, on) => {
@@ -224,6 +233,12 @@ test('5. a missing or reshaped meta fails open', async ($, on) => {
     w.ran.length = 0
     w.writes.length = 0
     await sweep(w, $, MAIN)
+    // changed by ADR-0015 amendment 2026-10-28 (a): a meta in the dir that doesn't parse as a JSON object makes the
+    // members signal unreadable, and the sweep then keeps every candidate (was: NATIVE removed in all three rounds)
+    if (meta === META_NOT_JSON) {
+      expect(w.ran.filter(r => r.includes('worktree remove'))).toEqual([])
+      continue
+    }
     expect(removes(w, NATIVE).length).toBe(1)
     expect(slotsWrites(w).length).toBeGreaterThan(0)
     expect(removes(w, MEMBER)).toEqual([])
