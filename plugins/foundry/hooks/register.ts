@@ -774,6 +774,8 @@ type State = {
   // agents whose report was captured from their hand-back; their next stop leaves the file alone, once
   handedBack: Set<string>
   planArchitects: Set<string>
+  pendingPlanCalls: Set<string>
+  planConsumed: Set<string>
   // each pending hand-back's message, by agent: what a lead's stop is judged on
   handBacks: Map<string, string>
   // leads whose pending hand-back was held back from the report file by the Examined check (ADR-0004 s6); the stop
@@ -860,7 +862,11 @@ async function writePlanFiles($: $, state: State, message: string): Promise<void
     if (existing.approvedAt !== null) return logRule($, 'plan-file route kept the existing plan: it is approved')
   }
   await $.fs.write(planPath(dir), JSON.stringify({ ...carried, approvedAt: null }, null, 2) + '\n')
-  await $.fs.write(`${dir}/plan.md`, md)
+  try {
+    await $.fs.write(`${dir}/plan.md`, md)
+  } catch (err) {
+    await logRule($, `plan-file route wrote plan.json but not plan.md: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 // The session's plan, read fresh on every call so the foreman's edits count at once; never written here. Undefined
@@ -1496,6 +1502,8 @@ export const register: Register = on => {
     models: new Map(),
     handedBack: new Set(),
     planArchitects: new Set(),
+    pendingPlanCalls: new Set(),
+    planConsumed: new Set(),
     handBacks: new Map(),
     withheld: new Set(),
     waiting: new Map(),
@@ -1521,6 +1529,8 @@ export const register: Register = on => {
     state.models.clear()
     state.handedBack.clear()
     state.planArchitects.clear()
+    state.pendingPlanCalls.clear()
+    state.planConsumed.clear()
     state.handBacks.clear()
     state.withheld.clear()
     state.waiting.clear()
@@ -1541,6 +1551,9 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
     const id = started.agentId
+    // a plan-mode architect's spawn is bound by its Agent call's tool_use_id, never by order (ADR-0015 s9)
+    const call = (e as unknown as { tool_use_id?: unknown }).tool_use_id
+    if (id !== undefined && typeof call === 'string' && state.pendingPlanCalls.delete(call) && !state.planConsumed.has(id)) state.planArchitects.add(id)
     if (id !== undefined) {
       const label = e.name !== undefined && e.name !== '' ? e.name : id
       state.labels.set(id, label)
@@ -1638,12 +1651,18 @@ export const register: Register = on => {
       })
       if (refused !== undefined) return refused
     }
+    // a plan-mode architect from the main session (ADR-0015 s9): its hand-back is the plan to write. Marked before the
+    // call runs, since a foreground agent spawns and hands back inside it; agent.spawn binds the id by this tool_use_id.
+    const planCall = e.agentId === undefined && e.subagent_type === 'foundry:architect' && typeof e.prompt === 'string' && e.prompt.split('\n')[0].replace(/[\r ]+$/, '') === 'Mode: plan'
+    const callId = (e as unknown as { tool_use_id?: unknown }).tool_use_id
+    const pending = planCall && typeof callId === 'string' && callId !== '' ? callId : undefined
+    if (pending !== undefined) state.pendingPlanCalls.add(pending)
     const result = await next(e)
+    if (pending !== undefined) state.pendingPlanCalls.delete(pending)
     if (result.deny !== undefined) return result
     const raw = (result.result as { agentId?: unknown } | undefined)?.agentId
     const id = typeof raw === 'string' ? raw : undefined
-    // a plan-mode architect from the main session (ADR-0015 s9): its hand-back is the plan to write
-    if (e.agentId === undefined && id !== undefined && e.subagent_type === 'foundry:architect' && typeof e.prompt === 'string' && e.prompt.split('\n')[0].replace(/[\r ]+$/, '') === 'Mode: plan') state.planArchitects.add(id)
+    if (planCall && id !== undefined && !state.planConsumed.has(id)) state.planArchitects.add(id)
     if (caller?.crew === undefined && !startsLead) return result
     // the name agent.spawn recorded, which the report file will carry
     const name = (id === undefined ? undefined : state.labels.get(id)) ?? (typeof e.name === 'string' && e.name !== '' ? e.name : id)
@@ -1683,7 +1702,6 @@ export const register: Register = on => {
       const inCrew = await safely($, 'hand-back check', async () => crewOf(id, (await agentsOf($, state)).all) !== undefined)
       if (inCrew === true) return { deny: HANDBACK_REFUSAL }
     }
-    if (state.planArchitects.delete(id)) await safely($, 'plan-file route', () => writePlanFiles($, state, message))
     if (message.trim() !== '') {
       // a real report is marked before any await, so a stop that races this capture never overwrites it
       state.handedBack.add(id)
@@ -1707,7 +1725,13 @@ export const register: Register = on => {
         await writeReport($, state, crew, id, message)
       })
     }
-    return next(e)
+    const passed = await next(e)
+    // the plan-file route runs only for a hand-back that went through; a denied one leaves the id usable
+    if (passed.deny === undefined && state.planArchitects.delete(id)) {
+      state.planConsumed.add(id)
+      await safely($, 'plan-file route', () => writePlanFiles($, state, message))
+    }
+    return passed
   }).catch(failOpen)
 
   // every model request is activity, the main session's included; the stream passes untouched
