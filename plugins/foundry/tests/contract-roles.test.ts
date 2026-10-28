@@ -183,7 +183,9 @@ test('case 21: a plan.json block of {not json writes nothing and logs why', asyn
 test('case 21: a hand-back with no plan.md block writes nothing and logs why', async ($, on) => {
   const w = await setup($, on)
   await spawn(w, undefined, 'foundry:architect', 'Mode: plan\nGoal: rate limiting')
-  await handBack($, 'new1', message(undefined, undefined))
+  // built inline: an explicit undefined argument takes message()'s default, which would send both blocks
+  const noMd = ['VERDICT: plan ready, both files below.', `${FENCE}json plan.json`, JSON.stringify(CARRIED, null, 2), FENCE, 'Report: two crews, one wave each.'].join('\n')
+  await handBack($, 'new1', noMd)
   expect(planWrites(w)).toEqual([])
   expect(logged(w, NOTHING).length).toBeGreaterThan(0)
 })
