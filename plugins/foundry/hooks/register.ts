@@ -773,6 +773,9 @@ type State = {
   models: Map<string, string>
   // agents whose report was captured from their hand-back; their next stop leaves the file alone, once
   handedBack: Set<string>
+  planArchitects: Set<string>
+  planRoute: Promise<unknown>
+  pendingPlanCalls: Set<string>
   // each pending hand-back's message, by agent: what a lead's stop is judged on
   handBacks: Map<string, string>
   // leads whose pending hand-back was held back from the report file by the Examined check (ADR-0004 s6); the stop
@@ -820,6 +823,66 @@ async function rootOf($: $, state: State): Promise<string | undefined> {
   const root = foundryDir(await gitCommonDir($, await $.session.cwd()), await homeDir($), await $.session.id())
   if (root !== undefined) state.root = root
   return root
+}
+
+// The plan-file route (ADR-0015 s9): the inner lines of the first block that opens with exactly `open` and ends at the
+// next line that is exactly four backticks, joined with a newline. Undefined when there is no such block.
+function fencedBlock(message: string, open: string): string | undefined {
+  const lines = message.split('\n').map(l => l.replace(/\r$/, ''))
+  const start = lines.indexOf(open)
+  if (start < 0) return undefined
+  const end = lines.indexOf('````', start + 1)
+  return end < 0 ? undefined : lines.slice(start + 1, end).join('\n')
+}
+
+// A plan-mode architect's hand-back, written to the two fixed paths under the foundry dir; never over a plan that is
+// approved or unreadable. Says why in the debug log when it writes nothing.
+// Why the plan on disk must be kept, read fresh: undefined when there is none or it is unapproved.
+async function keepReason($: $, dir: string): Promise<string | undefined> {
+  if (!(await $.fs.exists(planPath(dir)))) return undefined
+  let existing: Plan | undefined
+  try {
+    existing = parsePlan(String(await $.fs.read(planPath(dir))))
+  } catch {
+    return 'it could not be read'
+  }
+  if (existing === undefined) return 'it is not a readable plan'
+  return existing.approvedAt === null ? undefined : 'it is approved'
+}
+
+// Routes run one at a time, so a second hand-back waits until the first has finished both writes; a failed route
+// does not stop the chain.
+function writePlanFiles($: $, state: State, message: string): Promise<void> {
+  const run = state.planRoute.catch(() => undefined).then(() => routePlanFiles($, state, message))
+  state.planRoute = run.catch(() => undefined)
+  return run
+}
+
+async function routePlanFiles($: $, state: State, message: string): Promise<void> {
+  const json = fencedBlock(message, '````json plan.json')
+  const md = fencedBlock(message, '````markdown plan.md')
+  if (json === undefined || md === undefined) return logRule($, `plan-file route wrote nothing: ${json === undefined ? 'no plan.json block' : 'no plan.md block'}`)
+  if (parsePlan(json) === undefined) return logRule($, 'plan-file route wrote nothing: the plan.json block is not a plan')
+  const dir = await rootOf($, state)
+  if (dir === undefined) return logRule($, 'plan-file route wrote nothing: no foundry dir')
+  let carried: unknown
+  try {
+    carried = JSON.parse(json.startsWith('\uFEFF') ? json.slice(1) : json)
+  } catch {
+    return logRule($, 'plan-file route wrote nothing: the plan.json block is not JSON')
+  }
+  if (!isRecord(carried)) return logRule($, 'plan-file route wrote nothing: the plan.json block is not an object')
+  // Read inside the serialised route, right before the write, so an approval that lands while this route waits its turn
+  // is kept. An approval landing between this read and the write is still overwritten: the foreman's edit shares no
+  // lock with the hook.
+  const kept = await keepReason($, dir)
+  if (kept !== undefined) return logRule($, `plan-file route kept the existing plan: ${kept}`)
+  await $.fs.write(planPath(dir), JSON.stringify({ ...carried, approvedAt: null }, null, 2) + '\n')
+  try {
+    await $.fs.write(`${dir}/plan.md`, md)
+  } catch (err) {
+    await logRule($, `plan-file route wrote plan.json but not plan.md: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 // The session's plan, read fresh on every call so the foreman's edits count at once; never written here. Undefined
@@ -1454,6 +1517,9 @@ export const register: Register = on => {
     labels: new Map(),
     models: new Map(),
     handedBack: new Set(),
+    planArchitects: new Set(),
+    planRoute: Promise.resolve(),
+    pendingPlanCalls: new Set(),
     handBacks: new Map(),
     withheld: new Set(),
     waiting: new Map(),
@@ -1478,6 +1544,8 @@ export const register: Register = on => {
     state.labels.clear()
     state.models.clear()
     state.handedBack.clear()
+    state.planArchitects.clear()
+    state.pendingPlanCalls.clear()
     state.handBacks.clear()
     state.withheld.clear()
     state.waiting.clear()
@@ -1498,6 +1566,9 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
     const id = started.agentId
+    // a plan-mode architect's spawn is bound by its Agent call's tool_use_id, never by order (ADR-0015 s9)
+    const call = (e as unknown as { tool_use_id?: unknown }).tool_use_id
+    if (id !== undefined && typeof call === 'string' && state.pendingPlanCalls.delete(call)) state.planArchitects.add(id)
     if (id !== undefined) {
       const label = e.name !== undefined && e.name !== '' ? e.name : id
       state.labels.set(id, label)
@@ -1595,10 +1666,23 @@ export const register: Register = on => {
       })
       if (refused !== undefined) return refused
     }
-    const result = await next(e)
-    if (result.deny !== undefined || (caller?.crew === undefined && !startsLead)) return result
+    // a plan-mode architect from the main session (ADR-0015 s9): its hand-back is the plan to write. Marked before the
+    // call runs, since a foreground agent spawns and hands back inside it; agent.spawn binds the id by this tool_use_id.
+    const planCall = e.agentId === undefined && e.subagent_type === 'foundry:architect' && typeof e.prompt === 'string' && e.prompt.split('\n')[0].replace(/[\r ]+$/, '') === 'Mode: plan'
+    const callId = (e as unknown as { tool_use_id?: unknown }).tool_use_id
+    const pending = planCall && typeof callId === 'string' && callId !== '' ? callId : undefined
+    if (pending !== undefined) state.pendingPlanCalls.add(pending)
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } finally {
+      if (pending !== undefined) state.pendingPlanCalls.delete(pending)
+    }
+    if (result.deny !== undefined) return result
     const raw = (result.result as { agentId?: unknown } | undefined)?.agentId
     const id = typeof raw === 'string' ? raw : undefined
+    if (planCall && id !== undefined) state.planArchitects.add(id)
+    if (caller?.crew === undefined && !startsLead) return result
     // the name agent.spawn recorded, which the report file will carry
     const name = (id === undefined ? undefined : state.labels.get(id)) ?? (typeof e.name === 'string' && e.name !== '' ? e.name : id)
     const note = await safely($, 'report note', async () => {
@@ -1660,7 +1744,12 @@ export const register: Register = on => {
         await writeReport($, state, crew, id, message)
       })
     }
-    return next(e)
+    const passed = await next(e)
+    // the plan-file route runs only for a hand-back that went through, not denied and not an error
+    if (passed.deny === undefined && !(passed as { isError?: unknown }).isError && state.planArchitects.has(id)) {
+      await safely($, 'plan-file route', () => writePlanFiles($, state, message))
+    }
+    return passed
   }).catch(failOpen)
 
   // every model request is activity, the main session's included; the stream passes untouched

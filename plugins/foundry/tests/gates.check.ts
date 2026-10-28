@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (...parts: string[]): string => {
@@ -64,7 +64,7 @@ test('writer.md pins an effort of low or medium', () => {
 // ADR-0004 section 6, the foreman's merge gate: the crew's newest judge file modified at or after
 // approvedAt (not "highest-numbered"); a PASS with no UNSCOPED line; its Head: value equals
 // `git rev-parse <crew branch>`, or its Patch: value equals the patch id of PATCH_COMMAND with the lead's
-// checks re-run green after the rebase.
+// checks re-run green after the merge of the target.
 test('run skill merge rule names the Head: and Patch: lines', () => {
   const run = read('skills', 'run', 'SKILL.md')
   has(run, HEAD_LINE, 'skills/run/SKILL.md')
@@ -80,4 +80,42 @@ test('run skill merge rule refuses a PASS with an UNSCOPED line', () => has(read
 test('run skill merge rule re-runs the lead checks when only the patch id matches', () => {
   const run = read('skills', 'run', 'SKILL.md')
   assert.ok(/Patch: [^\n]*(checks|re-run)/i.test(run) || /patch id[^\n]*(checks|re-run)/i.test(run), 'skills/run/SKILL.md does not tie a patch-id match to re-running the checks')
+})
+
+// ADR-0004 sections 3 and 6: each Head:/Patch: line is matched in full: the literal at column 0, exactly 40 chars of
+// [0-9a-f], then nothing but spaces or tabs. These tests run the hook's own matcher, judgeRuling, on judge-report text.
+type Ruling = { head?: string; patch?: string }
+let judgeRuling: (text: string) => Ruling
+try {
+  judgeRuling = ((await import(pathToFileURL(join(PLUGIN, 'hooks', 'register.ts')).href)) as { judgeRuling: (text: string) => Ruling }).judgeRuling
+} catch (err) {
+  judgeRuling = () => {
+    throw new Error(`hooks/register.ts did not load: ${String(err)}`)
+  }
+}
+const SHA = 'a'.repeat(20) + '0123456789'.repeat(2)
+const report = (head: string, patch: string) => `VERDICT: PASS\n\n## Proof checked\n${head}\n${patch}\n\n## Findings\nNone.\n`
+// the ruling of a report whose only variable line is `line`, under the literal's own slot
+const rulingOf = (literal: string, line: string): string | undefined => {
+  const r = literal === HEAD_LINE ? judgeRuling(report(line, `${PATCH_LINE}${SHA}`)) : judgeRuling(report(`${HEAD_LINE}${SHA}`, line))
+  return literal === HEAD_LINE ? r.head : r.patch
+}
+for (const literal of [HEAD_LINE, PATCH_LINE]) {
+  const name = literal.trim()
+  test(`${name} line: bare 40 hex is accepted`, () => assert.equal(rulingOf(literal, `${literal}${SHA}`), SHA))
+  test(`${name} line: trailing spaces and tabs are accepted`, () => assert.equal(rulingOf(literal, `${literal}${SHA}  \t`), SHA))
+  test(`${name} line: a parenthesised trailing note is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA} (rebased)`), undefined))
+  test(`${name} line: a dashed trailing note is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA} -- note`), undefined))
+  test(`${name} line: an indented line is rejected`, () => assert.equal(rulingOf(literal, ` ${literal}${SHA}`), undefined))
+  test(`${name} line: uppercase hex is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA.toUpperCase()}`), undefined))
+  test(`${name} line: a 39-digit value is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA.slice(0, 39)}`), undefined))
+  test(`${name} line: a 64-digit value is rejected`, () => assert.equal(rulingOf(literal, `${literal}${SHA}${SHA.slice(0, 24)}`), undefined))
+}
+
+test('judge.md template carries the bare Head: and Patch: lines and the trailing-whitespace rule', () => {
+  const judge = read('agents', 'judge.md')
+  const lines = judge.split('\n')
+  assert.ok(lines.includes('Head: <40 lowercase hex>'), 'agents/judge.md has no line exactly "Head: <40 lowercase hex>"')
+  assert.ok(lines.includes('Patch: <40 lowercase hex>'), 'agents/judge.md has no line exactly "Patch: <40 lowercase hex>"')
+  has(judge, 'nothing after but spaces or tabs', 'agents/judge.md')
 })
