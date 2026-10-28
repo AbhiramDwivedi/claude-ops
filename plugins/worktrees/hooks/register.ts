@@ -895,18 +895,27 @@ async function tellUnreadable($: $, warn: Warn | undefined, path: string): Promi
   }
 }
 
-async function stateUnreadable($: $, repo: Repo): Promise<boolean> {
-  if (!(await $.fs.exists(stateFile(repo)))) return false
+const isPlainObject = (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+// The one read of slots.json: every decision is made from its answer. A missing file is a fresh state; a file that does
+// not parse, is empty, is not an object, or holds `active` or `slots` as anything but a plain object is undefined.
+async function loadState($: $, repo: Repo): Promise<State | undefined> {
+  if (!(await $.fs.exists(stateFile(repo)))) return parseState(undefined)
+  const text = (await $.fs.read(stateFile(repo))) as string
   try {
-    const raw = JSON.parse((await $.fs.read(stateFile(repo))) as string) as unknown
-    return typeof raw !== 'object' || raw === null || Array.isArray(raw)
+    const raw = JSON.parse(text) as Record<string, unknown> | null
+    if (!isPlainObject(raw)) return undefined
+    const top = raw as Record<string, unknown>
+    if ('active' in top && !isPlainObject(top.active)) return undefined
+    if ('slots' in top && !isPlainObject(top.slots)) return undefined
+    return parseState(text)
   } catch {
-    return true
+    return undefined
   }
 }
 
-async function readState($: $, repo: Repo): Promise<State> {
-  return parseState((await $.fs.exists(stateFile(repo))) ? ((await $.fs.read(stateFile(repo))) as string) : undefined)
+async function stateUnreadable($: $, repo: Repo): Promise<boolean> {
+  return (await loadState($, repo)) === undefined
 }
 
 // Creating a directory either succeeds or finds it there, atomically: the lock across sessions.
@@ -937,12 +946,13 @@ function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: S
       else await $.clock.sleep(100)
     }
     try {
-      if (await stateUnreadable($, repo)) {
+      const current = await loadState($, repo)
+      if (current === undefined) {
         await $.ui.log('worktrees: slots.json unreadable, left as is', { to: 'debug' })
         await tellUnreadable($, warn, stateFile(repo))
         return undefined
       }
-      const { state, value } = await fn(await readState($, repo))
+      const { state, value } = await fn(current)
       await $.fs.write(stateFile(repo), serializeState(state))
       return value
     } finally {
@@ -1019,11 +1029,16 @@ function portBaseOf(options: Record<string, unknown>): number {
 // or when the worktree folder is gone.
 async function cleanWorktree($: $, repo: Repo, path: string, base: number, release: boolean, warn?: Warn): Promise<string[]> {
   const windows = await isWindows($)
-  const state = await readState($, repo)
+  const loaded = await loadState($, repo)
+  if (loaded === undefined) {
+    await $.ui.log('worktrees: slots.json unreadable, left as is', { to: 'debug' })
+    await tellUnreadable($, warn, stateFile(repo))
+  }
+  const state = loaded ?? parseState(undefined)
   const slot = slotOf(state.slots, path, windows)
   const notes = await stopProcesses($, windows, [path], slot === undefined ? [] : ports(base, slot))
   const freeSlot = slot !== undefined && (release || !(await $.fs.exists(path)))
-  if (freeSlot || state.active[normPath(path, windows)] !== undefined) {
+  if (loaded !== undefined && (freeSlot || state.active[normPath(path, windows)] !== undefined)) {
     await withState($, repo, async s => ({
       state: markDone(freeSlot ? { ...s, slots: releaseSlot(s.slots, path, windows) } : s, path, windows),
       value: undefined,
@@ -1078,11 +1093,6 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   if (found === undefined) return { removed: [], kept: [] }
   const repo: Repo = { top: found.main, common: found.common, mainRoot: found.main }
   const log = (line: string) => $.ui.log(`worktrees: ${line}`, { to: 'debug' })
-  if (await stateUnreadable($, repo)) {
-    await log('self-clean skipped: slots.json unreadable')
-    await tellUnreadable($, warn, stateFile(repo))
-    return { removed: [], kept: [] }
-  }
   // the refs: the checkout the merge ran in (when it is in a work tree), then the main checkout; each ref is that
   // checkout's HEAD, and every git command for it runs there
   const refs: string[] = []
@@ -1117,7 +1127,12 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   }
 
   const worktrees = parseWorktrees((await git($, found.main, 'worktree', 'list', '--porcelain')).out)
-  const state = await readState($, repo)
+  const state = await loadState($, repo)
+  if (state === undefined) {
+    await log('self-clean skipped: slots.json unreadable')
+    await tellUnreadable($, warn, stateFile(repo))
+    return { removed: [], kept: [] }
+  }
   const now = await $.clock.now()
   const finishedPaths: string[] = []
   const removed: string[] = []
@@ -1209,10 +1224,11 @@ type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean; remove
 
 type Facts = { facts: BranchFacts[]; worktrees: Worktree[]; sync: MainSync; defaultBranch: string }
 
-async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
+async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | undefined> {
   const head = await git($, repo.top, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
   const defaultBranch = head.ok ? head.out.replace(/^origin\//, '') : 'main'
-  const state = await readState($, repo)
+  const state = await loadState($, repo)
+  if (state === undefined) return undefined
   const now = await $.clock.now()
   const current = (await git($, repo.top, 'branch', '--show-current')).out
   const worktrees = parseWorktrees((await git($, repo.top, 'worktree', 'list', '--porcelain')).out)
@@ -1352,7 +1368,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
   if (repo === undefined) return undefined
   const windows = await isWindows($)
   // an unreadable slots.json reads as "no agent is live": remove nothing, delete no branch, write nothing
-  if (await stateUnreadable($, repo)) {
+  const unreadable = async (): Promise<TidyReport> => {
     const path = stateFile(repo)
     await $.ui.log('worktrees: tidy skipped: slots.json unreadable', { to: 'debug' })
     await tellUnreadable($, warn, path)
@@ -1364,10 +1380,13 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       unmerged: [],
     }
   }
+  if (await stateUnreadable($, repo)) return unreadable()
   const lines: string[] = []
   let acted = false
   if (!(await git($, repo.top, 'fetch', '--prune', 'origin')).ok) lines.push('git fetch failed; using the remote branches as last fetched')
-  const { facts, worktrees, sync, defaultBranch } = await gatherFacts($, repo, windows)
+  const gathered = await gatherFacts($, repo, windows)
+  if (gathered === undefined) return unreadable()
+  const { facts, worktrees, sync, defaultBranch } = gathered
   const plans = facts.map(decideBranch)
   const removed: string[] = []
 
@@ -1432,7 +1451,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       if (!live.has(path) && !dead.has(path) && !(await $.fs.exists(path))) dead.add(path)
     }
   }
-  const table = (await readState($, repo)).slots
+  const table = ((await loadState($, repo)) ?? parseState(undefined)).slots
   const deadSlots: [number, Slot][] = []
   for (const [n, s] of Object.entries(table.slots)) if (!(await $.fs.exists(s.path))) deadSlots.push([Number(n), s])
   const orphanPorts = deadSlots.flatMap(([n]) => ports(base, n))
@@ -1668,7 +1687,7 @@ export const register: Register = (on, options) => {
       // a session that itself runs in a worktree keeps what it started there
       const own = worktreeRootOf(await $.session.cwd())
       if (own !== undefined && normPath(own, windows) === normPath(path, windows)) continue
-      const table = (await readState($, repo)).slots
+      const table = ((await loadState($, repo)) ?? parseState(undefined)).slots
       if (!(await $.fs.exists(path)) && slotOf(table, path, windows) === undefined) continue
       // the process probe takes seconds on Windows: run it after the agent's stop, not inside it
       $.clock.after(0, () => {
