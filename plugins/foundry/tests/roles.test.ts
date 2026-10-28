@@ -399,28 +399,24 @@ test('two accepted plan hand-backs whose routes overlap leave plan.json and plan
   expect(md).toBe(goal === 'Plan A' ? '# A' : '# B')
 })
 
-test('an approval written to plan.json after the route read it, before its write, is not overwritten', async ($, on) => {
+test('a route queued behind another reads the plan only once its turn comes: an approval that lands meanwhile is kept', async ($, on) => {
   const h = await readyArchitect($, on)
-  const unapproved = jsonOf(planWith({ approvedAt: null })) + '\n'
-  const approved = jsonOf(planWith({ approvedAt: '2026-10-28T16:00:00Z' })) + '\n'
-  h.w.files.set(PLAN_JSON, unapproved)
-  // the first read of plan.json returns the unapproved text, but only after the test has changed the file on disk
-  let reached = false
-  let letGo = () => {}
-  const gate = new Promise<void>(r => (letGo = r))
-  let first = true
-  h.afterRead.fn = async p => {
-    if (p !== PLAN_JSON || !first) return
-    first = false
-    reached = true
-    await gate
-  }
-  const hb = handBackFrom($, 'new1')
-  await waitFor(() => reached, 'the route to read plan.json')
+  const msgA = join(jsonBlock(jsonOf(planWith({ goal: 'Plan A' }))), mdBlock('# A'))
+  const msgB = join(jsonBlock(jsonOf(planWith({ goal: 'Plan B' }))), mdBlock('# B'))
+  // route A writes plan.json, then stalls on its plan.md write
+  let releaseMd = () => {}
+  h.w.writeHolds.set(PLAN_MD, new Promise<void>(r => (releaseMd = r)))
+  const hbA = handBackFrom($, 'new1', msgA)
+  await waitFor(() => h.w.files.has(PLAN_JSON), "A's plan.json")
+  // route B (the foreman sent the architect back) is queued behind A
+  const hbB = handBackFrom($, 'new1', msgB)
+  await sleep(100)
+  // the foreman approves the plan on disk while A is stalled and B waits
+  const approved = jsonOf(planWith({ goal: 'Plan A', approvedAt: '2026-10-28T16:00:00Z' })) + '\n'
   h.w.files.set(PLAN_JSON, approved)
-  letGo()
-  await hb
+  releaseMd()
+  await Promise.all([hbA, hbB])
   expect(h.w.files.get(PLAN_JSON)).toBe(approved)
-  expect(h.w.files.has(PLAN_MD)).toBe(false)
-  expect(logged(h.w, KEPT).length).toBeGreaterThan(0)
+  expect(h.w.files.get(PLAN_MD)).toBe('# A')
+  expect(logged(h.w, 'foundry: plan-file route kept the existing plan: it is approved').length).toBeGreaterThan(0)
 })
