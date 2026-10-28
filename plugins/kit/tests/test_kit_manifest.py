@@ -577,6 +577,173 @@ class KitManifest(unittest.TestCase):
         self.assertEqual(gate_exit("Foundry:Judge"), 0)
         self.assertEqual(gate_exit("kit:builder"), 2)
 
+    # ---------- read-only guard (ADR-0013 amendment, 2026-10-27) ----------
+
+    REFUSED = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect", "foundry:devops",
+               "foundry:lead", "foundry:writer")
+
+    def guard_facts(self, name, read_only=True, declared_by=None):
+        facts = fixture_facts()
+        by = declared_by or (name.split(":")[0] if ":" in name else "project")
+        facts["agents"] = [{"name": name, "readOnly": read_only, "declaredBy": by}]
+        return facts
+
+    def stored(self, extra):
+        """A good manifest plus hand-written agents (bypassing the input guard), as the old file."""
+        self.ok(self.write())
+        with open(self.manifest, encoding="utf-8") as f:
+            m = json.load(f)
+        m["agents"] = sorted(m["agents"] + extra, key=lambda a: a["name"])
+        with open(self.manifest, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(m, indent=2) + "\n")
+        return self.raw(self.manifest)
+
+    def dropped(self, name, by):
+        return "kit_manifest: warning: dropped %s (declaredBy %s): READ_ONLY_EDITING_TYPE" % (name, by)
+
+    def load_module(self):
+        spec = importlib.util.spec_from_file_location("kit_manifest_guard_under_test", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_guard_write_refuses_each_refused_type_with_one_stderr_line(self):
+        for name in self.REFUSED:
+            with self.subTest(name):
+                self.err(self.write(self.guard_facts(name)), "READ_ONLY_EDITING_TYPE", 2)
+                self.assertFalse(os.path.exists(self.manifest))
+
+    def test_guard_write_refuses_casing_variants(self):
+        for name in ("General-Purpose", "GENERAL-PURPOSE", "foundry:LEAD"):
+            with self.subTest(name):
+                self.err(self.write(self.guard_facts(name)), "READ_ONLY_EDITING_TYPE", 2)
+
+    def test_guard_refusal_keeps_an_existing_manifest_byte_for_byte(self):
+        self.ok(self.write())
+        before = self.raw(self.manifest)
+        for name in ("kit:builder", "General-Purpose", "foundry:LEAD"):
+            with self.subTest(name):
+                self.err(self.write(self.guard_facts(name)), "READ_ONLY_EDITING_TYPE", 2)
+                self.assertEqual(self.raw(self.manifest), before)
+
+    def test_guard_lookalikes_are_not_refused(self):
+        cases = [("plugin:general-purpose", "plugin"), ("lead", "project"), ("foundry:judge", "foundry"),
+                 ("kit:scout", "kit"), ("kit:reviewer", "kit")]
+        for name, by in cases:
+            with self.subTest(name):
+                self.ok(self.write(self.guard_facts(name, declared_by=by)))
+                self.assertTrue(self.agents()[name]["readOnly"])
+
+    def test_guard_refused_names_at_read_only_false_are_normal_entries(self):
+        for name in self.REFUSED + ("General-Purpose",):
+            with self.subTest(name):
+                self.ok(self.write(self.guard_facts(name, read_only=False)))
+                self.assertFalse(self.agents()[name]["readOnly"])
+
+    def test_guard_schema_errors_win_over_the_refusal(self):
+        facts = self.guard_facts("kit:builder")
+        facts["agents"][0]["readOnly"] = "yes"
+        self.err(self.write(facts), "BAD_FIELD", 2)
+        self.err(self.write(self.guard_facts("foundry:lead", declared_by="kit")), "DECLARER_MISMATCH", 2)
+        facts = self.guard_facts("kit:builder")
+        del facts["checks"]
+        self.err(self.write(facts), "MISSING_FIELD", 2)
+
+    def test_guard_declare_refuses_before_reading_the_manifest(self):
+        for name in ("foundry:lead", "foundry:LEAD", "foundry:writer"):
+            with self.subTest(name):
+                self.err(self.declare("foundry", name), "READ_ONLY_EDITING_TYPE", 2)  # no manifest at all
+        self.put("manifest.json", b"{nope")  # corrupt: reading it would give MANIFEST_CORRUPT (3)
+        self.err(self.declare("foundry", "foundry:lead"), "READ_ONLY_EDITING_TYPE", 2)
+        os.remove(self.manifest)
+        self.ok(self.write())
+        before = self.raw(self.manifest)
+        self.err(self.declare("foundry", "foundry:LEAD"), "READ_ONLY_EDITING_TYPE", 2)
+        self.assertEqual(self.raw(self.manifest), before)
+
+    def test_guard_declare_mixed_case_prefix_is_a_declarer_mismatch(self):
+        self.ok(self.write())
+        self.err(self.declare("foundry", "Foundry:Lead"), "DECLARER_MISMATCH", 2)
+
+    def test_guard_declare_kit_builder_mixed_case_fails_whichever_code_fires(self):
+        self.ok(self.write())
+        before = self.raw(self.manifest)
+        self.assertNotEqual(self.declare("kit", "Kit:Builder").returncode, 0)
+        self.assertNotEqual(self.declare("foundry", "Kit:Builder").returncode, 0)
+        self.assertEqual(self.raw(self.manifest), before)
+
+    def test_guard_declare_lookalike_still_works(self):
+        self.ok(self.write())
+        self.ok(self.declare("foundry", "foundry:judge"))
+
+    def test_guard_write_drops_a_carried_refused_entry_with_the_exact_warning(self):
+        self.stored([{"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"}])
+        r = self.write()
+        self.assertTrue(self.ok(r)["changed"])
+        self.assertEqual(r.stderr.splitlines(), [self.dropped("foundry:lead", "foundry")])
+        self.assertNotIn("foundry:lead", self.agents())
+
+    def test_guard_write_keeps_non_refused_carried_entries_and_names_stored_casing(self):
+        self.stored([{"name": "foundry:judge", "readOnly": True, "declaredBy": "foundry"},
+                     {"name": "foundry:LEAD", "readOnly": True, "declaredBy": "foundry"},
+                     {"name": "foundry:devops", "readOnly": False, "declaredBy": "foundry"}])
+        r = self.write()
+        self.ok(r)
+        self.assertEqual(r.stderr.splitlines(), [self.dropped("foundry:LEAD", "foundry")])
+        names = self.agents()
+        self.assertIn("foundry:judge", names)
+        self.assertIn("foundry:devops", names)
+        self.assertNotIn("foundry:LEAD", names)
+
+    def test_guard_warnings_come_one_per_entry_in_old_file_sort_order(self):
+        self.stored([{"name": "foundry:writer", "readOnly": True, "declaredBy": "foundry"},
+                     {"name": "foundry:architect", "readOnly": True, "declaredBy": "foundry"},
+                     {"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"}])
+        r = self.declare("foundry", "foundry:judge")
+        self.assertTrue(self.ok(r)["changed"])
+        self.assertEqual(r.stderr.splitlines(), [self.dropped("foundry:architect", "foundry"),
+                                                 self.dropped("foundry:lead", "foundry"),
+                                                 self.dropped("foundry:writer", "foundry")])
+        self.assertIn("foundry:judge", self.agents())
+        for n in ("foundry:architect", "foundry:lead", "foundry:writer"):
+            self.assertNotIn(n, self.agents())
+
+    def test_guard_declare_drops_a_carried_casing_variant_as_stored(self):
+        self.stored([{"name": "General-Purpose", "readOnly": True, "declaredBy": "project"}])
+        r = self.declare("foundry", "foundry:judge")
+        self.assertTrue(self.ok(r)["changed"])
+        self.assertEqual(r.stderr.splitlines(), [self.dropped("General-Purpose", "project")])
+        self.assertNotIn("General-Purpose", self.agents())
+
+    def test_guard_drop_warnings_precede_the_temp_file_warning(self):
+        self.three_files()
+        self.stored([{"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"}])
+        with mock.patch("os.remove", self.fail_from(os.remove, 1)):
+            _, code, err = self.declare_in_process()
+        self.assertEqual(code, 0, err)
+        lines = err.splitlines()
+        self.assertEqual(len(lines), 2, err)
+        self.assertEqual(lines[0], self.dropped("foundry:lead", "foundry"))
+        self.assertRegex(lines[1], r"^kit_manifest: warning: wrote everything, but left ")
+
+    def test_guard_read_manifest_stays_tolerant_of_a_refused_read_only_entry(self):
+        self.stored([{"name": "general-purpose", "readOnly": True, "declaredBy": "project"},
+                     {"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"}])
+        result = self.load_module().read_manifest(self.manifest)  # must not raise
+        self.assertIn("general-purpose", repr(result))
+        self.assertIn("foundry:lead", repr(result))
+
+    def test_guard_skip_list_leaves_out_every_refused_name_whatever_its_flag(self):
+        agents = [{"name": n, "readOnly": ro, "declaredBy": "project"} for n in self.REFUSED + ("General-Purpose",)
+                  for ro in (True, False)]
+        agents.append({"name": "foundry:judge", "readOnly": True, "declaredBy": "foundry"})
+        self.assertEqual(self.load_module().skip_list(agents), ["Explore", "Plan", "claude-code-guide", "foundry:judge"])
+
+    def test_guard_skip_list_keeps_lookalikes(self):
+        looks = ["plugin:general-purpose", "lead", "kit:scout", "kit:builder2", "builder"]
+        agents = [{"name": n, "readOnly": True, "declaredBy": "project"} for n in looks]
+        self.assertEqual(sorted(self.load_module().skip_list(agents)[3:]), sorted(looks))
+
 
 if __name__ == "__main__":
     unittest.main()
