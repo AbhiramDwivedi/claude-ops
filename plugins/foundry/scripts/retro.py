@@ -7,6 +7,10 @@ Reads decisions.md, events*.jsonl, messages*.jsonl, reports/*/*-judge*.md and pl
 nothing; prints one JSON object on stdout and exits 0. A missing dir exits 2 with
 "retro: NO_FOUNDRY_DIR: <path>" on stderr. Python 3.9+, standard library only.
 
+Also reports "leftovers": for a dir shaped <git common dir>/foundry/<session>, the spawned agents whose
+worktree-agent-<id> branch or .claude/worktrees/agent-<id> folder is still there, read from git (rev-parse
+and for-each-ref only) and the disk.
+
 The script counts and the skill judges. Where the log does not say, the output says "not recorded"
 and never a zero. Message, prompt and report text is never printed (P8): a judge report is read
 only as far as its first non-empty line.
@@ -17,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 NR = "not recorded"
@@ -387,6 +392,68 @@ def read_plan(directory):
             "agentCap": plan.get("agentCap") if good_int(plan.get("agentCap")) else None, "status": status}
 
 
+GIT_TIMEOUT = 30
+AGENT_ID = re.compile(r"^[0-9a-z]+$")
+
+
+def git_out(cwd, *args):
+    """Run a read-only git command; return stdout, or None on any failure."""
+    env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True,
+                           encoding="utf-8", timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def same_path(a, b):
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def spawned_ids(files):
+    ids = set()
+    for path in files:
+        for line in read_lines(path):
+            if line is None or not line.strip():
+                continue
+            got = valid_event(line)
+            if got is None or got[0].get("event") != "spawn":
+                continue
+            i = got[0].get("agentId")
+            if isinstance(i, str) and AGENT_ID.match(i):
+                ids.add(i)
+    return ids
+
+
+def leftovers(directory, event_files):
+    """Branches and folders still left by this dir's spawned agents, or NR when it cannot be told."""
+    if not event_files:
+        return NR
+    common = os.path.dirname(os.path.dirname(directory))
+    if os.path.basename(os.path.dirname(directory)) != "foundry" or os.path.basename(common) != ".git":
+        return NR
+    top = git_out(common, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if top is None or not same_path(top.strip(), common):
+        return NR
+    main = os.path.dirname(common)
+    refs = git_out(main, "for-each-ref", "--format=%(refname)", "refs/heads/")
+    if refs is None:
+        return NR
+    have = set(refs.splitlines())
+    branches, folders, agents = [], [], set()
+    for i in sorted(spawned_ids(event_files)):
+        name = "worktree-agent-" + i
+        if "refs/heads/" + name in have:
+            branches.append(name)
+            agents.add(i)
+        if os.path.isdir(os.path.join(main, ".claude", "worktrees", "agent-" + i)):
+            folders.append(".claude/worktrees/agent-" + i)
+            agents.add(i)
+    return {"branches": sorted(branches), "folders": sorted(folders), "count": len(agents)}
+
+
 def retro(directory):
     runs, pre, pre_used = read_decisions(os.path.join(directory, "decisions.md"))
     has_headings = bool(runs)
@@ -419,6 +486,7 @@ def retro(directory):
         "plan": read_plan(directory),
         "eventsSkipped": skipped,
         "eventsOutsideRuns": outside,
+        "leftovers": leftovers(directory, event_files),
     }
 
 
