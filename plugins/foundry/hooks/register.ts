@@ -169,6 +169,7 @@ export type FoundryEvent =
   | { event: 'stall'; crew: string; agent: string; kind: 'agent' | 'idle-lead'; minutes: number }
   | { event: 'tag'; crew: string; agent: string; tag: 'QUESTION' | 'BLOCKED' | 'PROPOSAL' }
   | { event: 'report'; crew: string; agent: string; marker: ReportMarker | null }
+  | { event: typeof BUDGET_SPENT_EVENT; crew: string; agent: string }
 
 const MARKERS = ['VERDICT: PASS', 'VERDICT: FAIL', 'REDTEAM', 'CHECKPOINT', 'BLOCKED', 'QUESTION', 'PROPOSAL'] as const
 export type ReportMarker = (typeof MARKERS)[number]
@@ -247,7 +248,7 @@ export function effortVerdict(callerId: string | undefined, effort: unknown, age
 }
 
 // plan.json as the hooks read it (ADR-0001 s8): only the fields the gates and /foundry use, each left unchecked
-export type Plan = { approval: unknown; approvedAt: unknown; maxParallelCrews: unknown; crews: unknown[] }
+export type Plan = { approval: unknown; approvedAt: unknown; maxParallelCrews: unknown; crews: unknown[]; version: unknown; repairBudget: unknown }
 type PlanCrew = Record<string, unknown>
 
 const DEFAULT_CAP = 4
@@ -269,7 +270,7 @@ export function parsePlan(text: string): Plan | undefined {
     return undefined
   }
   if (!isRecord(value) || !Array.isArray(value.crews)) return undefined
-  return { approval: value.approval, approvedAt: value.approvedAt, maxParallelCrews: value.maxParallelCrews, crews: value.crews }
+  return { approval: value.approval, approvedAt: value.approvedAt, maxParallelCrews: value.maxParallelCrews, crews: value.crews, version: value.version, repairBudget: value.repairBudget }
 }
 
 // The plan entry a lead's name is gated as. A name that is a plan slug is that crew. Otherwise the successor rule: a
@@ -376,6 +377,174 @@ export function leadStopPasses(text: string): boolean {
 }
 
 export const LEAD_STOP_REASON = `${MARK} Not done yet: finish with your report, in the sections Summary, Branch, Changes, Proof, Checks run and Open questions (each a "## " heading), or, if you cannot finish, start your final message with CHECKPOINT:, BLOCKED:, QUESTION: or PROPOSAL:.`
+
+// ADR-0004: scope-bounded claims, the bounded repair loop, the patch-bound head guard and the main-session effort
+// rule. Every rule asks planAtLeastV2 first; anything else is 0.4.3 behaviour. The literals are written once, in the
+// ADR's section 3; the prompts carry the same strings.
+export const HEAD_LINE = 'Head: '
+export const PATCH_LINE = 'Patch: '
+export const EXAMINED = '## Examined'
+export const NOT_EXAMINED = '## Not examined'
+export const UNSCOPED = '- UNSCOPED: '
+export const BUDGET_BLOCKED = 'BLOCKED: repair budget spent'
+export const BUDGET_SPENT_EVENT = 'budget-spent'
+export const PATCH_COMMAND = 'git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable'
+
+export const BUDGET_REFUSAL = `${MARK} Refused: repair budget spent:`
+export const NO_PASS_REASON = `${MARK} Not done yet: the crew's latest judge file this run is not a clean VERDICT: PASS. Send your final report only after a judge's PASS with no UNSCOPED finding, or start your final message with BLOCKED: or CHECKPOINT:.`
+export const NO_HEAD_REASON = `${MARK} Not done yet: the crew's latest judge PASS has no "${HEAD_LINE.trim()}" and "${PATCH_LINE.trim()}" lines under ## Proof checked, so no hook can tell which head it ruled on. Start a fresh judge under the next unused name.`
+export const HEAD_MOVED = `${MARK} Not done yet: the head moved:`
+export const EXAMINED_REASON = `${MARK} Not done yet: on this plan your final report also needs the sections "${EXAMINED}" (what the crew checked, each with its scope) and "${NOT_EXAMINED}" (what nobody checked, or None.), each a heading of its own.`
+export const MAIN_MODEL_REFUSAL = `${MARK} Refused: on a version 2 or later plan, every foundry:* Agent call from the main session sets \`model\`: "opus" or "sonnet". Call Agent again with model set.`
+export const MAIN_EFFORT_REFUSAL = `${MARK} Refused: on a version 2 or later plan, every foundry:* Agent call from the main session sets \`effort\` to "low", "medium", "high" or "xhigh": "medium" by default, "high" or "xhigh" only on the owner's call. Call Agent again with effort set.`
+
+export type JudgeFile = { name: string; text: string; mtimeMs: number }
+export type JudgeRuling = { verdict: 'PASS' | 'FAIL' | undefined; head: string | undefined; patch: string | undefined; unscoped: number }
+
+const SHA40 = /^[0-9a-f]{40}$/
+
+// true when plan.version is an integer >= 2; false for no plan, v1, a missing or a non-integer version
+export function planAtLeastV2(plan: Plan | undefined): boolean {
+  return plan !== undefined && Number.isInteger(plan.version) && (plan.version as number) >= 2
+}
+
+// the plan's integer repair budget >= 0 on a v>=2 plan; else undefined, which means no budget rule
+export function repairBudgetOf(plan: Plan | undefined): number | undefined {
+  if (plan === undefined || !planAtLeastV2(plan)) return undefined
+  const b = plan.repairBudget
+  return Number.isInteger(b) && (b as number) >= 0 ? (b as number) : undefined
+}
+
+// when this run started: Date.parse(approvedAt) when it is a string that parses; else undefined
+export function runStart(plan: Plan | undefined): number | undefined {
+  if (plan === undefined || typeof plan.approvedAt !== 'string') return undefined
+  const ms = Date.parse(plan.approvedAt)
+  return Number.isFinite(ms) ? ms : undefined
+}
+
+// a spawn name whose report file is one of the crew's judge files
+export function isJudgeName(crew: string, name: unknown): boolean {
+  return typeof name === 'string' && name !== '' && isJudgeFile(crew, `${safeName(name)}.md`)
+}
+
+// a judge file of the crew this run: judge-named, not interim, modified at or after `since`
+function thisRun(crew: string, f: JudgeFile, since: number): boolean {
+  return isJudgeFile(crew, f.name) && !isInterimFile(f.name) && f.mtimeMs >= since
+}
+
+// how many of the crew's judge files this run rule FAIL
+export function judgeFails(crew: string, files: readonly JudgeFile[], since: number): number {
+  return files.filter(f => thisRun(crew, f, since) && judgeRuling(f.text).verdict === 'FAIL').length
+}
+
+// the k of <crew>-judge-<k>.md; the bare <crew>-judge.md is 1
+const judgeK = (name: string): number => Number(/-judge-(\d+)\.md$/.exec(name)?.[1] ?? 1)
+
+// the crew's newest judge file this run; ties go to the higher -judge-<k>
+export function latestJudge(crew: string, files: readonly JudgeFile[], since: number): JudgeFile | undefined {
+  let latest: JudgeFile | undefined
+  for (const f of files) {
+    if (!thisRun(crew, f, since)) continue
+    if (latest === undefined || f.mtimeMs > latest.mtimeMs || (f.mtimeMs === latest.mtimeMs && judgeK(f.name) > judgeK(latest.name))) latest = f
+  }
+  return latest
+}
+
+// the budget is spent when the FAILs are more than it; no budget rule, never spent
+export function budgetSpent(plan: Plan | undefined, fails: number): boolean {
+  const budget = repairBudgetOf(plan)
+  return budget !== undefined && fails > budget
+}
+
+export function budgetRefusal(crew: string, fails: number, budget: number): string {
+  return `${BUDGET_REFUSAL} ${crew} has ${fails} judge FAILs this run and repairBudget is ${budget}. Start no more judges: send main a message that starts with "${BUDGET_BLOCKED}", with the last judge's findings.`
+}
+
+// a judge-named spawn of a crew whose budget is spent is refused
+export function judgeBudgetVerdict(plan: Plan | undefined, crew: string, name: unknown, fails: number): { deny: string } | undefined {
+  const budget = repairBudgetOf(plan)
+  if (budget === undefined || !isJudgeName(crew, name) || !budgetSpent(plan, fails)) return undefined
+  return { deny: budgetRefusal(crew, fails, budget) }
+}
+
+const trimEnd = (line: string) => line.replace(/[ \t]+$/, '')
+const linesOf = (text: string) => text.replace(/^﻿/, '').replace(/\r/g, '').split('\n')
+
+// What a judge report rules: the verdict from its marker; the first full-line head and patch under ## Proof checked;
+// the UNSCOPED lines under ## Findings. A section runs to the next line starting "## ".
+export function judgeRuling(text: string): JudgeRuling {
+  const lines = linesOf(text)
+  const marker = markerOf(lines.join('\n'))
+  const ruling: JudgeRuling = { verdict: marker === 'VERDICT: PASS' ? 'PASS' : marker === 'VERDICT: FAIL' ? 'FAIL' : undefined, head: undefined, patch: undefined, unscoped: 0 }
+  let section: string | undefined
+  const sha = (line: string, literal: string) => {
+    if (!line.startsWith(literal)) return undefined
+    const rest = trimEnd(line.slice(literal.length))
+    return SHA40.test(rest) ? rest : undefined
+  }
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      section = trimEnd(line)
+      continue
+    }
+    if (section === '## Proof checked') {
+      ruling.head ??= sha(line, HEAD_LINE)
+      ruling.patch ??= sha(line, PATCH_LINE)
+    } else if (section === '## Findings' && line.startsWith(UNSCOPED)) {
+      ruling.unscoped++
+    }
+  }
+  return ruling
+}
+
+// the patch id `git patch-id --stable` printed: the first field of its first line, when it is 40 lowercase hex
+export function patchIdOf(stdout: string): string | undefined {
+  const first = (stdout.replace(/\r/g, '').split('\n')[0] ?? '').trim().split(/\s+/)[0] ?? ''
+  return SHA40.test(first) ? first : undefined
+}
+
+// `<branch> at <commit>, based on <base>.`, each optionally in single backticks; neither name may start with "-"
+const BRANCH_LINE = /^`?([^\s`-][^\s`]*)`? at `?[0-9a-f]{7,40}`?, based on `?([^\s`-][^\s`]*?)`?\.?$/
+
+// the branch and base on the first non-empty line under ## Branch, or undefined when it doesn't read
+export function branchOf(report: string): { branch: string; base: string } | undefined {
+  const lines = linesOf(report)
+  const at = lines.findIndex(l => trimEnd(l) === '## Branch')
+  if (at < 0) return undefined
+  const line = lines.slice(at + 1).find(l => l.trim() !== '')
+  const m = line === undefined ? null : BRANCH_LINE.exec(line.trim())
+  if (m?.[1] === undefined || m[2] === undefined) return undefined
+  return { branch: m[1], base: m[2] }
+}
+
+const isTagged = (text: string) => [CHECKPOINT, BLOCKED, QUESTION, PROPOSAL].some(p => text.trimStart().startsWith(p))
+const hasHeading = (text: string, heading: string) => linesOf(text).some(l => trimEnd(l) === heading)
+
+// on a v>=2 plan, an untagged final report needs both the Examined and the Not examined heading
+export function examinedVerdict(plan: Plan | undefined, text: string): { block: string } | undefined {
+  if (!planAtLeastV2(plan) || isTagged(text)) return undefined
+  return hasHeading(text, EXAMINED) && hasHeading(text, NOT_EXAMINED) ? undefined : { block: EXAMINED_REASON }
+}
+
+export function headMovedReason(judged: string, head: string): string {
+  return `${HEAD_MOVED} the judge ruled on ${judged}, the branch is at ${head}, and its patch id differs. Start a fresh judge under the next unused name on ${head}, and send your final report on its PASS.`
+}
+
+// ADR-0004 section 6's table: a clean PASS with head and patch lines whose head is the branch's, or whose patch is
+export function headVerdict(plan: Plan | undefined, judge: JudgeRuling | undefined, head: string | undefined, patch: string | undefined): { block: string } | undefined {
+  if (!planAtLeastV2(plan)) return undefined
+  if (judge === undefined || judge.verdict !== 'PASS' || judge.unscoped > 0) return { block: NO_PASS_REASON }
+  if (judge.head === undefined || judge.patch === undefined) return { block: NO_HEAD_REASON }
+  if (head === undefined || head === judge.head || patch === undefined || patch === judge.patch) return undefined
+  return { block: headMovedReason(judge.head, head) }
+}
+
+// on a v>=2 plan, a main-session foundry:* Agent call sets a model, then an effort other than max
+export function mainCallVerdict(plan: Plan | undefined, callerId: string | undefined, type: unknown, model: unknown, effort: unknown): { deny: string } | undefined {
+  if (!planAtLeastV2(plan) || callerId !== undefined || typeof type !== 'string' || !type.startsWith('foundry:')) return undefined
+  if (typeof model !== 'string' || model === '') return { deny: MAIN_MODEL_REFUSAL }
+  return typeof effort === 'string' && EFFORTS.includes(effort) ? undefined : { deny: MAIN_EFFORT_REFUSAL }
+}
 
 export function stallText(label: string, crew: string, minutes: number): string {
   return `${STALLED} ${label} in crew ${crew}, no activity for ${minutes}m. Check /foundry and message the ${crew} lead. Read its transcript tail before you stop it; a resumed agent may be compacting.`
@@ -606,6 +775,9 @@ type State = {
   handedBack: Set<string>
   // each pending hand-back's message, by agent: what a lead's stop is judged on
   handBacks: Map<string, string>
+  // leads whose pending hand-back was held back from the report file by the Examined check (ADR-0004 s6); the stop
+  // that goes through writes it
+  withheld: Set<string>
   // the tag (question, blocker, proposal) each lead shows in /foundry until answered or replaced, by lead id
   waiting: Map<string, Tag>
   // when each agent last made a tool call or a model request, by id
@@ -749,6 +921,8 @@ async function writeReport($: $, state: State, crew: Crew, id: string, text: str
   const label = state.labels.get(id) ?? (known === undefined ? id : labelOf(known))
   await $.fs.write(tags ? reportPath(dir, crew.crew, label) : interimPath(dir, crew.crew, label), text)
   if (tags) await logEvent($, state, { event: 'report', crew: crew.crew, agent: label, marker: markerOf(text) })
+  // a judge's FAIL that spends the crew's repair budget is recorded once more, as its own event (ADR-0004 s5)
+  if (tags && markerOf(text) === 'VERDICT: FAIL' && isJudgeName(crew.crew, label)) await safely($, 'repair budget record', () => budgetRecord($, state, crew.crew, label))
   if (!crew.isLead || !tags) return
   // a lead's captured text tells whether it stopped on a question, a blocker or a proposal
   const tag = tagOf(text)
@@ -870,6 +1044,110 @@ async function judgeOf($: $, dir: string, crew: string): Promise<string | undefi
     if (latest === undefined || k > latest.k) latest = { name: f.name, k }
   }
   return latest === undefined ? undefined : verdictOf(String(await $.fs.read(`${dir}/${latest.name}`)))
+}
+
+// One debug line naming the rule that refused or sent back, and whom; never report text (P7, P8). Waited for, so
+// the line lands before the call it explains returns, but at most EVENT_WAIT_MS: a hung log never holds a call.
+async function logRule($: $, line: string): Promise<void> {
+  try {
+    await settledWithin($, EVENT_WAIT_MS, Promise.resolve().then(() => $.ui.log(`foundry: ${line}`, { to: 'debug' })))
+  } catch {
+    // nothing left to do
+  }
+}
+
+// The crew's judge files modified at or after `since`, from reports/<crew>/. Texts are read only when `withText`;
+// a list, stat or read that throws rejects, and the caller's safely lets the call through.
+async function judgeFilesOf($: $, dir: string, crew: string, since: number, withText: boolean): Promise<JudgeFile[]> {
+  const files: JudgeFile[] = []
+  for (const f of await $.fs.list(dir)) {
+    if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew, f.name)) continue
+    const { mtimeMs } = await $.fs.stat(`${dir}/${f.name}`)
+    if (!(mtimeMs >= since)) continue
+    files.push({ name: f.name, text: withText ? String(await $.fs.read(`${dir}/${f.name}`)) : '', mtimeMs })
+  }
+  return files
+}
+
+// The crew's judge FAILs this run, with the plan's budget rule; undefined when the plan sets none (v1, no or a bad
+// repairBudget, an approvedAt that doesn't parse, no foundry dir).
+async function failsOf($: $, state: State, crew: string): Promise<{ plan: Plan; fails: number } | undefined> {
+  const plan = await planOf($, state)
+  const since = runStart(plan)
+  if (plan === undefined || repairBudgetOf(plan) === undefined || since === undefined) return undefined
+  const dir = await rootOf($, state)
+  if (dir === undefined) return undefined
+  return { plan, fails: judgeFails(crew, await judgeFilesOf($, reportDir(dir, crew), crew, since, true), since) }
+}
+
+// ADR-0004 s5: a judge-named Agent call from inside a crew whose repair budget is spent is refused
+async function budgetGate($: $, state: State, crew: string, name: unknown): Promise<{ deny: string } | undefined> {
+  if (!isJudgeName(crew, name)) return undefined
+  const counted = await failsOf($, state, crew)
+  const refused = counted === undefined ? undefined : judgeBudgetVerdict(counted.plan, crew, name, counted.fails)
+  if (refused !== undefined) await logRule($, `repair budget gate refused a judge spawn in crew ${crew}: ${counted?.fails} judge FAILs this run`)
+  return refused
+}
+
+// ADR-0004 s5: a saved judge FAIL that leaves the crew's budget spent appends one budget-spent line
+async function budgetRecord($: $, state: State, crew: string, agent: string) {
+  const counted = await failsOf($, state, crew)
+  if (counted === undefined || !budgetSpent(counted.plan, counted.fails)) return
+  await logRule($, `repair budget spent in crew ${crew} by judge ${agent}`)
+  await logEvent($, state, { event: BUDGET_SPENT_EVENT, crew, agent })
+}
+
+const GIT_MS = 15_000
+
+// the commit `branch` names, or undefined when git fails or prints anything but a 40-hex SHA
+async function headOf($: $, cwd: string | undefined, branch: string): Promise<string | undefined> {
+  if (branch.startsWith('-')) return undefined
+  try {
+    const r = await $.process.run(['git', 'rev-parse', '--verify', '--quiet', `${branch}^{commit}`], { cwd, timeoutMs: GIT_MS })
+    const out = r.stdout.replace(/\r/g, '').trim()
+    return r.exitCode === 0 && SHA40.test(out) ? out : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// PATCH_COMMAND's id for base...branch, or undefined when either half fails, is cut short or prints no id
+async function patchOf($: $, cwd: string | undefined, base: string, branch: string): Promise<string | undefined> {
+  if (base.startsWith('-') || branch.startsWith('-')) return undefined
+  try {
+    const diff = await $.process.run(['git', 'diff', '--no-color', '--no-ext-diff', '--no-renames', '--src-prefix=a/', '--dst-prefix=b/', `${base}...${branch}`], { cwd, timeoutMs: GIT_MS })
+    if (diff.exitCode !== 0 || diff.isStdoutTruncated) return undefined
+    const id = await $.process.run(['git', 'patch-id', '--stable'], { cwd, timeoutMs: GIT_MS, stdin: diff.stdout })
+    return id.exitCode === 0 && !id.isStdoutTruncated ? patchIdOf(id.stdout) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// ADR-0004 s4 and s6, on a lead's text that would pass by its Proof section: on a v>=2 plan, the Examined headings,
+// then, for an untagged report, the head guard. Undefined: the stop goes through.
+async function finalReportVerdict($: $, state: State, id: string, text: string): Promise<{ block: string; rule: string } | undefined> {
+  const plan = await planOf($, state)
+  if (!planAtLeastV2(plan)) return undefined
+  const examined = examinedVerdict(plan, text)
+  if (examined !== undefined) return { ...examined, rule: 'examined headings missing' }
+  const since = runStart(plan)
+  const crew = crewOf(id, [...state.known.values()])
+  const dir = await rootOf($, state)
+  if (isTagged(text) || since === undefined || crew === undefined || dir === undefined) return undefined
+  const reports = reportDir(dir, crew.crew)
+  const latest = latestJudge(crew.crew, await judgeFilesOf($, reports, crew.crew, since, false), since)
+  const ruling = latest === undefined ? undefined : judgeRuling(String(await $.fs.read(`${reports}/${latest.name}`)))
+  // the rows that need no git: no clean PASS, or a PASS without its head lines
+  const early = headVerdict(plan, ruling, undefined, undefined)
+  if (early !== undefined) return { ...early, rule: early.block === NO_HEAD_REASON ? 'judge PASS has no head lines' : 'no clean judge PASS this run' }
+  const where = branchOf(text)
+  if (ruling === undefined || where === undefined) return undefined
+  const cwd = await $.session.cwd()
+  const head = await headOf($, cwd, where.branch)
+  if (head === undefined || head === ruling.head) return undefined
+  const moved = headVerdict(plan, ruling, head, await patchOf($, cwd, where.base, where.branch))
+  return moved === undefined ? undefined : { ...moved, rule: 'head moved and patch id differs' }
 }
 
 async function statusOf($: $, state: State): Promise<string> {
@@ -1138,6 +1416,7 @@ export const register: Register = on => {
     models: new Map(),
     handedBack: new Set(),
     handBacks: new Map(),
+    withheld: new Set(),
     waiting: new Map(),
     activity: new Map(),
     stalled: new Set(),
@@ -1161,6 +1440,7 @@ export const register: Register = on => {
     state.models.clear()
     state.handedBack.clear()
     state.handBacks.clear()
+    state.withheld.clear()
     state.waiting.clear()
     state.activity.clear()
     state.stalled.clear()
@@ -1239,6 +1519,16 @@ export const register: Register = on => {
   }).catch(failOpen)
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    // ADR-0004 s7: on a v>=2 plan, the main session's foundry:* calls set a model and an effort, before the plan gates
+    const type: unknown = e.subagent_type
+    if (e.agentId === undefined && typeof type === 'string' && type.startsWith('foundry:')) {
+      const refused = await safely($, 'main-session rule', async () => {
+        const verdict = mainCallVerdict(await planOf($, state), e.agentId, type, e.model, e.effort)
+        if (verdict !== undefined) await logRule($, `main-session rule refused a ${type} call: ${verdict.deny === MAIN_MODEL_REFUSAL ? 'no model' : 'no allowed effort'}`)
+        return verdict
+      })
+      if (refused !== undefined) return refused
+    }
     const caller = await safely($, 'Agent check', async () => {
       if (e.agentId === undefined) return undefined
       const all = (await agentsOf($, state)).all
@@ -1250,6 +1540,12 @@ export const register: Register = on => {
       }
     })
     if (caller?.refused !== undefined) return caller.refused
+    // ADR-0004 s5: a judge-named call from inside a crew whose repair budget is spent
+    const callerCrew = caller?.crew?.crew
+    if (callerCrew !== undefined && isJudgeName(callerCrew, e.name)) {
+      const spent = await safely($, 'repair budget gate', () => budgetGate($, state, callerCrew, e.name))
+      if (spent !== undefined) return spent
+    }
     const startsLead = e.agentId === undefined && e.subagent_type === LEAD_TYPE
     // the plan gates (ADR-0001 s9): only the main thread starting a named lead; any failure lets the call through
     const gated = !startsLead || typeof e.name !== 'string' || e.name === '' ? undefined : e.name
@@ -1306,12 +1602,22 @@ export const register: Register = on => {
       // a real report is marked before any await, so a stop that races this capture never overwrites it
       state.handedBack.add(id)
       state.handBacks.set(id, message)
+      state.withheld.delete(id)
       await safely($, 'hand-back capture', async () => {
         const all = (await agentsOf($, state)).all
         const crew = crewOf(id, all)
         if (crew === undefined) return
         // a lead's report the stop gate will send back is not its report: the stop that goes through writes it
         if (crew.isLead && !leadStopPasses(message)) return
+        // on a v>=2 plan, one the Examined check will send back is not its report either (ADR-0004 s6); no git here
+        if (crew.isLead && !isTagged(message)) {
+          const held = await safely($, 'examined check', async () => examinedVerdict(await planOf($, state), message))
+          if (held !== undefined) {
+            state.withheld.add(id)
+            await logRule($, `examined check held back the hand-back of the lead of crew ${crew.crew}: headings missing`)
+            return
+          }
+        }
         await writeReport($, state, crew, id, message)
       })
     }
@@ -1355,9 +1661,20 @@ export const register: Register = on => {
       if (isInterimStop(stopper.descendants, e.background_tasks)) return { lead: true, interim: true }
       const count = e.stop_hook_active ? (state.streaks.get(id) ?? 0) : 0
       const text = state.handBacks.get(id) ?? e.last_assistant_message ?? ''
-      if (count >= LEAD_STOP_BLOCKS || leadStopPasses(text)) {
+      if (count >= LEAD_STOP_BLOCKS) {
         state.streaks.delete(id)
         return { lead: true, interim: false }
+      }
+      if (leadStopPasses(text)) {
+        // ADR-0004 s4 and s6 on a v>=2 plan; these send-backs share the streak, and an unanswered tag doesn't excuse them
+        const sent = await safely($, 'final report gate', () => finalReportVerdict($, state, id, text))
+        if (sent === undefined) {
+          state.streaks.delete(id)
+          return { lead: true, interim: false }
+        }
+        state.streaks.set(id, count + 1)
+        await logRule($, `lead stop gate sent back the lead of crew ${crewOf(id, [...state.known.values()])?.crew ?? id}: ${sent.rule}`)
+        return { lead: true, interim: false, block: sent.block }
       }
       // a lead whose tagged message to main is unanswered has asked through that one channel: its stop goes through
       // as interim, so it neither needs a tagged hand-back too nor loses the tag /foundry shows
@@ -1370,6 +1687,7 @@ export const register: Register = on => {
     })
     const handBack = state.handBacks.get(id)
     state.handBacks.delete(id)
+    const withheld = state.withheld.delete(id)
     if (gate?.block !== undefined) {
       // the hand-back belonged to the stop sent back; the next one is judged and captured afresh
       state.handedBack.delete(id)
@@ -1378,7 +1696,7 @@ export const register: Register = on => {
     const tags = gate?.interim !== true
     // the hand-back already holds this stop's report; the agent's next stop is captured again
     if (state.handedBack.delete(id)) {
-      if (gate?.lead === true && handBack !== undefined && !leadStopPasses(handBack)) {
+      if (gate?.lead === true && handBack !== undefined && (!leadStopPasses(handBack) || withheld)) {
         // a lead's hand-back the gate could have sent back was held; this stop went through, so it is the report
         await safely($, 'report capture', async () => {
           const crew = crewOf(id, (await agentsOf($, state)).all)
