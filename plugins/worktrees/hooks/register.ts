@@ -358,8 +358,62 @@ export function isActive(state: State, path: string, now: number, windows: boole
   return hit !== undefined && now - hit.at < ACTIVE_FOR_MS
 }
 
+// The main checkout, from the output of `git rev-parse --path-format=absolute --git-common-dir`; undefined when
+// the output is not a `<checkout>/.git` (empty, a bare repo, a worktree's own git dir).
+export function mainCheckoutOf(commonDirOut: string): string | undefined {
+  const m = /^(.+)[\\/]\.git$/.exec(commonDirOut.trim())
+  return m ? m[1] : undefined
+}
+
+// Where a subagent's meta file lives, from the event's transcript path and the bare agent id.
+export function metaPathFor(transcriptPath: string, id: string): string {
+  const path = transcriptPath.replace(/\\/g, '/')
+  const parts = path.split('/')
+  // a subagent's transcript is `<session>/subagents/agent-<id>.jsonl`; a session transcript in a folder named subagents is not
+  const inSubagents = parts[parts.length - 2] === 'subagents' && /^agent-[^/]*\.jsonl$/.test(parts[parts.length - 1])
+  const sessionDir = inSubagents ?parts.slice(0, -2).join('/') : path.replace(/\.jsonl$/, '')
+  return `${sessionDir}/subagents/agent-${id}.meta.json`
+}
+
+// A meta file that says its agent finished: a JSON object with `finished` exactly true. Never throws.
+export function metaFinished(text: string | undefined): boolean {
+  try {
+    const raw: unknown = JSON.parse(text ?? '')
+    return typeof raw === 'object' && raw !== null && !Array.isArray(raw) && (raw as { finished?: unknown }).finished === true
+  } catch {
+    return false
+  }
+}
+
+// `git cherry` output where every commit of the branch has an equivalent upstream (every line starts `- `).
+export function cherryMerged(r: { exitCode: number; stdout: string }): boolean {
+  if (r.exitCode !== 0) return false
+  const lines = r.stdout.replace(/\r/g, '').split('\n').filter(l => l !== '')
+  return lines.length > 0 && lines.every(l => l.startsWith('- '))
+}
+
+// The id of an `agent-<id>` worktree directly under the main checkout's .claude/worktrees; undefined for any other path.
+export function agentWorktreeId(path: string, main: string, windows: boolean): string | undefined {
+  const prefix = normPath(main, windows) + '/.claude/worktrees/agent-'
+  const p = normPath(path, windows)
+  if (!p.startsWith(prefix)) return undefined
+  const id = p.slice(prefix.length)
+  return /^[0-9a-z]+$/.test(id) ? id : undefined
+}
+
+// The state without the entries that are stale, whose agent finished, or whose worktree is gone.
+export function sweepActive(state: State, f: { now: number; finished: readonly string[]; gone: readonly string[] }, windows: boolean): State {
+  const drop = new Set([...f.finished, ...f.gone].map(p => normPath(p, windows)))
+  const active: State['active'] = {}
+  for (const [key, v] of Object.entries(state.active)) if (f.now - v.at < ACTIVE_FOR_MS && !drop.has(key)) active[key] = v
+  return { ...state, active }
+}
+
 // the lock beside slots.json: a lock older than this was left by a process that died holding it
 export const LOCK_STALE_MS = 10_000
+
+// an entry whose folder is missing counts as gone only after this long: a create records its entry before git makes the folder
+export const GONE_GRACE_MS = 10 * 60_000
 
 // what a writer does when it finds the lock taken, by the lock's age
 export function lockStep(ageMs: number): 'break' | 'wait' {
@@ -523,21 +577,23 @@ export type SelfCleanFacts = {
   dirty: boolean
   // its branch is in the session checkout's HEAD: an ancestor, or merging it gives HEAD's own tree
   merged: boolean
+  // how it was found merged
+  mergedBy?: 'ancestor' | 'tree' | 'cherry'
 }
 
 // `forget`: the path drops out of the session's tracking, as it can never qualify again
-export type SelfCleanPlan = { kind: 'remove'; path: string; branch: string } | { kind: 'skip'; path: string; reason: string; forget: boolean }
+export type SelfCleanPlan = { kind: 'remove'; path: string; branch: string; deleteFlag: '-d' | '-D' } | { kind: 'skip'; path: string; reason: string; forget: boolean }
 
 export function decideSelfClean(f: SelfCleanFacts): SelfCleanPlan {
   const skip = (reason: string, forget = false): SelfCleanPlan => ({ kind: 'skip', path: f.path, reason, forget })
   if (f.isSession) return skip('the session works in it', true)
   if (!f.registered) return skip('no longer a registered worktree', true)
   if (f.branch === undefined || !f.branch.startsWith('worktree-')) return skip(`not on a worktree-* branch (${f.branch ?? 'detached'})`)
-  if (f.locked !== undefined) return skip(`locked (${f.locked})`)
   if (f.active) return skip('its agent has not stopped yet')
+  if (f.locked !== undefined) return skip(`locked (${f.locked})`)
   if (f.dirty) return skip('uncommitted changes')
   if (!f.merged) return skip(`${f.branch} is not merged into the session's HEAD`)
-  return { kind: 'remove', path: f.path, branch: f.branch }
+  return { kind: 'remove', path: f.path, branch: f.branch, deleteFlag: f.mergedBy === 'tree' || f.mergedBy === 'cherry' ? '-D' : '-d' }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -718,15 +774,34 @@ async function repoAt($: $, cwd?: string): Promise<Repo | undefined> {
   return { top: top.out, common: common.out, mainRoot: common.out.replace(/[\\/]\.git$/, '') }
 }
 
+export type ProjectRepo = { main: string; common: string }
+
+// The repo the session works for: the first of the project dir, the event's cwd and the session cwd whose git
+// common dir is a `<checkout>/.git`. The hook may run from inside the common dir or any folder that is not a work
+// tree, so there is no `--is-inside-work-tree` check. undefined when no candidate is in a repo.
+export async function projectRepo($: $, eventCwd?: string): Promise<ProjectRepo | undefined> {
+  const candidates: string[] = []
+  const project = await $.env.get('CLAUDE_PROJECT_DIR')
+  if (typeof project === 'string' && project !== '') candidates.push(project)
+  if (typeof eventCwd === 'string' && eventCwd !== '') candidates.push(eventCwd)
+  const session = await $.session.cwd()
+  if (typeof session === 'string' && session !== '') candidates.push(session)
+  for (const cwd of new Set(candidates)) {
+    const r = await git($, cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    if (!r.ok) continue
+    const main = mainCheckoutOf(r.out)
+    if (main !== undefined) return { main, common: r.out }
+  }
+  return undefined
+}
+
 // Whether kit's manifest in the main checkout declares this Agent call's type read-only (repo ADR-0014). Read on
 // every call, never cached. A full-name match only: no bare-name fallback. Anything that goes wrong is false, so the
 // call keeps today's behaviour; an absent file is silent, any other failure goes to the debug log.
-async function declaredByKit($: $, input: Record<string, unknown>): Promise<boolean> {
+async function declaredByKit($: $, input: Record<string, unknown>, main: string): Promise<boolean> {
   try {
     const type = typeof input.subagent_type === 'string' && input.subagent_type !== '' ? input.subagent_type : 'general-purpose'
-    const common = await git($, undefined, 'rev-parse', '--path-format=absolute', '--git-common-dir')
-    if (!common.ok || !/[\\/]\.git$/.test(common.out)) return false
-    const path = `${common.out.replace(/[\\/]\.git$/, '')}/.claude/kit/manifest.json`
+    const path = `${main}/.claude/kit/manifest.json`
     if (!(await $.fs.exists(path))) return false
     let text: string
     try {
@@ -806,8 +881,42 @@ async function commitLeftovers($: $, wt: AgentWorktree, dirty: DirtyWorktree, ag
 const stateFile = (repo: Repo) => `${repo.common}/claude-worktrees/slots.json`
 const lockDir = (repo: Repo) => `${repo.common}/claude-worktrees/slots.lock`
 
-async function readState($: $, repo: Repo): Promise<State> {
-  return parseState((await $.fs.exists(stateFile(repo))) ? ((await $.fs.read(stateFile(repo))) as string) : undefined)
+// slots.json exists but its text is not a JSON object: the sweep must not read that as "nothing is live"
+// The session's one-time notice: answers the toast text the first time slots.json is found unreadable, then undefined.
+type Warn = (path: string) => string | undefined
+
+async function tellUnreadable($: $, warn: Warn | undefined, path: string): Promise<void> {
+  const text = warn?.(path)
+  if (text === undefined) return
+  try {
+    await $.ui.toast(text)
+  } catch {
+    // the toast is best effort
+  }
+}
+
+const isPlainObject = (v: unknown) => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+// The one read of slots.json: every decision is made from its answer. A missing file is a fresh state; a file that does
+// not parse, is empty, is not an object, or holds `active` or `slots` as anything but a plain object is undefined.
+async function loadState($: $, repo: Repo): Promise<State | undefined> {
+  if (!(await $.fs.exists(stateFile(repo)))) return parseState(undefined)
+  const text = (await $.fs.read(stateFile(repo))) as string
+  try {
+    const raw = JSON.parse(text) as Record<string, unknown> | null
+    if (!isPlainObject(raw)) return undefined
+    const top = raw as Record<string, unknown>
+    if ('active' in top && !isPlainObject(top.active)) return undefined
+    if ('slots' in top && !isPlainObject(top.slots)) return undefined
+    if (isPlainObject(top.active) && Object.values(top.active as Record<string, unknown>).some(e => !isPlainObject(e) || typeof (e as Record<string, unknown>).path !== 'string' || !Number.isFinite((e as Record<string, unknown>).at))) return undefined
+    return parseState(text)
+  } catch {
+    return undefined
+  }
+}
+
+async function stateUnreadable($: $, repo: Repo): Promise<boolean> {
+  return (await loadState($, repo)) === undefined
 }
 
 // Creating a directory either succeeds or finds it there, atomically: the lock across sessions.
@@ -827,7 +936,8 @@ async function dropLock($: $, repo: Repo, windows: boolean): Promise<void> {
 // State writes run one at a time: in this process by a promise chain, across sessions by the lock directory,
 // with slots.json read again under the lock, so parallel agents never draw the same slot.
 let stateChain: Promise<unknown> = Promise.resolve()
-function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>): Promise<T> {
+// A slots.json that exists but does not parse is never overwritten: fn does not run, nothing is written, the answer is undefined.
+function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>, warn?: Warn): Promise<T | undefined> {
   const step = stateChain.then(async () => {
     const windows = await isWindows($)
     for (let tries = 0; !(await takeLock($, repo, windows)); tries++) {
@@ -837,7 +947,13 @@ function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: S
       else await $.clock.sleep(100)
     }
     try {
-      const { state, value } = await fn(await readState($, repo))
+      const current = await loadState($, repo)
+      if (current === undefined) {
+        await $.ui.log('worktrees: slots.json unreadable, left as is', { to: 'debug' })
+        await tellUnreadable($, warn, stateFile(repo))
+        return undefined
+      }
+      const { state, value } = await fn(current)
       await $.fs.write(stateFile(repo), serializeState(state))
       return value
     } finally {
@@ -880,9 +996,8 @@ async function copyIncluded($: $, repo: Repo, path: string, windows: boolean): P
 
 // The nested repos of the session's repo that its .gitignore hides, and whether agents stay in the main checkout
 // for them: only when the repo has no setup script for this platform.
-async function nestedRepos($: $): Promise<{ skip: boolean; toast: string }> {
-  const top = await git($, undefined, 'rev-parse', '--show-toplevel')
-  if (!top.ok || top.out === '') return { skip: false, toast: '' }
+async function nestedRepos($: $, main: string): Promise<{ skip: boolean; toast: string }> {
+  const top = { out: main }
   const ls = await git($, top.out, '-c', 'core.quotePath=false', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')
   if (!ls.ok) return { skip: false, toast: '' }
   const nested: string[] = []
@@ -913,17 +1028,22 @@ function portBaseOf(options: Record<string, unknown>): number {
 
 // Stops a worktree's processes and the ones on its slot's ports. The slot is released when `release` is set,
 // or when the worktree folder is gone.
-async function cleanWorktree($: $, repo: Repo, path: string, base: number, release: boolean): Promise<string[]> {
+async function cleanWorktree($: $, repo: Repo, path: string, base: number, release: boolean, warn?: Warn): Promise<string[]> {
   const windows = await isWindows($)
-  const state = await readState($, repo)
+  const loaded = await loadState($, repo)
+  if (loaded === undefined) {
+    await $.ui.log('worktrees: slots.json unreadable, left as is', { to: 'debug' })
+    await tellUnreadable($, warn, stateFile(repo))
+  }
+  const state = loaded ?? parseState(undefined)
   const slot = slotOf(state.slots, path, windows)
   const notes = await stopProcesses($, windows, [path], slot === undefined ? [] : ports(base, slot))
   const freeSlot = slot !== undefined && (release || !(await $.fs.exists(path)))
-  if (freeSlot || state.active[normPath(path, windows)] !== undefined) {
+  if (loaded !== undefined && (freeSlot || state.active[normPath(path, windows)] !== undefined)) {
     await withState($, repo, async s => ({
       state: markDone(freeSlot ? { ...s, slots: releaseSlot(s.slots, path, windows) } : s, path, windows),
       value: undefined,
-    }))
+    }), warn)
   }
   return notes
 }
@@ -960,75 +1080,140 @@ async function removeWorktree($: $, cwd: string, path: string, windows: boolean)
 
 // --- self-cleanup ---
 
-// Removes the worktrees in `tracked` (normalised path to path) whose agent is done, that are clean, and whose branch
-// is merged into the HEAD of the session's own checkout; then their branch with `git branch -d`. Answers what it
-// removed, for the toast. Removed paths, and paths that can never qualify, drop out of `tracked`.
-async function selfClean($: $, tracked: Map<string, string>, base: number): Promise<string[]> {
-  if (tracked.size === 0) return []
+// What a sweep knows of the merge that started it: the event's cwd and the session transcript (for the metas).
+type SweepEvent = { cwd?: string; transcriptPath?: string }
+
+// Removes the agent worktrees (`<main checkout>/.claude/worktrees/agent-<id>`, from `git worktree list`, so native
+// and auto-isolated ones count and a restart loses nothing) whose agent is done, that are clean, and whose branch is
+// merged into the HEAD of the merge checkout or of the main checkout (repo ADR-0015); then their branch. A dirty or
+// locked one is kept and reported. One write of slots.json retires finished, gone and stale `active` entries.
+// `tracked` is only a hint: removed paths drop out of it. Answers what it removed and what it kept, for the toasts.
+async function selfClean($: $, tracked: Map<string, string>, base: number, ev: SweepEvent, warn?: Warn): Promise<{ removed: string[]; kept: string[] }> {
   const windows = await isWindows($)
-  const cwd = await $.session.cwd()
-  const repo = await repoAt($, cwd)
-  if (repo === undefined) return []
+  const found = await projectRepo($, ev.cwd)
+  if (found === undefined) return { removed: [], kept: [] }
+  const repo: Repo = { top: found.main, common: found.common, mainRoot: found.main }
   const log = (line: string) => $.ui.log(`worktrees: ${line}`, { to: 'debug' })
-  const worktrees = parseWorktrees((await git($, cwd, 'worktree', 'list', '--porcelain')).out)
-  const headTree = await git($, cwd, 'rev-parse', 'HEAD^{tree}')
-  const state = await readState($, repo)
-  const now = await $.clock.now()
-  const removed: string[] = []
-  for (const [key, path] of [...tracked]) {
-    const wt = worktrees.find(w => normPath(w.path, windows) === key)
-    const branch = wt?.branch
-    let dirty = false
-    let merged = false
-    if (wt !== undefined && branch?.startsWith('worktree-')) {
-      const status = await git($, path, 'status', '--porcelain')
-      dirty = !status.ok || status.out !== ''
-      if (!dirty) {
-        merged = (await git($, cwd, 'merge-base', '--is-ancestor', branch, 'HEAD')).ok
-        if (!merged && headTree.ok && headTree.out !== '') merged = (await mergesToSameTree($, cwd, 'HEAD', headTree.out, branch)) === true
+  // the refs: the checkout the merge ran in (when it is in a work tree), then the main checkout; each ref is that
+  // checkout's HEAD, and every git command for it runs there
+  const refs: string[] = []
+  if (typeof ev.cwd === 'string' && ev.cwd !== '') {
+    const top = await git($, ev.cwd, 'rev-parse', '--show-toplevel')
+    if (top.ok && top.out !== '') refs.push(top.out)
+  }
+  if (!refs.some(r => normPath(r, windows) === normPath(found.main, windows))) refs.push(found.main)
+  const isRef = (path: string) => refs.some(r => normPath(r, windows) === normPath(path, windows))
+  const trees = new Map<string, string>()
+  const treeOf = async (ref: string) => {
+    if (!trees.has(ref)) {
+      const t = await git($, ref, 'rev-parse', 'HEAD^{tree}')
+      trees.set(ref, t.ok ? t.out : '')
+    }
+    return trees.get(ref) as string
+  }
+  // how the branch counts as merged: an ancestor, the same tree, then (when allowed) patch-equivalent
+  const mergedBy = async (branch: string, cherry: boolean): Promise<'ancestor' | 'tree' | 'cherry' | undefined> => {
+    for (const ref of refs) if ((await git($, ref, 'merge-base', '--is-ancestor', branch, 'HEAD')).ok) return 'ancestor'
+    for (const ref of refs) {
+      const tree = await treeOf(ref)
+      if (tree !== '' && (await mergesToSameTree($, ref, 'HEAD', tree, branch)) === true) return 'tree'
+    }
+    if (cherry) {
+      for (const ref of refs) {
+        const r = await run($, ['git', 'cherry', 'HEAD', branch], ref, 60_000)
+        if (cherryMerged({ exitCode: r.exitCode, stdout: r.stdout })) return 'cherry'
       }
     }
+    return undefined
+  }
+
+  const worktrees = parseWorktrees((await git($, found.main, 'worktree', 'list', '--porcelain')).out)
+  const state = await loadState($, repo)
+  if (state === undefined) {
+    await log('self-clean skipped: slots.json unreadable')
+    await tellUnreadable($, warn, stateFile(repo))
+    return { removed: [], kept: [] }
+  }
+  const now = await $.clock.now()
+  const finishedPaths: string[] = []
+  const removed: string[] = []
+  const kept: string[] = []
+  for (const wt of worktrees) {
+    const id = agentWorktreeId(wt.path, found.main, windows)
+    if (id === undefined || isRef(wt.path)) continue
+    const key = normPath(wt.path, windows)
+    let finished = false
+    if (typeof ev.transcriptPath === 'string' && ev.transcriptPath !== '') {
+      const meta = metaPathFor(ev.transcriptPath, id)
+      try {
+        finished = (await $.fs.exists(meta)) && metaFinished((await $.fs.read(meta)) as string)
+      } catch {
+        finished = false // fail open: the entry stays and the agent counts as live
+      }
+    }
+    if (finished) finishedPaths.push(wt.path)
+    const live = !finished && isActive(state, wt.path, now, windows)
+    if (live || !wt.branch?.startsWith('worktree-')) continue
+    const branch = wt.branch
+    let dirty = false
+    if (wt.locked === undefined) {
+      const status = await git($, wt.path, 'status', '--porcelain')
+      dirty = !status.ok || status.out !== ''
+    }
+    // a dirty or locked worktree is reported only when its branch is merged: unmerged work is not a leak
+    const by = await mergedBy(branch, wt.locked === undefined && !dirty)
+    if (by === undefined) continue
     const plan = decideSelfClean({
-      path,
-      registered: wt !== undefined,
+      path: wt.path,
+      registered: true,
       branch,
-      locked: wt?.locked,
-      isSession: key === normPath(repo.top, windows),
-      active: isActive(state, path, now, windows),
+      locked: wt.locked,
+      isSession: false,
+      active: false,
       dirty,
-      merged,
+      merged: true,
+      mergedBy: by,
     })
     if (plan.kind === 'skip') {
-      await log(`self-clean skipped ${path}: ${plan.reason}`)
-      if (plan.forget) tracked.delete(key)
+      await log(`self-clean kept ${wt.path}: ${plan.reason}`)
+      kept.push(`${wt.path} (${plan.reason})`)
       continue
     }
-    const notes = await cleanWorktree($, repo, path, base, true)
+    const notes = await cleanWorktree($, repo, wt.path, base, true, warn)
     if (notes.length > 0) await log(notes.join('\n'))
-    const done = await removeWorktree($, cwd, path, windows)
+    const done = await removeWorktree($, found.main, wt.path, windows)
     if (!done.ok) {
-      await log(`self-clean could not remove ${path}: ${done.err}`)
+      await log(`self-clean could not remove ${wt.path}: ${done.err}`)
       continue
     }
     tracked.delete(key)
-    const deleted = await git($, cwd, 'branch', '-d', plan.branch)
+    finishedPaths.push(wt.path)
+    const deleted = await git($, found.main, 'branch', plan.deleteFlag, plan.branch)
     if (deleted.ok) removed.push(plan.branch)
     else {
-      await log(`self-clean removed ${path}; git branch -d ${plan.branch} refused: ${deleted.err.split('\n')[0]}`)
-      removed.push(`${plan.branch}'s worktree (branch kept: git branch -d refused)`)
+      await log(`self-clean removed ${wt.path}; git branch ${plan.deleteFlag} ${plan.branch} refused: ${deleted.err.split('\n')[0]}`)
+      removed.push(`${plan.branch}'s worktree (branch kept: git branch ${plan.deleteFlag} refused)`)
     }
   }
-  return removed
+  // an entry whose folder is gone and that git does not list can never be worked in again
+  const registered = new Set(worktrees.map(w => normPath(w.path, windows)))
+  const gone: string[] = []
+  for (const [key, v] of Object.entries(state.active)) {
+    if (now - v.at >= GONE_GRACE_MS && !registered.has(key) && !(await $.fs.exists(v.path))) gone.push(v.path)
+  }
+  await withState($, repo, async s => ({ state: sweepActive(s, { now, finished: finishedPaths, gone }, windows), value: undefined }), warn)
+  return { removed, kept }
 }
 
 // a session's tracked worktrees (normalised path to path) and its sweeps, which run one at a time
-type Sweeps = { tracked: Map<string, string>; chain: Promise<void> }
+type Sweeps = { tracked: Map<string, string>; chain: Promise<void>; warn: Warn }
 
-function sweep($: $, s: Sweeps, base: number): Promise<void> {
+function sweep($: $, s: Sweeps, base: number, ev: SweepEvent): Promise<void> {
   s.chain = s.chain
     .then(async () => {
-      const removed = await selfClean($, s.tracked, base)
+      const { removed, kept } = await selfClean($, s.tracked, base, ev, s.warn)
       if (removed.length > 0) await $.ui.toast(`worktrees: removed merged ${removed.join(', ')}`)
+      if (kept.length > 0) await $.ui.toast(`worktrees: kept merged worktrees that need a look: ${kept.join('; ')}`)
     })
     .catch(error => $.ui.log(`worktrees: self-clean failed: ${String(error)}`, { to: 'debug' }))
   return s.chain
@@ -1040,10 +1225,11 @@ type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean; remove
 
 type Facts = { facts: BranchFacts[]; worktrees: Worktree[]; sync: MainSync; defaultBranch: string }
 
-async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
+async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | undefined> {
   const head = await git($, repo.top, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
   const defaultBranch = head.ok ? head.out.replace(/^origin\//, '') : 'main'
-  const state = await readState($, repo)
+  const state = await loadState($, repo)
+  if (state === undefined) return undefined
   const now = await $.clock.now()
   const current = (await git($, repo.top, 'branch', '--show-current')).out
   const worktrees = parseWorktrees((await git($, repo.top, 'worktree', 'list', '--porcelain')).out)
@@ -1178,14 +1364,30 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
   return { facts, worktrees, sync, defaultBranch }
 }
 
-export async function tidy($: $, options: Record<string, unknown>, dryRun: boolean): Promise<TidyReport | undefined> {
+export async function tidy($: $, options: Record<string, unknown>, dryRun: boolean, warn?: Warn): Promise<TidyReport | undefined> {
   const repo = await repoAt($)
   if (repo === undefined) return undefined
   const windows = await isWindows($)
+  // an unreadable slots.json reads as "no agent is live": remove nothing, delete no branch, write nothing
+  const unreadable = async (): Promise<TidyReport> => {
+    const path = stateFile(repo)
+    await $.ui.log('worktrees: tidy skipped: slots.json unreadable', { to: 'debug' })
+    await tellUnreadable($, warn, path)
+    return {
+      plans: [],
+      lines: [`slots.json unreadable at ${path}: nothing removed. Delete it once no agents are running, and the next create starts it fresh.`],
+      acted: false,
+      removed: [],
+      unmerged: [],
+    }
+  }
+  if (await stateUnreadable($, repo)) return unreadable()
   const lines: string[] = []
   let acted = false
   if (!(await git($, repo.top, 'fetch', '--prune', 'origin')).ok) lines.push('git fetch failed; using the remote branches as last fetched')
-  const { facts, worktrees, sync, defaultBranch } = await gatherFacts($, repo, windows)
+  const gathered = await gatherFacts($, repo, windows)
+  if (gathered === undefined) return unreadable()
+  const { facts, worktrees, sync, defaultBranch } = gathered
   const plans = facts.map(decideBranch)
   const removed: string[] = []
 
@@ -1214,7 +1416,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
     }
     acted = true
     if (plan.worktreePath) {
-      lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false)))
+      lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false, warn)))
       const removed = await removeWorktree($, repo.top, plan.worktreePath, windows)
       if (!removed.ok) {
         lines.push(`${plan.branch}: worktree remove failed, left the branch: ${removed.err}`)
@@ -1222,7 +1424,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       }
       if (removed.note !== undefined) lines.push(`${plan.branch}: ${removed.note}`)
       const gone = plan.worktreePath
-      await withState($, repo, async s => ({ state: markDone({ ...s, slots: releaseSlot(s.slots, gone, windows) }, gone, windows), value: undefined }))
+      await withState($, repo, async s => ({ state: markDone({ ...s, slots: releaseSlot(s.slots, gone, windows) }, gone, windows), value: undefined }), warn)
     }
     let deleted = await git($, repo.top, 'branch', '-d', plan.branch)
     if (!deleted.ok && plan.allowForce) deleted = await git($, repo.top, 'branch', '-D', plan.branch)
@@ -1250,7 +1452,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       if (!live.has(path) && !dead.has(path) && !(await $.fs.exists(path))) dead.add(path)
     }
   }
-  const table = (await readState($, repo)).slots
+  const table = ((await loadState($, repo)) ?? parseState(undefined)).slots
   const deadSlots: [number, Slot][] = []
   for (const [n, s] of Object.entries(table.slots)) if (!(await $.fs.exists(s.path))) deadSlots.push([Number(n), s])
   const orphanPorts = deadSlots.flatMap(([n]) => ports(base, n))
@@ -1263,7 +1465,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       await withState($, repo, async t => ({
         state: deadSlots.reduce((acc, [, s]) => markDone({ ...acc, slots: releaseSlot(acc.slots, s.path, windows) }, s.path, windows), t),
         value: undefined,
-      }))
+      }), warn)
       lines.push(`released slot${deadSlots.length === 1 ? '' : 's'} ${deadSlots.map(([n]) => n).join(', ')} (worktree gone)`)
     }
   }
@@ -1284,37 +1486,91 @@ export const register: Register = (on, options) => {
   const noIsolate = noIsolateTypes(options.noIsolateAgents, options.readOnlyAgents)
   const isolateNested = options.isolateNestedRepos === true || options.isolateNestedRepos === 'true'
   const base = portBaseOf(options)
-  let inRepo: boolean | undefined
+  // the repo this session works for, kept once found; a failed search is never kept
+  let repoFound: ProjectRepo | undefined
   // whether this session's repo keeps its agents in the main checkout for its nested repos, found once; and
   // whether the session was told so
   let nested: Promise<{ skip: boolean; toast: string }> | undefined
   let toldNested = false
   // the worktrees this session's WorktreeCreate made or reused; in memory on purpose: what a resumed or crashed
   // session left is for /tidy
-  const own: Sweeps = { tracked: new Map(), chain: Promise.resolve() }
+  // whether the user was told slots.json is unreadable; once per session, best effort
+  let toldUnreadable = false
+  const warn: Warn = path => {
+    if (toldUnreadable) return undefined
+    toldUnreadable = true
+    return `worktrees: slots.json at ${path} is unreadable; worktree slots and cleanup are paused. Fix it, or delete it once no agents are running.`
+  }
+  const own: Sweeps = { tracked: new Map(), chain: Promise.resolve(), warn }
   const tracked = own.tracked
 
   // 1. Every Agent call that can edit gets a worktree.
+  let toldFailed = false
   on('classic.PreToolUse', { tool: 'Agent' }, async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
-    if (input.isolation !== undefined) return next(e)
-    inRepo ??= (await git($, undefined, 'rev-parse', '--is-inside-work-tree')).out === 'true'
-    if (!needsWorktree(input, inRepo, noIsolate)) return next(e)
-    if (!isolateNested) {
-      nested ??= nestedRepos($)
-      const found = await nested
-      if (found.skip) {
-        if (!toldNested) {
-          toldNested = true
-          await $.ui.toast(found.toast)
-        }
-        return next(e)
+    const type = typeof input.subagent_type === 'string' && input.subagent_type !== '' ? input.subagent_type : 'general-purpose'
+    const log = async (text: string) => {
+      try {
+        await $.ui.log(text, { to: 'debug' })
+      } catch {
+        // the log is best effort
       }
     }
-    if (await declaredByKit($, input)) return next(e)
-    const result = await next(e)
-    if (result.deny !== undefined || result.updatedInput !== undefined) return result
-    return { ...result, updatedInput: withWorktree(input) }
+    const skipped = (reason: string) => log(`worktrees: isolation skipped ${type}: ${reason}`)
+    let result: Awaited<ReturnType<typeof next>> | undefined
+    try {
+      if (input.isolation !== undefined) {
+        await skipped('explicit isolation')
+        return next(e)
+      }
+      repoFound ??= await projectRepo($, (e as unknown as { cwd?: string }).cwd)
+      const repo = repoFound
+      if (repo === undefined) {
+        await skipped('no repo found')
+        return next(e)
+      }
+      if (!needsWorktree(input, true, noIsolate)) {
+        await skipped('no-isolate type')
+        return next(e)
+      }
+      if (!isolateNested) {
+        nested ??= nestedRepos($, repo.main).catch(error => {
+          nested = undefined
+          throw error
+        })
+        const found = await nested
+        if (found.skip) {
+          if (!toldNested) {
+            toldNested = true
+            await $.ui.toast(found.toast)
+          }
+          await skipped('nested repos')
+          return next(e)
+        }
+      }
+      if (await declaredByKit($, input, repo.main)) {
+        await skipped('kit manifest declares it read-only')
+        return next(e)
+      }
+      result = await next(e)
+      if (result.deny !== undefined || result.updatedInput !== undefined) {
+        await skipped('another hook answered')
+        return result
+      }
+      await log(`worktrees: isolating ${type}`)
+      return { ...result, updatedInput: withWorktree(input) }
+    } catch (error) {
+      await log(`worktrees: isolation failed for ${type}: ${String(error)}`)
+      if (!toldFailed) {
+        toldFailed = true
+        try {
+          await $.ui.toast(`worktrees: could not give ${type} a worktree; it runs in the current checkout. See the debug log.`)
+        } catch {
+          // the toast is best effort
+        }
+      }
+      return result ?? next(e)
+    }
   }).catch(passThrough)
 
   // 2. The plugin creates every worktree itself, from the HEAD of the checkout the hook runs in: Claude Code's
@@ -1322,10 +1578,19 @@ export const register: Register = (on, options) => {
   // copied, and the repo's setup script runs with a slot of ports.
   on('classic.WorktreeCreate', async ($, e, next) => {
     const windows = await isWindows($)
-    const repo = await repoAt($, e.cwd)
+    // ADR-0015 section 4: the checkout the hook runs in, else the project repo (cwd may be inside the git dir)
+    let repo = await repoAt($, e.cwd)
+    if (repo === undefined) {
+      const found = await projectRepo($, e.cwd)
+      if (found !== undefined) repo = { top: found.main, common: found.common, mainRoot: found.main }
+    }
     if (repo === undefined || !/^[A-Za-z0-9._-]+$/.test(e.name)) return next(e)
     const path = `${repo.mainRoot}/.claude/worktrees/${e.name}`
     const branch = `worktree-${e.name}`
+    // recorded before anything is created, so a sweep while git and the file copies run sees the agent as live
+    const now = await $.clock.now()
+    await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }), warn)
+    tracked.set(normPath(path, windows), path)
     const head = await git($, e.cwd, 'rev-parse', '--verify', '--quiet', 'HEAD')
     const plan = planCreate({
       pathExists: await $.fs.exists(path),
@@ -1341,21 +1606,22 @@ export const register: Register = (on, options) => {
       if (!added.ok) {
         await $.ui.toast(`worktrees: git worktree add failed; using the default worktree`)
         await $.ui.log(`worktrees: git worktree add ${path}: ${added.err}`, { to: 'debug' })
+        await withState($, repo, async state => ({ state: markDone(state, path, windows), value: undefined }), warn)
+        tracked.delete(normPath(path, windows))
         return next(e)
       }
       const copied = await copyIncluded($, repo, path, windows)
       if (copied !== '') await $.ui.log(`worktrees: ${copied}`, { to: 'debug' })
     }
-    const now = await $.clock.now()
-    await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }))
-    tracked.set(normPath(path, windows), path)
     const script = `${repo.top}/.claude/worktree-setup.${windows ? 'ps1' : 'sh'}`
     if (!(await $.fs.exists(script))) return { worktreePath: path }
 
     const slot = await withState($, repo, async state => {
       const claimed = claimSlot(state.slots, path, e.name, now, windows)
       return { state: { ...state, slots: claimed.table }, value: claimed.slot }
-    })
+    }, warn)
+    // slots.json could not be read: no slot is drawn, so the setup script does not run; the worktree is there without it
+    if (slot === undefined) return { worktreePath: path }
     const [from, to] = portRange(base, slot)
     const env = { WORKTREE_PATH: path, WORKTREE_NAME: e.name, WORKTREE_SLOT: String(slot), PORT_BASE: String(from), REPO_ROOT: repo.mainRoot }
     const argvs = windows
@@ -1386,7 +1652,7 @@ export const register: Register = (on, options) => {
   on('classic.WorktreeRemove', async ($, e, next) => {
     const repo = await repoAt($, e.cwd)
     if (repo !== undefined && worktreeRootOf(e.worktree_path) !== undefined) {
-      const notes = await cleanWorktree($, repo, e.worktree_path, base, true)
+      const notes = await cleanWorktree($, repo, e.worktree_path, base, true, warn)
       if (notes.length > 0) await $.ui.log(`worktrees: ${notes.join('\n')}`, { to: 'debug' })
     }
     return next(e)
@@ -1422,12 +1688,12 @@ export const register: Register = (on, options) => {
       // a session that itself runs in a worktree keeps what it started there
       const own = worktreeRootOf(await $.session.cwd())
       if (own !== undefined && normPath(own, windows) === normPath(path, windows)) continue
-      const table = (await readState($, repo)).slots
+      const table = ((await loadState($, repo)) ?? parseState(undefined)).slots
       if (!(await $.fs.exists(path)) && slotOf(table, path, windows) === undefined) continue
       // the process probe takes seconds on Windows: run it after the agent's stop, not inside it
       $.clock.after(0, () => {
         void (async () => {
-          const notes = await cleanWorktree($, repo, path, base, false)
+          const notes = await cleanWorktree($, repo, path, base, false, warn)
           const stopped = notes.filter(n => n.startsWith('stopped')).length
           if (stopped > 0) await $.ui.toast(`worktrees: stopped ${stopped} process${stopped === 1 ? '' : 'es'} left by ${e.agent_type}`)
           if (notes.length > 0) await $.ui.log(`worktrees: ${notes.join('\n')}`, { to: 'debug' })
@@ -1457,10 +1723,11 @@ export const register: Register = (on, options) => {
   // background: the process probe takes seconds on Windows. Everything else is /tidy's, on demand.
   on('classic.PostToolUse', async ($, e, next) => {
     const result = await next(e)
-    if (tracked.size === 0 || (e.tool_name !== 'Bash' && e.tool_name !== 'PowerShell')) return result
+    if ((e.tool_name !== 'Bash' && e.tool_name !== 'PowerShell')) return result
     const command = (e.tool_input as { command?: unknown } | null)?.command
     if (typeof command !== 'string' || !/\bmerge\b/.test(command)) return result
-    $.clock.after(0, () => void sweep($, own, base))
+    const ev = e as unknown as { cwd?: string; transcript_path?: string }
+    $.clock.after(0, () => void sweep($, own, base, { cwd: ev.cwd, transcriptPath: ev.transcript_path }))
     return result
   }).catch(passThrough)
 
@@ -1476,7 +1743,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'tidy' }, async ($, e) => {
     const dryRun = /dry/i.test(e.args)
-    const report = await tidy($, options, dryRun)
+    const report = await tidy($, options, dryRun, warn)
     if (report === undefined) return { text: 'Not in a git repository with a main checkout.' }
     const head = dryRun ? 'Dry run, nothing changed.' : report.acted ? 'Tidied.' : 'Nothing to remove.'
     return { text: [head, ...report.lines].join('\n') }
