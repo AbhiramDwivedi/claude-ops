@@ -886,3 +886,56 @@ test('removing an agent worktree with a truncated slots.json tells the user once
   expect(w.toasts[w.toasts.length - 1]).toContain('slots.json')
   expect(w.files.get(slashed(SLOTS_PATH))).toBe(trunc)
 })
+
+// ---------------- fifth red team: an active entry that is not { path: string, at: finite number } makes slots.json unreadable ----------------
+const rewriteActive = (w: CleanupWorld, entry: unknown) => {
+  const st = JSON.parse(w.files.get(slashed(SLOTS_PATH)) as string) as { slots: object; active: Record<string, unknown> }
+  const key = Object.keys(st.active).find(k => k.endsWith('/agent-' + NEW.id)) as string
+  st.active[key] = entry
+  w.files.set(slashed(SLOTS_PATH), JSON.stringify(st))
+}
+const badEntries: [string, (path: string) => unknown][] = [
+  ['at is a string', p => ({ path: p, at: 'x' })],
+  ['at is missing', p => ({ path: p })],
+  ['the entry is null', () => null],
+]
+for (const [i, [label, entry]] of badEntries.entries()) {
+  test(`the merge sweep removes nothing, writes nothing and toasts once when an active entry is bad: ${label}`, async ($, on) => {
+    const w = liveSweepWorld(on)
+    await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+    rewriteActive(w, entry(NEW.path))
+    const wrote = slotsWrites(w).length
+    await cleanupSweep(w, $, MAIN)
+    expect(removedAnything(w)).toEqual([])
+    expect(slotsWrites(w).length - wrote).toBe(0)
+    expect(w.toasts).toHaveLength(1)
+    if (i === 2) expect(w.logs.filter(l => l.includes('self-clean failed'))).toEqual([])
+  })
+}
+
+test('tidy removes nothing and says slots.json is unreadable when an active entry has at as a string', async ($, on) => {
+  const w = liveTidyWorld(on)
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  rewriteActive(w, { path: NEW.path, at: 'x' })
+  const text = await tidyRun($)
+  expect(removedAnything(w)).toEqual([])
+  expect(text).toContain('slots.json unreadable')
+})
+
+test('the toast for an unreadable slots.json says it clears once no agents are running, not when the file is deleted', async ($, on) => {
+  const trunc = SLOTS_JSON.slice(0, SLOTS_JSON.indexOf('a4other'))
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: trunc }, gone: [NEW.path], merged: b => b === LIVE_OTHER.branch })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  await cleanupSweep(w, $, MAIN)
+  expect(w.toasts).toHaveLength(1)
+  expect(w.toasts[0]).toContain('once no agents are running')
+  expect(w.toasts[0]).not.toContain('until it is deleted')
+})
+
+test('the merge sweep removes nothing for a live agent whose active entry is valid and recent', async ($, on) => {
+  const w = liveSweepWorld(on)
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  rewriteActive(w, { path: NEW.path, at: NOW - 60_000 })
+  await cleanupSweep(w, $, MAIN)
+  expect(removedAnything(w)).toEqual([])
+})
