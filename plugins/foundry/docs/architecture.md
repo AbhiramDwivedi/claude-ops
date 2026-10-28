@@ -8,6 +8,8 @@ Foundry 0.3.0 adds a design phase: an architect, principle packs, a plan file an
 
 Foundry 0.4.0 (designed in foundry run 2, ADRs accepted 2026-10-27) builds on kit and records what a run did. [ADR-0002](adr/0002-kit-manifest-and-config.md): foundry init reads kit's manifest, has kit declare `foundry:judge` and `foundry:cynic` read-only, and proposes the new `.claude/foundry.json` keys ([`foundry-config.schema.json`](foundry-config.schema.json)); crews take ports from worktrees' slots. [ADR-0003](adr/0003-event-log-and-retro.md): the hooks append `events.jsonl` ([`events.schema.json`](events.schema.json)), `decisions.md` gets a grammar, and `scripts/retro.py` with the `foundry:retro` skill counts both. Both apply the repo's extension rules, [repo ADR-0012](../../../docs/adr/0012-extension-framework.md). Until wave 1 of that run merges, the sections below marked 0.4.0 describe the design, not the code.
 
+Foundry 0.5.0 (designed in foundry run 3, [ADR-0004](adr/0004-scope-repair-and-head-gates.md), accepted 2026-10-28 with the owner's approval of the run-3 plan) makes the quality gates evidence-based for scope, repair and cost. Plan v2 carries a `repairBudget`. The lead's report gains Examined and Not examined sections, and the judge FAILs an absence claim that states no scope. The judge writes fixed head and patch lines, so a hook can tell which head a PASS belongs to, and a PASS survives a rebase that leaves the patch id unchanged. The hooks refuse the judge spawn that would exceed the budget, and record the spent budget in `events.jsonl`. They also refuse main-session `foundry:*` calls that set no model or effort. Every new rule applies only to plans with `version >= 2` and fails open on v1. The effort ladder itself is a repo-level principle, in the amendment to repo [ADR-0011](../../../docs/adr/0011-agents-pin-their-model.md). Until run 3's wave 1 merges, the sections marked 0.5.0 describe the design, not the code.
+
 The container view below shows which part writes and which reads each stored file. Nodes marked 0.4.0 are designed, not built.
 
 ```mermaid
@@ -37,9 +39,9 @@ flowchart TB
   run -->|"writes decision lines"| dec
   crew -.->|"Agent, SendMessage, stops"| hooks
   hooks -->|"reads, gates lead starts"| plan
-  hooks -->|"saves reports, logs lead messages"| reports
+  hooks -->|"saves reports, logs lead messages, 0.5.0: reads this run's judge files"| reports
   hooks -->|"stamps HH:MM"| dec
-  hooks -->|"appends spawn, stall, tag, report"| events
+  hooks -->|"appends spawn, stall, tag, report, 0.5.0: spent budget"| events
   retro -->|"reads"| events
   retro -->|"reads"| dec
 ```
@@ -109,14 +111,14 @@ Only the foreman talks to the owner. Only leads message the foreman, so a member
 | Agent | Started by | Model and effort | Edits files |
 | --- | --- | --- | --- |
 | Foreman | You, with `/foundry:run` | The session's | Only `decisions.md`, `plan.md`, goal files, and the fast-forward in `sequential` mode; from 0.3.0, `plan.json` and `plan.md` once the architect has drafted them: it sets `approvedAt` and each crew's `status`, and for a mid-run design slice adds the crew, moves its dependants a wave later and sets `ownerApproval` |
-| Architect, 0.3.0 | `init`: the `foundry:init` skill, run by you as `/foundry:init` or by the foreman when a run finds no architecture doc. `plan`: the foreman, at the start of every run. `design`: the design crew's lead | Opus, `high` | Only the architecture doc and the ADR directory, plus `.claude/foundry.json` in `init` mode, `plan.json`, `plan.md` and `<foundry dir>/scratch/` in `plan` mode, and a contract artifact at a path the design crew owns in `design` mode; never source or tests |
-| Cynic, `cynic-<n>` | Foreman, fresh for each batch | Opus, `high` | No |
+| Architect, 0.3.0 | `init`: the `foundry:init` skill, run by you as `/foundry:init` or by the foreman when a run finds no architecture doc. `plan`: the foreman, at the start of every run. `design`: the design crew's lead | Opus, `medium` (0.4.3) | Only the architecture doc and the ADR directory, plus `.claude/foundry.json` in `init` mode, `plan.json`, `plan.md` and `<foundry dir>/scratch/` in `plan` mode, and a contract artifact at a path the design crew owns in `design` mode; never source or tests |
+| Cynic, `cynic-<n>` | Foreman, fresh for each batch | Opus, `medium` (0.4.3) | No |
 | Lead, `<slug>` | Foreman, in the background, in a worktree | Opus, `medium` | Merges and rebases the crew branch; writes code only for conflicts and small fixes the checks demand |
 | Members, named after their lead | Lead | Set on every call; Sonnet for mechanical work, Opus for judgment | Yes, each in its own worktree |
-| Judge, `<crew>-judge`, then `-2`, `-3` | Lead | Opus, one level above the strongest builder, `high` to `xhigh` | No |
-| Red team, `<crew>-redteam` | Lead, when the plan says yes | Opus, `high` | Only inside its own worktree and temp dirs; never commits |
+| Judge, `<crew>-judge`, then `-2`, `-3` | Lead | Opus, `medium` (0.4.3); `high` or `xhigh` only on the owner's call (repo ADR-0011 amendment). From 0.5.0, on a v2 plan, at most `repairBudget` judges after FAILs ([ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 5) | No |
+| Red team, `<crew>-redteam` | Lead, when the plan says yes | Opus, `medium` (repo ADR-0011 amendment) | Only inside its own worktree and temp dirs; never commits |
 | Integrator | Foreman, `single` mode | `general-purpose`, Opus, `high` | Yes, the integration branch |
-| Integration judge | Foreman, `single` mode | Opus, `xhigh` | No |
+| Integration judge | Foreman, `single` mode | Opus, `xhigh` in 0.4.3 (`skills/run/SKILL.md:315`); `medium` from 0.5.0, like every judge (repo ADR-0011 amendment) | No |
 
 The architect (0.3.0) is `agents/architect.md`. It loads the principle packs the work touches from the `skills/principles/` skill and runs in three modes ([ADR-0001](adr/0001-design-phase.md), sections 2 and 3):
 
@@ -216,6 +218,8 @@ Each line of `messages.jsonl` is `{ "ts", "from", "to", "summary" }`, where `fro
 
 Each line is one JSON object under [`events.schema.json`](events.schema.json): `{ "v": 1, "ts", "event", "crew", "agent" }` plus the event's own fields. `spawn` (a crew agent's or a lead's `Agent` call that went through) adds `agentId`, `type`, `model`, `effort` and `by`; `stall` (a stall or idle-lead wake) adds `kind` and `minutes`; `tag` (a lead's tagged message to `main`) adds `tag`; `report` (a final report saved) adds `marker`, the report's leading marker or null. No line holds message, prompt or report text. Appends are serialized like the message log's and roll at 3 MiB the same way; a failed append is logged and changes nothing else ([ADR-0003](adr/0003-event-log-and-retro.md), section 1).
 
+From 0.5.0 one more event kind records a spent repair budget: `{ "v": 1, "ts", "event", "crew", "agent" }` and nothing else, with `agent` the judge whose FAIL spent it. It is appended after that judge's `report` line, on a v2 or later plan, whenever a saved judge FAIL leaves the crew's this-run FAIL count above `repairBudget`. `v` stays 1, because a new event kind isn't a renamed or retyped field. A crew can get the line more than once, so readers count distinct crews. The event name is fixed in [ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 3. Spawn lines gain no keys.
+
 ### `decisions.md` grammar (0.4.0)
 
 ```
@@ -251,6 +255,8 @@ Validating a plan against the schema checks these constraints of its own:
 - `crews`, and each crew's `modules` and `owns`, hold at least one item; `modules` and `owns` items are unique non-empty strings.
 - `wave` is an integer of 0 or more; `agentCap`, `maxParallelCrews` and `estAgents` are integers of 1 or more; `goal`, `architecture` and `doneCheck` are non-empty strings.
 
+**Plan v2 (0.5.0, [ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 1).** The schema describes versions 1 and 2. `version` is `1` or `2`. A v2 plan requires the top-level `repairBudget`, an integer of 0 or more: how many fresh judges a crew may start after judge FAILs in this run. The architect copies it from `.claude/foundry.json` (default 2). A v1 plan may not carry it, and every v1 plan that was valid stays valid. There is no per-crew budget. The hooks never validate the version. `parsePlan` passes `version` and `repairBudget` through unchecked, and each 0.5.0 rule asks `planAtLeastV2` (an integer `version` of 2 or more) first. So a v3 plan inherits the v2 rules, and a v1 plan, or one with no version, gets 0.4.3 behaviour.
+
 One file lives in the project repo, not the foundry folder:
 
 ```
@@ -270,6 +276,7 @@ One file lives in the project repo, not the foundry folder:
 | `roles`, 0.4.0 | `init` on approval, or the owner | the inventory, as 0.3.0 | Agent type per job: `build`, `test`, `review`, `search`, `docs`, `deploy` |
 | `deploy`, 0.4.0 | `init` on approval, or the owner | none | `{target, command, production}` for devops; `production: true` always goes to the owner |
 | `writingSkill`, 0.4.0 | `init` on approval, or the owner | none | The skill the writer loads, when listed |
+| `repairBudget`, 0.5.0 | `init` on approval, or the owner | 2 | The integer of 0 or more the architect copies into a v2 `plan.json` ([ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 2) |
 | `promptOverrides`, 0.4.0 | `init` on approval, or the owner | none | Per role (`lead`, `judge`, `cynic`, `writer`, `devops`, `architect`), a file under `.claude/foundry/prompts/` the role reads in addition to its prompt; never prompt text. The key is proposed like the others; the prompt files themselves are the owner's |
 
 From 0.4.0 init also reads `<repo>/.claude/kit/manifest.json`, kit's record of what it set up (contract `plugins/kit/docs/manifest.schema.json`, repo ADR-0013). It runs `kit:init` through the Skill tool when that skill is listed and the manifest is missing or lacks foundry's read-only declarations, and otherwise carries on as 0.3.0 and says so ([ADR-0002](adr/0002-kit-manifest-and-config.md), section 1). The sequence, as designed:
@@ -326,10 +333,11 @@ All of these are in `hooks/register.ts`.
 | `tool.call` on `SendMessage` | Enforces who a crew agent may message, logs lead-to-lead messages, and tracks each lead's tag for `/foundry`. From 0.4.0, appends a `tag` line to `events.jsonl` for each tag set. |
 | `tool.call` on `Agent` | Refuses crew agents' calls without `model` or `effort`, or with `effort: "max"`. Adds the report-path note to calls that start a lead or a crew member. |
 | `tool.call` on `Agent`, 0.3.0 | Refuses starting a lead that `plan.json` holds back: the run-level and crew-level approval gates, the wave gate and the parallel cap (see [Plan gates](#plan-gates-030)). |
+| `tool.call` on `Agent`, 0.5.0 | On a v2 or later plan: refuses a main-session `foundry:*` call with no `model` or a missing or unknown `effort`, and refuses a crew's judge-named spawn once its repair budget is spent (see [Repair budget and head guard](#repair-budget-and-head-guard-050)). |
 | `tool.call` on `Write`, `Edit` | Stamps the clock's time on new lines of this session's `decisions.md`; from 0.4.0, on every literal `HH:MM` too. |
 | `tool.call`, any tool | Records activity, the main session's too. On `SubagentHandback`, refuses an empty hand-back from a crew agent and captures the report. |
 | `turn.step` | Records activity for each model request, the main session's too. |
-| `classic.SubagentStop` | Runs the lead stop gate and saves the stopping agent's report. From 0.4.0, each final report saved (here or from `SubagentHandback`) appends a `report` line to `events.jsonl`. |
+| `classic.SubagentStop` | Runs the lead stop gate and saves the stopping agent's report. From 0.4.0, each final report saved (here or from `SubagentHandback`) appends a `report` line to `events.jsonl`. From 0.5.0, on a v2 or later plan, the gate also sends back a final report that lacks the Examined and Not examined sections, or that the head guard rejects. A judge FAIL that spends the budget appends the spent-budget line. |
 | `session.measure`, `classic.StopFailure` | Arm the limit-reset wake. |
 | `command.run` for `foundry` | Prints the crew status. |
 
@@ -353,7 +361,7 @@ From inside a crew, every Agent call needs `model`, and `effort` set to `low`, `
 - No effort, or an unknown one: ``[foundry] Refused: inside a crew, every Agent call sets `effort` to one of "low", "medium", "high" or "xhigh": "low" for lookups and mechanical edits, "medium" for well-specified work, "high" or "xhigh" for hard design, debugging or review. Call Agent again with effort set.``
 - `effort: "max"`: `[foundry] Refused: effort "max" is not allowed inside a crew; "xhigh" is the top. Call Agent again with effort set to "low", "medium", "high" or "xhigh".`
 
-The model check runs first. The foreman's own Agent calls aren't checked, though the skill tells it to set both.
+The model check runs first. In 0.4.3 the foreman's own Agent calls aren't checked, though the skill tells it to set both. From 0.5.0, on a v2 or later plan, a main-session call whose `subagent_type` starts with `foundry:` must set `model` and one of the four efforts (`mainCallVerdict`, refusals `MAIN_MODEL_REFUSAL` and `MAIN_EFFORT_REFUSAL`, [ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 7). It runs before the plan gates. With no plan file, such as the plan-mode architect's start, it lets the call through. The hooks refuse `high` and `xhigh` nowhere. Whether the owner asked for them is a prompt rule, and retro's target share for them is zero.
 
 A call that starts a lead from the main thread, or any agent from inside a crew, gets this note in its result: `[foundry] If <name>'s report does not reach you, read <path> once it stops.`
 
@@ -389,6 +397,70 @@ A lead's stop is checked against its hand-back, else its last message. It goes t
 `[foundry] Not done yet: finish with your report, in the sections Summary, Branch, Changes, Proof, Checks run and Open questions (each a "## " heading), or, if you cannot finish, start your final message with CHECKPOINT:, BLOCKED:, QUESTION: or PROPOSAL:.`
 
 The gate sends a stop back at most twice in a row (`LEAD_STOP_BLOCKS`), then lets the next one through, so a lead can't loop forever. A stop while the lead still has work out is interim and always goes through: a descendant is live, or a background task belonging to a descendant is running or pending. A stop excused by an unanswered tag is interim too. An interim stop's text is saved to `<agent>.interim.md` and doesn't change the report file, its tag or the lead's idle period. A stop the gate sends back is saved nowhere. The gate applies to `foundry:lead` agents only.
+
+From 0.5.0, on a v2 or later plan, an untagged text that passes by its `## Proof` section gets two more checks, in this order:
+
+1. `examinedVerdict`: both the Examined and the Not examined headings must be present, as fixed in ADR-0004, section 3.
+2. `headVerdict`: the head guard, below.
+
+Their send-backs count in the same streak, so the two-block bound still holds. An unanswered tag doesn't excuse them. A hand-back is saved as the report only if it passes the first check. The head guard runs only at the stop, because it calls git.
+
+### Repair budget and head guard (0.5.0)
+
+Designed in [ADR-0004](adr/0004-scope-repair-and-head-gates.md), sections 5 and 6; the literals are in its section 3, and the exported functions in section 9. Both rules read the crew's **this-run judge files**: `reports/<crew>/<crew>-judge*.md`, not interim, modified at or after `plan.json`'s `approvedAt`. This session dir already holds `design-judge.md` to `-judge-7.md` from earlier runs that reused the crew name, so counting by name alone would be wrong.
+
+- **Budget.** A crew's FAIL count is the number of its this-run judge files that start `VERDICT: FAIL`. Once that count is greater than `repairBudget`, the budget is spent. A judge-named spawn from inside the crew is then refused with the `BUDGET_REFUSAL` prefix, and the hooks append the spent-budget line when the FAIL that spent it is saved. The lead sends `main` the budget-blocked message and stops. A successor lead has its own folder, so it starts a fresh count.
+- **Head guard.** The judge writes its head and patch lines under `## Proof checked`. At a lead's final stop, the hook takes the crew's newest this-run judge file. It must be a PASS with no UNSCOPED finding and with both lines. The hook then compares the judged head with `git rev-parse <branch>`, where the branch comes from the report's Branch line. If the head moved, it compares the judged patch id with the current one, computed by `PATCH_COMMAND`. An equal head, or an equal patch id, goes through: the patch-bound PASS. A different patch id is sent back. An unknown head or patch id fails open.
+- **Merge gate.** The foreman reads the same file under the same rule, and merges a moved head only on an equal patch id with the lead's checks re-run green.
+
+```mermaid
+sequenceDiagram
+  participant L as Lead
+  participant H as Hooks (register.ts)
+  participant J as Judge
+  participant R as reports/crew/
+  participant E as events.jsonl
+  participant F as Foreman
+  L->>H: Agent foundry:judge, name crew-judge-k
+  H->>R: list and read this-run judge files
+  alt FAIL count > repairBudget (v2 plan)
+    H-->>L: Refused, repair budget spent
+    L->>F: BLOCKED message, last findings
+  else within budget
+    H->>J: start
+    J->>R: report with VERDICT, head and patch lines (saved at its stop)
+    opt VERDICT FAIL leaves the budget spent
+      H->>E: append the spent-budget line
+    end
+  end
+  L->>H: final report (stop)
+  H->>R: newest this-run judge file
+  H->>H: git rev-parse branch, and on a moved head PATCH_COMMAND
+  alt no clean PASS, no head lines, or patch id differs
+    H-->>L: Not done yet (counts in the stop streak)
+  else same head, or same patch id
+    H->>F: report goes through
+    F->>R: merge gate re-reads the same file
+  end
+```
+
+*The bounded repair loop and the head guard on a v2 plan, 0.5.0, as designed.*
+Traces to: `plugins/foundry/docs/adr/0004-scope-repair-and-head-gates.md` (sections 5 and 6), `plugins/foundry/hooks/register.ts:1241-1286` (the `Agent` handler the gate joins), `:1347-1397` (the stop gate), `:744-761` (`writeReport`, where the spent-budget line is appended), `:864-873` (`judgeOf`, which reads the highest-numbered judge file today), `plugins/foundry/agents/lead.md:101-105`, `:153-155`.
+
+### Seams (0.5.0)
+
+Each row is a seam inside foundry that ADR-0004 adds or changes. The contract tests read only `tests/fixtures/contract-050/**` or inline data.
+
+| Seam | Producer | Consumer | Contract | Pinned by |
+| --- | --- | --- | --- | --- |
+| `plan.json` v2, `repairBudget` | architect (copied from `.claude/foundry.json`) | hooks (`repairBudgetOf`, `planAtLeastV2`), foreman | `plan.schema.json` versions 1 and 2; ADR-0004 section 1 | ajv on `plan.example.json` and `fixtures/contract-050/plan-v1.json` |
+| `.claude/foundry.json` `repairBudget` | owner, `foundry:init` on approval | architect | `foundry-config.schema.json`; ADR-0004 section 2 | the schema |
+| Judge head and patch lines under `## Proof checked` | judge | hooks (`judgeRuling`, `headVerdict`), foreman's merge gate | ADR-0004 sections 3 and 6, `PATCH_COMMAND` | `tests/contract-gates.test.ts`, `tests/gates.check.ts` |
+| Lead's Examined and Not examined headings, and its Branch line | lead | hooks (`examinedVerdict`, `branchOf`), judge | ADR-0004 sections 3, 4 and 6 | `tests/contract-gates.test.ts`, `tests/gates.check.ts` |
+| Judge's UNSCOPED finding tag | judge | hooks (`judgeRuling`'s `unscoped`), foreman | ADR-0004 sections 3 and 4 | `tests/contract-gates.test.ts`, `tests/gates.check.ts` |
+| Spent-budget record: the `events.jsonl` line, and the lead's budget-blocked message | hooks (line); lead (message) | retro (`budgetsSpent`, from the line only); foreman (message) | `events.schema.json`; ADR-0004 sections 3 and 5 | `tests/contract-gates.test.ts`, `tests/test_contract_retro_050.py` |
+| retro's per-run `budgetsSpent` | `scripts/retro.py` | the `foundry:retro` skill | ADR-0004 section 8 (`retro` stays 1) | `tests/test_contract_retro.py` `RUN_KEYS`, `tests/test_contract_retro_050.py` |
+| Main-session `foundry:*` calls on a v2 plan | foreman | hooks (`mainCallVerdict`) | ADR-0004 section 7 | `tests/contract-gates.test.ts` |
 
 ### Heartbeat and stalls
 
@@ -444,11 +516,15 @@ Each hook step runs inside a guard. If foundry's code throws, the guard logs `fo
 
 **A judge FAIL.** The lead sends the findings to a builder. Each later judge is a fresh agent under the next unused name, never a resume, and any fix after a FAIL or a red-team break needs a fresh judge. When two fix attempts at one level end with the same check failing, the lead climbs the ladder: Sonnet, then Opus at `medium`, `high`, `xhigh`, each step a fresh agent whose first deliverable is a root-cause analysis with evidence. When `xhigh` fails twice, the lead sends `BLOCKED:` with the failing check, its output and the theories ruled out, and the foreman takes it to the owner. In `single` mode an integration-judge FAIL goes back to the integrator, and a fresh `integration-judge-2` rules next.
 
-**A verdict on the wrong commit.** The foreman merges only when the judge file's `## Proof checked` SHA equals `git rev-parse <crew branch>`. After a rebase that moved the head, the old PASS doesn't count.
+From 0.5.0, on a v2 plan, the judge FAILs a crew may repair are bounded. Once a crew's this-run FAIL count is greater than `repairBudget`, the hooks refuse its next judge, and the lead sends the budget-blocked message to `main` with the last findings. A spent budget goes to the foreman, never up an effort level. The foreman takes it to the owner, or re-plans; a successor lead starts a fresh count ([ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 5).
+
+**A verdict on the wrong commit.** The foreman merges only when the judge file's `## Proof checked` SHA equals `git rev-parse <crew branch>`. After a rebase that moved the head, the old PASS doesn't count. From 0.5.0 the SHA is the judge's head line, and a PASS also stands for a moved head when the patch line equals the rebased branch's `PATCH_COMMAND` id and the lead's checks passed again after the rebase. The lead stop gate enforces the same rule as a send-back ([ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 6).
 
 **A reload mid-session.** The module's memory starts over. An agent that ended before the reload resolves to no crew, so a message to it from a crew agent is refused. A pending limit-reset wake survives in plugin state.
 
 ## Not verified yet
+
+- The 0.5.0 rules are a design until run 3's wave 1 merges. One thing was checked at design time: `PATCH_COMMAND` gives the same id, `a40f2083…`, for `edeb6ef...80d4ccd` (a merge commit) and for `9ab68c0^...9ab68c0` (the single commit it merged), and prints nothing for an empty range (`80d4ccd...80d4ccd`). The hook's two-step form feeds the diff to `git patch-id` through `$.process.run`'s `stdin`, which worktrees' hooks already use (`plugins/worktrees/hooks/register.ts:843`). It hasn't been run from foundry's hooks.
 
 - The 0.3.0 plan gates, `/foundry` plan lines and idle-prompt successor name are covered by `tests/v03.test.ts`, run against the mock engine, not observed in a live run. [`plan.example.json`](plan.example.json) validates against [`plan.schema.json`](plan.schema.json).
 
