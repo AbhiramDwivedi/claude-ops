@@ -821,12 +821,26 @@ test('regression A: a held-back v2 hand-back is saved when the stop goes through
 test('regression B: a Branch name git would read as a revision expression runs no git and goes through', async ($, on) => {
   str('NO_HEAD_REASON')
   const { gitCalls } = await cleanWorld($ as never, on as never, { git: gitAt(H2, P2) })
-  for (const name of ['HEAD', '@', 'a@{1}', 'a~1']) {
+  const lines = [
+    ...['HEAD', '@', 'a@{1}', 'a~1', 'head', 'Head', 'orig_head', 'refs/worktree/x', 'refs/bisect/bad', 'main-worktree/HEAD'].map(n => `${n} at abc1234, based on def5678.`),
+    'auth-branch at abc1234, based on head.',
+  ]
+  const bad: string[] = []
+  for (const branch of lines) {
     gitCalls.length = 0
-    const branch = `${name} at abc1234, based on def5678.`
-    expect([branch, await lead($ as never, report({ branch }))]).toEqual([branch, undefined])
-    expect([branch, gitCalls]).toEqual([branch, []])
+    const block = await lead($ as never, report({ branch }))
+    if (block !== undefined || gitCalls.length > 0) bad.push(branch)
   }
+  // every offending Branch line is listed, not just the first
+  expect(bad).toEqual([])
+})
+
+test('regression B control: a normal branch whose name contains "head" still runs git and gets HEAD_MOVED when the patch differs', async ($, on) => {
+  str('NO_HEAD_REASON')
+  const { gitCalls } = await cleanWorld($ as never, on as never, { git: gitAt(H2, P2) })
+  const block = await lead($ as never, report({ branch: 'feature/head-guard at abc1234, based on def5678.' }))
+  expect(block).toBe(fn('headMovedReason')(H1, H2))
+  expect(gitCalls[0]?.argv).toEqual(['git', 'rev-parse', '--verify', '--quiet', 'feature/head-guard^{commit}'])
 })
 
 test('regression C: a hung read of the judge file does not hold a lead stop past the 2000 ms bound', async ($, on) => {
