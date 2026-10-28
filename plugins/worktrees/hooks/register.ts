@@ -882,6 +882,19 @@ const stateFile = (repo: Repo) => `${repo.common}/claude-worktrees/slots.json`
 const lockDir = (repo: Repo) => `${repo.common}/claude-worktrees/slots.lock`
 
 // slots.json exists but its text is not a JSON object: the sweep must not read that as "nothing is live"
+// The session's one-time notice: answers the toast text the first time slots.json is found unreadable, then undefined.
+type Warn = (path: string) => string | undefined
+
+async function tellUnreadable($: $, warn: Warn | undefined, path: string): Promise<void> {
+  const text = warn?.(path)
+  if (text === undefined) return
+  try {
+    await $.ui.toast(text)
+  } catch {
+    // the toast is best effort
+  }
+}
+
 async function stateUnreadable($: $, repo: Repo): Promise<boolean> {
   if (!(await $.fs.exists(stateFile(repo)))) return false
   try {
@@ -914,7 +927,7 @@ async function dropLock($: $, repo: Repo, windows: boolean): Promise<void> {
 // with slots.json read again under the lock, so parallel agents never draw the same slot.
 let stateChain: Promise<unknown> = Promise.resolve()
 // A slots.json that exists but does not parse is never overwritten: fn does not run, nothing is written, the answer is undefined.
-function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>): Promise<T | undefined> {
+function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: State; value: T }>, warn?: Warn): Promise<T | undefined> {
   const step = stateChain.then(async () => {
     const windows = await isWindows($)
     for (let tries = 0; !(await takeLock($, repo, windows)); tries++) {
@@ -926,6 +939,7 @@ function withState<T>($: $, repo: Repo, fn: (state: State) => Promise<{ state: S
     try {
       if (await stateUnreadable($, repo)) {
         await $.ui.log('worktrees: slots.json unreadable, left as is', { to: 'debug' })
+        await tellUnreadable($, warn, stateFile(repo))
         return undefined
       }
       const { state, value } = await fn(await readState($, repo))
@@ -1003,7 +1017,7 @@ function portBaseOf(options: Record<string, unknown>): number {
 
 // Stops a worktree's processes and the ones on its slot's ports. The slot is released when `release` is set,
 // or when the worktree folder is gone.
-async function cleanWorktree($: $, repo: Repo, path: string, base: number, release: boolean): Promise<string[]> {
+async function cleanWorktree($: $, repo: Repo, path: string, base: number, release: boolean, warn?: Warn): Promise<string[]> {
   const windows = await isWindows($)
   const state = await readState($, repo)
   const slot = slotOf(state.slots, path, windows)
@@ -1013,7 +1027,7 @@ async function cleanWorktree($: $, repo: Repo, path: string, base: number, relea
     await withState($, repo, async s => ({
       state: markDone(freeSlot ? { ...s, slots: releaseSlot(s.slots, path, windows) } : s, path, windows),
       value: undefined,
-    }))
+    }), warn)
   }
   return notes
 }
@@ -1058,7 +1072,7 @@ type SweepEvent = { cwd?: string; transcriptPath?: string }
 // merged into the HEAD of the merge checkout or of the main checkout (repo ADR-0015); then their branch. A dirty or
 // locked one is kept and reported. One write of slots.json retires finished, gone and stale `active` entries.
 // `tracked` is only a hint: removed paths drop out of it. Answers what it removed and what it kept, for the toasts.
-async function selfClean($: $, tracked: Map<string, string>, base: number, ev: SweepEvent): Promise<{ removed: string[]; kept: string[] }> {
+async function selfClean($: $, tracked: Map<string, string>, base: number, ev: SweepEvent, warn?: Warn): Promise<{ removed: string[]; kept: string[] }> {
   const windows = await isWindows($)
   const found = await projectRepo($, ev.cwd)
   if (found === undefined) return { removed: [], kept: [] }
@@ -1066,6 +1080,7 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   const log = (line: string) => $.ui.log(`worktrees: ${line}`, { to: 'debug' })
   if (await stateUnreadable($, repo)) {
     await log('self-clean skipped: slots.json unreadable')
+    await tellUnreadable($, warn, stateFile(repo))
     return { removed: [], kept: [] }
   }
   // the refs: the checkout the merge ran in (when it is in a work tree), then the main checkout; each ref is that
@@ -1148,7 +1163,7 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
       kept.push(`${wt.path} (${plan.reason})`)
       continue
     }
-    const notes = await cleanWorktree($, repo, wt.path, base, true)
+    const notes = await cleanWorktree($, repo, wt.path, base, true, warn)
     if (notes.length > 0) await log(notes.join('\n'))
     const done = await removeWorktree($, found.main, wt.path, windows)
     if (!done.ok) {
@@ -1170,17 +1185,17 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   for (const [key, v] of Object.entries(state.active)) {
     if (now - v.at >= GONE_GRACE_MS && !registered.has(key) && !(await $.fs.exists(v.path))) gone.push(v.path)
   }
-  await withState($, repo, async s => ({ state: sweepActive(s, { now, finished: finishedPaths, gone }, windows), value: undefined }))
+  await withState($, repo, async s => ({ state: sweepActive(s, { now, finished: finishedPaths, gone }, windows), value: undefined }), warn)
   return { removed, kept }
 }
 
 // a session's tracked worktrees (normalised path to path) and its sweeps, which run one at a time
-type Sweeps = { tracked: Map<string, string>; chain: Promise<void> }
+type Sweeps = { tracked: Map<string, string>; chain: Promise<void>; warn: Warn }
 
 function sweep($: $, s: Sweeps, base: number, ev: SweepEvent): Promise<void> {
   s.chain = s.chain
     .then(async () => {
-      const { removed, kept } = await selfClean($, s.tracked, base, ev)
+      const { removed, kept } = await selfClean($, s.tracked, base, ev, s.warn)
       if (removed.length > 0) await $.ui.toast(`worktrees: removed merged ${removed.join(', ')}`)
       if (kept.length > 0) await $.ui.toast(`worktrees: kept merged worktrees that need a look: ${kept.join('; ')}`)
     })
@@ -1332,10 +1347,23 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts> {
   return { facts, worktrees, sync, defaultBranch }
 }
 
-export async function tidy($: $, options: Record<string, unknown>, dryRun: boolean): Promise<TidyReport | undefined> {
+export async function tidy($: $, options: Record<string, unknown>, dryRun: boolean, warn?: Warn): Promise<TidyReport | undefined> {
   const repo = await repoAt($)
   if (repo === undefined) return undefined
   const windows = await isWindows($)
+  // an unreadable slots.json reads as "no agent is live": remove nothing, delete no branch, write nothing
+  if (await stateUnreadable($, repo)) {
+    const path = stateFile(repo)
+    await $.ui.log('worktrees: tidy skipped: slots.json unreadable', { to: 'debug' })
+    await tellUnreadable($, warn, path)
+    return {
+      plans: [],
+      lines: [`slots.json unreadable at ${path}: nothing removed. Delete it once no agents are running, and the next create starts it fresh.`],
+      acted: false,
+      removed: [],
+      unmerged: [],
+    }
+  }
   const lines: string[] = []
   let acted = false
   if (!(await git($, repo.top, 'fetch', '--prune', 'origin')).ok) lines.push('git fetch failed; using the remote branches as last fetched')
@@ -1368,7 +1396,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
     }
     acted = true
     if (plan.worktreePath) {
-      lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false)))
+      lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false, warn)))
       const removed = await removeWorktree($, repo.top, plan.worktreePath, windows)
       if (!removed.ok) {
         lines.push(`${plan.branch}: worktree remove failed, left the branch: ${removed.err}`)
@@ -1376,7 +1404,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       }
       if (removed.note !== undefined) lines.push(`${plan.branch}: ${removed.note}`)
       const gone = plan.worktreePath
-      await withState($, repo, async s => ({ state: markDone({ ...s, slots: releaseSlot(s.slots, gone, windows) }, gone, windows), value: undefined }))
+      await withState($, repo, async s => ({ state: markDone({ ...s, slots: releaseSlot(s.slots, gone, windows) }, gone, windows), value: undefined }), warn)
     }
     let deleted = await git($, repo.top, 'branch', '-d', plan.branch)
     if (!deleted.ok && plan.allowForce) deleted = await git($, repo.top, 'branch', '-D', plan.branch)
@@ -1417,7 +1445,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       await withState($, repo, async t => ({
         state: deadSlots.reduce((acc, [, s]) => markDone({ ...acc, slots: releaseSlot(acc.slots, s.path, windows) }, s.path, windows), t),
         value: undefined,
-      }))
+      }), warn)
       lines.push(`released slot${deadSlots.length === 1 ? '' : 's'} ${deadSlots.map(([n]) => n).join(', ')} (worktree gone)`)
     }
   }
@@ -1446,7 +1474,14 @@ export const register: Register = (on, options) => {
   let toldNested = false
   // the worktrees this session's WorktreeCreate made or reused; in memory on purpose: what a resumed or crashed
   // session left is for /tidy
-  const own: Sweeps = { tracked: new Map(), chain: Promise.resolve() }
+  // whether the user was told slots.json is unreadable; once per session, best effort
+  let toldUnreadable = false
+  const warn: Warn = path => {
+    if (toldUnreadable) return undefined
+    toldUnreadable = true
+    return `worktrees: slots.json at ${path} is unreadable; worktree slots and cleanup are paused until it is deleted`
+  }
+  const own: Sweeps = { tracked: new Map(), chain: Promise.resolve(), warn }
   const tracked = own.tracked
 
   // 1. Every Agent call that can edit gets a worktree.
@@ -1534,7 +1569,7 @@ export const register: Register = (on, options) => {
     const branch = `worktree-${e.name}`
     // recorded before anything is created, so a sweep while git and the file copies run sees the agent as live
     const now = await $.clock.now()
-    await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }))
+    await withState($, repo, async state => ({ state: markActive(state, path, now, windows), value: undefined }), warn)
     tracked.set(normPath(path, windows), path)
     const head = await git($, e.cwd, 'rev-parse', '--verify', '--quiet', 'HEAD')
     const plan = planCreate({
@@ -1551,7 +1586,7 @@ export const register: Register = (on, options) => {
       if (!added.ok) {
         await $.ui.toast(`worktrees: git worktree add failed; using the default worktree`)
         await $.ui.log(`worktrees: git worktree add ${path}: ${added.err}`, { to: 'debug' })
-        await withState($, repo, async state => ({ state: markDone(state, path, windows), value: undefined }))
+        await withState($, repo, async state => ({ state: markDone(state, path, windows), value: undefined }), warn)
         tracked.delete(normPath(path, windows))
         return next(e)
       }
@@ -1564,7 +1599,7 @@ export const register: Register = (on, options) => {
     const slot = await withState($, repo, async state => {
       const claimed = claimSlot(state.slots, path, e.name, now, windows)
       return { state: { ...state, slots: claimed.table }, value: claimed.slot }
-    })
+    }, warn)
     // slots.json could not be read: no slot is drawn, so the setup script does not run; the worktree is there without it
     if (slot === undefined) return { worktreePath: path }
     const [from, to] = portRange(base, slot)
@@ -1597,7 +1632,7 @@ export const register: Register = (on, options) => {
   on('classic.WorktreeRemove', async ($, e, next) => {
     const repo = await repoAt($, e.cwd)
     if (repo !== undefined && worktreeRootOf(e.worktree_path) !== undefined) {
-      const notes = await cleanWorktree($, repo, e.worktree_path, base, true)
+      const notes = await cleanWorktree($, repo, e.worktree_path, base, true, warn)
       if (notes.length > 0) await $.ui.log(`worktrees: ${notes.join('\n')}`, { to: 'debug' })
     }
     return next(e)
@@ -1638,7 +1673,7 @@ export const register: Register = (on, options) => {
       // the process probe takes seconds on Windows: run it after the agent's stop, not inside it
       $.clock.after(0, () => {
         void (async () => {
-          const notes = await cleanWorktree($, repo, path, base, false)
+          const notes = await cleanWorktree($, repo, path, base, false, warn)
           const stopped = notes.filter(n => n.startsWith('stopped')).length
           if (stopped > 0) await $.ui.toast(`worktrees: stopped ${stopped} process${stopped === 1 ? '' : 'es'} left by ${e.agent_type}`)
           if (notes.length > 0) await $.ui.log(`worktrees: ${notes.join('\n')}`, { to: 'debug' })
@@ -1688,7 +1723,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'tidy' }, async ($, e) => {
     const dryRun = /dry/i.test(e.args)
-    const report = await tidy($, options, dryRun)
+    const report = await tidy($, options, dryRun, warn)
     if (report === undefined) return { text: 'Not in a git repository with a main checkout.' }
     const head = dryRun ? 'Dry run, nothing changed.' : report.acted ? 'Tidied.' : 'Nothing to remove.'
     return { text: [head, ...report.lines].join('\n') }
