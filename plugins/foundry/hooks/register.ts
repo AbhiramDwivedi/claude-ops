@@ -774,6 +774,7 @@ type State = {
   // agents whose report was captured from their hand-back; their next stop leaves the file alone, once
   handedBack: Set<string>
   planArchitects: Set<string>
+  planRoute: Promise<unknown>
   pendingPlanCalls: Set<string>
   // each pending hand-back's message, by agent: what a lead's stop is judged on
   handBacks: Map<string, string>
@@ -836,7 +837,28 @@ function fencedBlock(message: string, open: string): string | undefined {
 
 // A plan-mode architect's hand-back, written to the two fixed paths under the foundry dir; never over a plan that is
 // approved or unreadable. Says why in the debug log when it writes nothing.
-async function writePlanFiles($: $, state: State, message: string): Promise<void> {
+// Why the plan on disk must be kept, read fresh: undefined when there is none or it is unapproved.
+async function keepReason($: $, dir: string): Promise<string | undefined> {
+  if (!(await $.fs.exists(planPath(dir)))) return undefined
+  let existing: Plan | undefined
+  try {
+    existing = parsePlan(String(await $.fs.read(planPath(dir))))
+  } catch {
+    return 'it could not be read'
+  }
+  if (existing === undefined) return 'it is not a readable plan'
+  return existing.approvedAt === null ? undefined : 'it is approved'
+}
+
+// Routes run one at a time, so a second hand-back waits until the first has finished both writes; a failed route
+// does not stop the chain.
+function writePlanFiles($: $, state: State, message: string): Promise<void> {
+  const run = state.planRoute.catch(() => undefined).then(() => routePlanFiles($, state, message))
+  state.planRoute = run.catch(() => undefined)
+  return run
+}
+
+async function routePlanFiles($: $, state: State, message: string): Promise<void> {
   const json = fencedBlock(message, '````json plan.json')
   const md = fencedBlock(message, '````markdown plan.md')
   if (json === undefined || md === undefined) return logRule($, `plan-file route wrote nothing: ${json === undefined ? 'no plan.json block' : 'no plan.md block'}`)
@@ -850,16 +872,9 @@ async function writePlanFiles($: $, state: State, message: string): Promise<void
     return logRule($, 'plan-file route wrote nothing: the plan.json block is not JSON')
   }
   if (!isRecord(carried)) return logRule($, 'plan-file route wrote nothing: the plan.json block is not an object')
-  if (await $.fs.exists(planPath(dir))) {
-    let existing: Plan | undefined
-    try {
-      existing = parsePlan(String(await $.fs.read(planPath(dir))))
-    } catch {
-      return logRule($, 'plan-file route kept the existing plan: it could not be read')
-    }
-    if (existing === undefined) return logRule($, 'plan-file route kept the existing plan: it is not a readable plan')
-    if (existing.approvedAt !== null) return logRule($, 'plan-file route kept the existing plan: it is approved')
-  }
+  // checked, then checked again from a fresh read right before the write, so an approval that lands in between stays
+  const kept = (await keepReason($, dir)) ?? (await keepReason($, dir))
+  if (kept !== undefined) return logRule($, `plan-file route kept the existing plan: ${kept}`)
   await $.fs.write(planPath(dir), JSON.stringify({ ...carried, approvedAt: null }, null, 2) + '\n')
   try {
     await $.fs.write(`${dir}/plan.md`, md)
@@ -1501,6 +1516,7 @@ export const register: Register = on => {
     models: new Map(),
     handedBack: new Set(),
     planArchitects: new Set(),
+    planRoute: Promise.resolve(),
     pendingPlanCalls: new Set(),
     handBacks: new Map(),
     withheld: new Set(),
