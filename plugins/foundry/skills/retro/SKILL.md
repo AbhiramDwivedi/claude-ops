@@ -33,6 +33,8 @@ Per run (`runs`), then the dir-wide keys. Be brief; a table or short list per ru
 - **Spawns** (`spawns`): total, and `byModelEffort`. `unset` means the call named no model or effort.
 - **Owner interruptions**: `escalations.QUESTION` and `escalations.BLOCKED` are what leads sent the foreman that could reach the owner; the foreman took only some to the owner, so call these an upper bound. `messages` counts lead-to-lead messages, not owner interruptions; report it separately as crew collisions.
 - **Judge rejections**: `judges.fail` per run, and `judgeFiles` for the whole dir (its files can't be split by run).
+- **Spent budgets** (`budgetsSpent`, per run): how many distinct crews spent their repair budget. `"not recorded"` means the log can't back a number, as on a pre-0.5.0 log or a run that spent none; say so and never write 0. `retro` stays 1.
+- **Opus-high share**: the share of the run's spawns on Opus at `high` or `xhigh`. The numerator is the sum of the `byModelEffort` counts whose model contains `opus` (case-folded) and whose effort is `high` or `xhigh`; the denominator is `spawns.total`. The target is 0, unless a line in `decisions.md` records the owner's call for `high` or `xhigh`. Report any other non-zero share as over target. The script prints no key for it; you compute it.
 - **Decision timing** (`decisions`): `clock`, `dateOnly`, `notRecorded`. Also `freeform` lines the script couldn't read as decisions.
 - **Plan** (`plan`): crews, waves, `estAgents` against `agentCap`, and `status` counts. It describes the last run only.
 

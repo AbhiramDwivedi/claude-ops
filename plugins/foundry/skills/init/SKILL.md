@@ -79,6 +79,7 @@ The keys are declared in `foundry-config.schema.json`, at `<this skill's base di
 - `deploy`: `{target, command, production}`, from what the repo shows (a deploy script, a `vercel.json`, `fly.toml`, a CI deploy job). Propose it only when the file has no `deploy` and the repo makes all three plain, and always as one unit: the owner approves or declines all three fields together. `production` is `true` when the command deploys to production.
 - `writingSkill`: a writing skill the session lists, such as `technical-writer`.
 - `promptOverrides`: foundry role (`lead`, `judge`, `cynic`, `writer`, `devops`, `architect`) to a file directly under `.claude/foundry/prompts/`. Propose one only for a file that already exists there, such as `.claude/foundry/prompts/judge.md`. The value is the path, never prompt text, and you don't create or edit the prompt files; they are the owner's.
+- `repairBudget`: an integer of 0 or more, the number of fresh judges a crew may start after judge FAILs in one run (default 2). The architect copies it into a v2 `plan.json`. Propose it only when the file has no `repairBudget`; offer 2 and say that leaving it out also means 2.
 
 Show the owner each proposed key with its value and where it came from, and ask which to write. Write only the approved ones. If there is nothing to propose, or the owner approves nothing, say so and go to step 8.
 
