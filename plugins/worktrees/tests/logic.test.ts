@@ -1,6 +1,26 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { BackgroundTask, BranchFacts, SelfCleanFacts, Snapshot } from '../hooks/register'
+import type { BackgroundTask, BranchFacts, SelfCleanFacts, Snapshot, State } from '../hooks/register'
+import {
+  CHERRY_ALL_MINUS,
+  CHERRY_ONE_PLUS,
+  DIRTY as DIRTY_AGENT,
+  HOUR,
+  LEAD,
+  MAIN,
+  MEMBER,
+  META_DIR,
+  META_FINISHED,
+  META_NOT_JSON,
+  META_RESHAPED,
+  META_RUNNING,
+  NOW,
+  ODD_TRANSCRIPT,
+  SLOTS_JSON,
+  STALE,
+  SUBAGENT_TRANSCRIPT,
+  TRANSCRIPT,
+} from './fixtures/run3'
 import {
   ACTIVE_FOR_MS,
   claimSlot,
@@ -42,6 +62,12 @@ import {
   withWorktree,
   worktreeMentions,
   worktreeRootOf,
+  agentWorktreeId,
+  cherryMerged,
+  mainCheckoutOf,
+  metaFinished,
+  metaPathFor,
+  sweepActive,
 } from '../hooks/register'
 
 const RO = noIsolateTypes('')
@@ -494,7 +520,7 @@ const OWN: SelfCleanFacts = {
 }
 
 test("removes this session's agent worktree once it is done, clean and merged into HEAD", async () => {
-  expect(decideSelfClean(OWN)).toEqual({ kind: 'remove', path: OWN.path, branch: 'worktree-agent-a1' })
+  expect(decideSelfClean(OWN)).toEqual({ kind: 'remove', path: OWN.path, branch: 'worktree-agent-a1', deleteFlag: '-d' })
 })
 
 test('skips a worktree for each condition it fails, forgetting only those that can never qualify', async () => {
@@ -582,4 +608,195 @@ test('a manifest declaring general-purpose still gives unset, empty and cased ge
   expect(needsWorktree({ subagent_type: 'general-purpose' }, true, set)).toBe(true)
   expect(needsWorktree({ subagent_type: 'General-Purpose' }, true, set)).toBe(true)
   expect(needsWorktree({ subagent_type: 'foundry:judge' }, true, set)).toBe(false)
+})
+
+// --- worktrees-cleanup: pure helpers ---
+
+test('decideSelfClean: deleteFlag is -D only for a tree or cherry merge', async () => {
+  const flag = (mergedBy?: 'ancestor' | 'tree' | 'cherry') => {
+    const plan = decideSelfClean({ ...OWN, mergedBy })
+    return plan.kind === 'remove' ? plan.deleteFlag : plan.kind
+  }
+  expect(flag('ancestor')).toBe('-d')
+  expect(flag(undefined)).toBe('-d')
+  expect(flag('tree')).toBe('-D')
+  expect(flag('cherry')).toBe('-D')
+  expect(decideSelfClean({ ...OWN, mergedBy: 'tree' })).toEqual({ kind: 'remove', path: OWN.path, branch: 'worktree-agent-a1', deleteFlag: '-D' })
+})
+
+test('decideSelfClean: check order is session, registered, branch, active, locked, dirty, merged', async () => {
+  const reason = (f: Partial<SelfCleanFacts>) => {
+    const plan = decideSelfClean({ ...OWN, ...f })
+    return plan.kind === 'skip' ? plan.reason : plan.kind
+  }
+  // active now beats locked and dirty, so a locked or dirty skip means the agent is not live
+  expect(reason({ active: true, locked: 'in use' })).toBe('its agent has not stopped yet')
+  expect(reason({ active: true, dirty: true })).toBe('its agent has not stopped yet')
+  expect(reason({ active: true, locked: 'in use', dirty: true, merged: false })).toBe('its agent has not stopped yet')
+  expect(reason({ locked: 'in use', dirty: true, merged: false })).toBe('locked (in use)')
+  expect(reason({ dirty: true, merged: false })).toBe('uncommitted changes')
+  // earlier checks still beat active
+  expect(reason({ isSession: true, active: true })).toBe('the session works in it')
+  expect(reason({ registered: false, active: true })).toBe('no longer a registered worktree')
+  expect(reason({ branch: 'feature', active: true })).toBe('not on a worktree-* branch (feature)')
+  // an active skip is not forgotten
+  const plan = decideSelfClean({ ...OWN, active: true, locked: 'x' })
+  expect(plan.kind === 'skip' && plan.forget).toBe(false)
+})
+
+test('mainCheckoutOf strips a trailing /.git or \\.git and nothing else', async () => {
+  expect(mainCheckoutOf('C:/r/.git\n')).toBe('C:/r')
+  expect(mainCheckoutOf('C:/r/.git\r\n')).toBe('C:/r')
+  expect(mainCheckoutOf('  C:/r/.git  \n')).toBe('C:/r')
+  expect(mainCheckoutOf('C:\\r\\.git')).toBe('C:\\r')
+  expect(mainCheckoutOf('C:\\r\\.git\r\n')).toBe('C:\\r')
+  expect(mainCheckoutOf('/home/u/repo/.git')).toBe('/home/u/repo')
+  expect(mainCheckoutOf('C:/a/b c/.git')).toBe('C:/a/b c')
+  expect(mainCheckoutOf('')).toBeUndefined()
+  expect(mainCheckoutOf('\r\n')).toBeUndefined()
+  expect(mainCheckoutOf('C:/r/repo.git')).toBeUndefined()
+  expect(mainCheckoutOf('C:/r/.git/worktrees/x')).toBeUndefined()
+  expect(mainCheckoutOf('C:/r/.github')).toBeUndefined()
+  expect(mainCheckoutOf('C:/r/x.git')).toBeUndefined()
+})
+
+test('metaPathFor puts the meta file under the session dir, from a session or a subagent transcript', async () => {
+  expect(metaPathFor(ODD_TRANSCRIPT, MEMBER.id)).toBe('D:/elsewhere/S1/subagents/agent-a2member.meta.json')
+  expect(metaPathFor(TRANSCRIPT, MEMBER.id)).toBe(`${META_DIR}/agent-a2member.meta.json`)
+  expect(metaPathFor(SUBAGENT_TRANSCRIPT, MEMBER.id)).toBe(`${META_DIR}/agent-a2member.meta.json`)
+  // backslashes become slashes first
+  expect(metaPathFor('C:\\h\\.claude\\projects\\C--r\\S1\\subagents\\agent-a1lead.jsonl', MEMBER.id)).toBe(`${META_DIR}/agent-a2member.meta.json`)
+  expect(metaPathFor('D:\\elsewhere\\S1.jsonl', MEMBER.id)).toBe('D:/elsewhere/S1/subagents/agent-a2member.meta.json')
+  // only the last parent directory decides, and only the trailing .jsonl is removed
+  expect(metaPathFor('D:/subagents/S1.jsonl', 'x1')).toBe('D:/subagents/S1/subagents/agent-x1.meta.json')
+  expect(metaPathFor('D:/e/S.jsonl.jsonl', 'x1')).toBe('D:/e/S.jsonl/subagents/agent-x1.meta.json')
+})
+
+test('metaFinished is true only for an object with finished === true', async () => {
+  expect(metaFinished(META_FINISHED(MEMBER.id))).toBe(true)
+  expect(metaFinished(META_FINISHED(LEAD.id))).toBe(true)
+  expect(metaFinished('{"finished":true}')).toBe(true)
+  expect(metaFinished(META_RUNNING(MEMBER.id))).toBe(false)
+  expect(metaFinished(META_RESHAPED)).toBe(false)
+  expect(metaFinished(META_NOT_JSON)).toBe(false)
+  expect(metaFinished(undefined)).toBe(false)
+  expect(metaFinished('')).toBe(false)
+  expect(metaFinished('{"finished":false}')).toBe(false)
+  expect(metaFinished('{"finished":1}')).toBe(false)
+  expect(metaFinished('{"finished":"true"}')).toBe(false)
+  expect(metaFinished('{"finished":null}')).toBe(false)
+  expect(metaFinished('{}')).toBe(false)
+  expect(metaFinished('null')).toBe(false)
+  expect(metaFinished('true')).toBe(false)
+  expect(metaFinished('"finished"')).toBe(false)
+  expect(metaFinished('[{"finished":true}]')).toBe(false)
+  expect(metaFinished('[true]')).toBe(false)
+})
+
+test('cherryMerged needs exit 0 and only "- " lines', async () => {
+  expect(cherryMerged({ exitCode: 0, stdout: CHERRY_ALL_MINUS })).toBe(true)
+  expect(cherryMerged({ exitCode: 0, stdout: CHERRY_ALL_MINUS.replace(/\n/g, '\r\n') })).toBe(true)
+  expect(cherryMerged({ exitCode: 0, stdout: '- abc' })).toBe(true)
+  expect(cherryMerged({ exitCode: 0, stdout: '- abc\n\n- def\n\n' })).toBe(true)
+  expect(cherryMerged({ exitCode: 0, stdout: CHERRY_ONE_PLUS })).toBe(false)
+  expect(cherryMerged({ exitCode: 0, stdout: CHERRY_ONE_PLUS.replace(/\n/g, '\r\n') })).toBe(false)
+  expect(cherryMerged({ exitCode: 0, stdout: '+ abc\n' })).toBe(false)
+  expect(cherryMerged({ exitCode: 0, stdout: '+ abc\n- def\n' })).toBe(false)
+  expect(cherryMerged({ exitCode: 0, stdout: '' })).toBe(false)
+  expect(cherryMerged({ exitCode: 0, stdout: '\r\n\n' })).toBe(false)
+  expect(cherryMerged({ exitCode: 1, stdout: CHERRY_ALL_MINUS })).toBe(false)
+  expect(cherryMerged({ exitCode: 128, stdout: '' })).toBe(false)
+  expect(cherryMerged({ exitCode: 0, stdout: '-abc\n' })).toBe(false)
+  expect(cherryMerged({ exitCode: 0, stdout: 'garbage\n' })).toBe(false)
+})
+
+test('agentWorktreeId returns the id of a direct agent worktree under the main checkout', async () => {
+  expect(agentWorktreeId(MEMBER.path, MAIN, false)).toBe('a2member')
+  expect(agentWorktreeId(LEAD.path, MAIN, true)).toBe('a1lead')
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees/agent-a1/`, MAIN, false)).toBe('a1')
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees/agent-a1`, `${MAIN}/`, false)).toBe('a1')
+  // separators
+  expect(agentWorktreeId('C:\\r\\.claude\\worktrees\\agent-a1', MAIN, true)).toBe('a1')
+  expect(agentWorktreeId(MEMBER.path, 'C:\\r', true)).toBe('a2member')
+  // windows folds case, linux does not
+  expect(agentWorktreeId('c:\\R\\.claude\\worktrees\\agent-a2member', MAIN, true)).toBe('a2member')
+  expect(agentWorktreeId('c:/r/.claude/worktrees/agent-a2member', MAIN, false)).toBeUndefined()
+  // not an agent worktree
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees/feature-x`, MAIN, false)).toBeUndefined()
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees/agent-a1/sub`, MAIN, false)).toBeUndefined()
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees/agent-`, MAIN, false)).toBeUndefined()
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees/agent-a_b`, MAIN, false)).toBeUndefined()
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees/agent-A1`, MAIN, false)).toBeUndefined()
+  expect(agentWorktreeId(MAIN, MAIN, false)).toBeUndefined()
+  expect(agentWorktreeId(`${MAIN}/.claude/worktrees`, MAIN, false)).toBeUndefined()
+  expect(agentWorktreeId(MEMBER.path, 'C:/other', false)).toBeUndefined()
+  expect(agentWorktreeId(`C:/rr/.claude/worktrees/agent-a1`, MAIN, false)).toBeUndefined()
+})
+
+const entry = (path: string, at: number) => ({ path, at })
+const sweepState = (): State => {
+  const base = parseState(SLOTS_JSON)
+  return {
+    slots: base.slots,
+    active: {
+      [MEMBER.path.toLowerCase()]: entry(MEMBER.path, NOW - HOUR),
+      [LEAD.path.toLowerCase()]: entry(LEAD.path, NOW - 2 * HOUR),
+      [DIRTY_AGENT.path.toLowerCase()]: entry(DIRTY_AGENT.path, NOW - 3 * HOUR),
+      [STALE.path.toLowerCase()]: entry(STALE.path, NOW - ACTIVE_FOR_MS),
+      'c:/r/.claude/worktrees/agent-edge': entry('C:/r/.claude/worktrees/agent-edge', NOW - ACTIVE_FOR_MS + 1),
+    },
+  }
+}
+const keys = (s: State) => Object.keys(s.active).sort()
+const only = (s: State, ...drop: string[]) => keys(s).filter((k) => !drop.includes(k))
+
+test('sweepActive prunes entries at or past ACTIVE_FOR_MS and keeps the one just inside', async () => {
+  const before = sweepState()
+  const out = sweepActive(before, { now: NOW, finished: [], gone: [] }, true)
+  expect(keys(out)).toEqual(only(before, STALE.path.toLowerCase()))
+  expect(out.active['c:/r/.claude/worktrees/agent-edge']).toEqual(before.active['c:/r/.claude/worktrees/agent-edge'])
+  // one tick later the edge entry is pruned as well
+  const later = sweepActive(before, { now: NOW + 1, finished: [], gone: [] }, true)
+  expect(keys(later)).not.toContain('c:/r/.claude/worktrees/agent-edge')
+  // far past
+  expect(keys(sweepActive(before, { now: NOW + 10 * ACTIVE_FOR_MS, finished: [], gone: [] }, true))).toEqual([])
+})
+
+test('sweepActive drops finished and gone paths, folding case and separators on windows', async () => {
+  const before = sweepState()
+  const m = MEMBER.path.toLowerCase()
+  const l = LEAD.path.toLowerCase()
+  const d = DIRTY_AGENT.path.toLowerCase()
+  const fin = sweepActive(before, { now: NOW, finished: ['C:\\R\\.claude\\worktrees\\agent-a2member'], gone: [] }, true)
+  expect(keys(fin)).not.toContain(m)
+  expect(keys(fin)).toContain(l)
+  const gone = sweepActive(before, { now: NOW, finished: [], gone: [LEAD.path + '/'] }, true)
+  expect(keys(gone)).not.toContain(l)
+  expect(keys(gone)).toContain(m)
+  const both = sweepActive(before, { now: NOW, finished: [MEMBER.path], gone: [LEAD.path] }, true)
+  expect(keys(both)).toEqual(only(before, m, l, STALE.path.toLowerCase()))
+  expect(keys(both)).toContain(d)
+  // an unknown path changes nothing beyond the age prune
+  expect(keys(sweepActive(before, { now: NOW, finished: ['C:/r/nowhere'], gone: ['C:/r/also'] }, true))).toEqual(only(before, STALE.path.toLowerCase()))
+})
+
+test('sweepActive on linux matches case exactly', async () => {
+  const lin: State = { slots: parseState(undefined).slots, active: { '/r/wt/A': entry('/r/wt/A', NOW), '/r/wt/a': entry('/r/wt/a', NOW) } }
+  const out = sweepActive(lin, { now: NOW, finished: ['/r/wt/a'], gone: [] }, false)
+  expect(keys(out)).toEqual(['/r/wt/A'])
+})
+
+test('sweepActive does not mutate its input, keeps slots, and leaves survivors identical', async () => {
+  const before = sweepState()
+  const snapshot = JSON.stringify(before)
+  const out = sweepActive(before, { now: NOW, finished: [MEMBER.path], gone: [LEAD.path] }, true)
+  expect(JSON.stringify(before)).toBe(snapshot)
+  expect(out).not.toBe(before)
+  expect(out.slots).toEqual(before.slots)
+  const dk = DIRTY_AGENT.path.toLowerCase()
+  expect(out.active[dk]).toEqual(before.active[dk])
+  const frozenFacts = Object.freeze({ now: NOW, finished: Object.freeze([MEMBER.path]), gone: Object.freeze([] as string[]) })
+  expect(() => sweepActive(before, frozenFacts, true)).not.toThrow()
+  // empty state and empty facts
+  expect(sweepActive(parseState(undefined), { now: NOW, finished: [], gone: [] }, true)).toEqual(parseState(undefined))
 })
