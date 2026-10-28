@@ -35,3 +35,39 @@ The contract test is `plugins/worktrees/tests/contract.test.ts`. It drives the `
 - Without kit there is no manifest and no change. The owner's route is `noIsolateAgents: foundry:judge,foundry:cynic`.
 - One extra `fs.read` per isolated `Agent` call. A `git rev-parse --git-common-dir` is added to the handler unless the crew reuses one it already makes.
 - A type wrongly declared read-only edits the main checkout. Exact matching and kit's approval step are the guard; worktrees can't check an agent's tools (`agent.offer` exposes none, ADR-0012).
+
+## Amendment, 2026-10-27: worktrees ignores read-only declarations of editing types
+
+Status: accepted. The owner approved foundry run 3's plan at 2026-10-28T00:31:42Z, and this amendment is part of that plan (its wave-0 design crew wrote it). The decision above stands except where this section narrows it.
+
+### Context
+
+The decision above gives no worktree to any type a `readOnly: true` entry names in full. A manifest written by kit 0.2.0, or by hand, can name a type that edits files, and that type then edits the main checkout. At plan time, `declaredReadOnly` (`plugins/worktrees/hooks/register.ts:74-92`) returned all seven types below as read-only. kit 0.3.0 stops writing such entries ([ADR-0013](0013-kit-manifest.md), amendment of 2026-10-27), but it reads existing files tolerantly, so the reader has to refuse them too. The interface that changes is the decision's second bullet: a full-name `readOnly: true` entry no longer always means no worktree.
+
+### The refused list
+
+This line is the list. ADR-0013 carries the same line, byte for byte; worktrees keeps its own copy in code, since plugins share no code (P1).
+
+Refused read-only types: general-purpose, kit:builder, kit:test-writer, foundry:architect, foundry:devops, foundry:lead, foundry:writer
+
+### Decision
+
+- `declaredReadOnly(text)` never puts a refused type in `types`. An entry is refused when its `name` (one the schema pattern allows, with `readOnly: true`), folded with the existing `asciiLower`, equals a list name. The match is full-name only: `Foundry:Lead` and `GENERAL-PURPOSE` are refused, `lead` and `plugin:general-purpose` are not.
+- Its return type becomes `{ types: Set<string>; refused: string[]; error?: string }`. `refused` is always present: the `name` of each refused entry as written in the file, in file order, and `[]` when there are none or when `error` is set. The constant is exported as `REFUSED_READ_ONLY_TYPES`, the seven names in the list's order, lower-case.
+- An unset or empty `subagent_type` is `general-purpose`, as today (`register.ts:58`), so it gets a worktree even when the manifest declares `general-purpose` read-only. So does `General-Purpose`.
+- Other declarations still count: a manifest that declares `foundry:judge` and a refused type gives `foundry:judge` no worktree.
+- When `refused` is non-empty, the handler writes one line to the debug log (P7), exactly:
+
+  `worktrees: kit manifest declares editing types read-only, ignoring them: <names>`
+
+  with `<names>` the `refused` names joined by `, `. It writes it on each call that reads the manifest, as the manifest is read on each call. The call itself isn't denied.
+- `noIsolateAgents`, its alias `readOnlyAgents` and `READ_ONLY_AGENTS` are untouched: the owner's own setting can still list any type, `general-purpose` included.
+- worktrees goes to 0.7.0 (P16): a manifest that 0.6.0 honoured now gets worktrees for some types.
+
+### Seams added
+
+`plugins/worktrees/tests/contract.test.ts` gains these cases, driven through the handler as the decision's seams are. It may import `declaredReadOnly` from `hooks/register.ts`, which already exists. It names every refused type literally.
+
+5. With a manifest declaring all seven refused types and `foundry:judge` at `readOnly: true`, a call of each refused type, of `General-Purpose`, and with no `subagent_type`, reaches the engine with `isolation: "worktree"`; a `foundry:judge` call still gets none. The call is not denied.
+6. The same run's debug log holds a line starting `worktrees: kit manifest declares editing types read-only, ignoring them: ` that names each refused entry.
+7. `declaredReadOnly` on that manifest's text returns `types` without any refused name and with `foundry:judge`, and `refused` equal to the seven names in file order; a manifest entry `Foundry:Lead` lands in `refused` as `Foundry:Lead`. On a broken manifest (`{not json`), `refused` is `[]` and `error` is set.

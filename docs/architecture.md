@@ -75,6 +75,7 @@ Model calls here are Claude Code's own: every agent, skill and the headless cata
   Test: the diff adds no multi-paragraph prompt inside a hooks module or script outside an exported constant.
 - **P22. Every agent pins its model.** (ai 5, adapted; ADR-0011) Agent definitions set `model` by family alias (`opus`, `sonnet`, `haiku`), and foundry's crew calls set `model` and `effort`. Family aliases are deliberate; dated IDs are not used.
   Test: each new agent file has `model` in its frontmatter, and each new `Agent(...)` example in a prompt sets `model` and `effort`.
+  Effort ladder (ADR-0011 amendment, 2026-10-27): judges, red teams, reviewers and writers run at Opus `medium` (a writer may run on Sonnet, or Opus `low`); `high` and `xhigh` for those roles only on the owner's explicit call. Only builders climb the ladder on failed fixes. A spent repair budget goes `BLOCKED`, never up an effort level. Test: no prompt or frontmatter in the diff sets `high` or `xhigh` as the default for a judge, red team, reviewer or writer.
 - **P23. Model output that code reads has a fixed format, checked at the seam.** (ai 8) Reports start with a marker the hooks or skills parse (`CHECKPOINT:`, `BLOCKED:`, `QUESTION:`, `PROPOSAL:`, `PLAN:`, `RECOMMEND:`), and `plan.json` is validated against `plan.schema.json`.
   Test: a new report field another component reads is in the agent's report format and parsed by named code, with a defined path when it is missing.
 - **P24. The model reads summaries, not raw transcripts.** (ai 12, adapted; ADR-0004) Transcript text reaches a prompt only through a script's redacted, size-bounded output.
@@ -181,6 +182,7 @@ Owns the marketplace manifest and the root README. Seam: `marketplace.json` list
 - `hooks/register.ts`: `classic.PreToolUse` on `Agent` adds `isolation: "worktree"` unless the type is in `READ_ONLY_AGENTS` (`Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer`) or `noIsolateAgents`; `classic.WorktreeCreate` creates the worktree from the current HEAD, copies `.worktreeinclude` files and runs the setup script; `classic.SubagentStop` refuses a stop while the agent owns a background shell or monitor, and stops what it left running; `classic.PostToolUse`, after a `Bash` or `PowerShell` command containing `merge`, sweeps the worktrees this session made and removes an agent's worktree and branch once it is merged; `/tidy` removes other merged worktrees and branches. Settings: `noIsolateAgents`, `readOnlyAgents` (deprecated), `isolateNestedRepos`, `portBase`.
 - Seams: the worktree layout and setup-script contract (ADR-0005), and `<git common dir>/claude-worktrees/slots.json` (ADR-0006). Its contract is the README's "The `.claude/worktree-setup` contract" table.
 - 0.6.0 ([ADR-0014](adr/0014-worktrees-declared-read-only-agents.md)): before isolating an `Agent` call, it reads `<main checkout>/.claude/kit/manifest.json` and gives no worktree to a type whose full name a `readOnly: true` entry declares. Exact names only; an explicit `isolation` wins; a missing or unreadable manifest changes nothing. Its extension point is "read-only types, declared through kit's manifest".
+- 0.7.0 (ADR-0014 amendment, 2026-10-27; designed, not built): `declaredReadOnly` never returns a type on the refused list (`general-purpose` and the six editing agents, the literal line in ADR-0013 and ADR-0014), and reports what it ignored in `refused`; the handler logs `worktrees: kit manifest declares editing types read-only, ignoring them: <names>` to the debug log. An unset type is `general-purpose`, so it always gets a worktree. `noIsolateAgents` is untouched.
 
 ### workflow-audit
 
@@ -205,11 +207,11 @@ kit is a set of prompts, four agents and one script. It has no hooks module of i
 | `kit:init` (`/kit:init`) | `skills/init/SKILL.md`, templates in `skills/init/hooks-reference.md` | Scans the repo, proposes one change set, writes only what the owner approves |
 | `kit:revise` (`/kit:revise`) | `skills/revise/SKILL.md` | Runs the miner, proposes additions and deletions, writes only what is approved |
 | `kit:builder` | `agents/builder.md` | sonnet; implements a brief; reads `CLAUDE.md` and `.claude/kit/review-checklist.md` |
-| `kit:reviewer` | `agents/reviewer.md` | opus; tools Read, Grep, Glob, Bash; reviews a diff against the checklist, never fixes |
+| `kit:reviewer` | `agents/reviewer.md` | opus; tools Read, Grep, Glob, Bash; reviews a diff against the checklist, never fixes; 0.3.0 pins `effort: medium` (ADR-0011 amendment) |
 | `kit:test-writer` | `agents/test-writer.md` | sonnet; tests from the spec first |
 | `kit:scout` | `agents/scout.md` | haiku; tools Read, Grep, Glob; search |
 | miner | `scripts/kit_mine.py --days N` | Prints one JSON object to stdout with `window`, `commands`, `prompts`, `briefs`, `findings`, `kit`; read only by `kit:revise` |
-| manifest writer, 0.2.0 | `scripts/kit_manifest.py write` / `declare` | Validates approved facts and writes `.claude/kit/manifest.json`; re-renders the stop gates' skip line (ADR-0013) |
+| manifest writer, 0.2.0 | `scripts/kit_manifest.py write` / `declare` | Validates approved facts and writes `.claude/kit/manifest.json`; re-renders the stop gates' skip line (ADR-0013); 0.3.0 refuses read-only declarations of editing types with `READ_ONLY_EDITING_TYPE` (ADR-0013 amendment) |
 
 `scripts/wa_parse.py` and `scripts/wa_common.py` are copies of workflow-audit's (ADR-0003). `kit_mine.py` hard-codes kit's own agents and skills (`KIT_AGENTS`, `KIT_SKILLS`) to count their use. Tests: `tests/test_mine.py`, run with `python -m unittest discover -s plugins/kit/tests`.
 
@@ -228,6 +230,30 @@ kit is a set of prompts, four agents and one script. It has no hooks module of i
 `kit:init` treats an existing `.claude/kit/` directory as "kit has run here before" and suggests `/kit:revise` instead. In 0.1.1 that directory is the only marker of a kit run; kit writes no machine-readable record of what it set up. It doesn't commit.
 
 **The manifest, 0.2.0** ([ADR-0013](adr/0013-kit-manifest.md)). After the owner approves, kit init calls `scripts/kit_manifest.py write`, which writes `.claude/kit/manifest.json`: `version`, `kit`, `checks`, `agents` (each with `readOnly` and `declaredBy`), `riskyPaths` and `setupScripts`. The contract is [`plugins/kit/docs/manifest.schema.json`](../plugins/kit/docs/manifest.schema.json). Another plugin adds its read-only types by running `kit:init` with `declare read-only: <type>, ...`; kit shows the owner the declaration and on approval calls `kit_manifest.py declare`. Both commands re-render the skip line between `# kit:read-only-agents:begin` and `# kit:read-only-agents:end` in the stop gates. Only the script writes the manifest; the stop gate, worktrees and foundry init read it.
+
+**The refused read-only types, 0.3.0** (ADR-0013 amendment, 2026-10-27; designed, not built). `write` and `declare` exit 2 with `READ_ONLY_EDITING_TYPE` when the input marks a type on the refused list `readOnly: true`. Reads stay tolerant: `read_manifest` doesn't apply the guard, so a 0.2.0 file that declares one is repaired by the next `write`. An entry a command carries over from the old file is dropped with `kit_manifest: warning: dropped <name> (declaredBy <declaredBy>): READ_ONLY_EDITING_TYPE`, and the stop gate's skip line never lists a refused type. worktrees refuses the same list on its side (ADR-0014 amendment); the list is fixed once, as one literal line in both ADRs, because the two plugins share no code (P1).
+
+```mermaid
+sequenceDiagram
+  participant K as kit:init [skill]
+  participant M as kit_manifest.py 0.3.0 [script]
+  participant F as .claude/kit/manifest.json [file]
+  participant W as worktrees 0.7.0 [hooks module]
+  K->>M: write facts / declare names
+  M->>M: validate_facts, then refused-list guard (input only)
+  alt input marks a refused type readOnly
+    M-->>K: exit 2, kit_manifest: READ_ONLY_EDITING_TYPE: ...
+  else accepted
+    M->>F: read_manifest (tolerant)
+    M->>M: drop carried-over refused entries, one warning line each
+    M->>F: write manifest, re-render stop-gate skip line
+  end
+  W->>F: read on each Agent call
+  W->>W: declaredReadOnly: types minus refused, refused listed
+  W-->>W: debug log: worktrees: kit manifest declares editing types read-only, ignoring them: ...
+```
+
+*The refused-list guard on both sides of the manifest, as designed. Traces to `docs/adr/0013-kit-manifest.md` and `docs/adr/0014-worktrees-declared-read-only-agents.md` (amendments of 2026-10-27), `plugins/kit/scripts/kit_manifest.py:113,191,434,445`, `plugins/worktrees/hooks/register.ts:74-92,714-738`.*
 
 **Seams**
 
@@ -319,9 +345,9 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 | Seam | Producer | Consumers | Contract | ADR |
 | --- | --- | --- | --- | --- |
 | Agent type names (`kit:scout`, `kit:reviewer`, `kit:builder`, `kit:test-writer`, `foundry:*`) | kit, foundry | worktrees (`READ_ONLY_AGENTS`), kit's stop gate, foundry's run skill | agent frontmatter `name`, `model`, `tools` | 0001, 0011 |
-| Extension point: `.claude/kit/manifest.json`, kit 0.2.0 (checks, agents with `readOnly`, risky paths, setup scripts) | kit (`scripts/kit_manifest.py`, only after the owner approves) | worktrees, kit's stop gate, foundry init | `plugins/kit/docs/manifest.schema.json` | 0012, 0013 |
+| Extension point: `.claude/kit/manifest.json`, kit 0.2.0 (checks, agents with `readOnly`, risky paths, setup scripts); from 0.3.0 the writer refuses `readOnly: true` for the refused list | kit (`scripts/kit_manifest.py`, only after the owner approves) | worktrees, kit's stop gate, foundry init | `plugins/kit/docs/manifest.schema.json`; the refused list is the `Refused read-only types: ` line in ADR-0013 and ADR-0014 | 0012, 0013 |
 | Extension point: `kit:init` with `declare read-only: <type>, ...`, kit 0.2.0 | kit | foundry init | `plugins/kit/skills/init/SKILL.md` | 0012, 0013 |
-| Extension point: read-only types declared through kit's manifest, worktrees 0.6.0 | worktrees | Claude Code `Agent` calls | `plugins/worktrees/README.md` | 0012, 0014 |
+| Extension point: read-only types declared through kit's manifest, worktrees 0.6.0; from 0.7.0 the refused list is ignored | worktrees | Claude Code `Agent` calls | `plugins/worktrees/README.md`; `declaredReadOnly`'s `refused` field | 0012, 0014 |
 | Extension point: `<foundry dir>/events.jsonl`, foundry 0.4.0 | foundry hooks | `scripts/retro.py` | `plugins/foundry/docs/events.schema.json`; module doc "On disk" | 0012, foundry 0003 |
 | `<foundry dir>/decisions.md` grammar, foundry 0.4.0 (foundry's own grammar, not an extension point) | foreman; the hooks stamp `HH:MM` | `scripts/retro.py` | module doc "decisions.md grammar (0.4.0)" | foundry 0003 |
 | `.claude/worktree-setup.sh` / `.ps1` and its env | kit (writes), project owner | worktrees (runs); from foundry 0.4.0, crews read `PORT_BASE` through what the script writes | `plugins/worktrees/README.md`, "The `.claude/worktree-setup` contract" | 0005 |
@@ -352,10 +378,10 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 - [ADR-0008](adr/0008-hooks-enforce-prompts-judge.md): hooks enforce what prompts can't be trusted to keep, and gating hooks fail open.
 - [ADR-0009](adr/0009-independent-plugin-versions.md): each plugin carries its own semver version, and every shipped change moves it.
 - [ADR-0010](adr/0010-dated-catalog-refreshed-by-pr.md): workflow-audit's advice is a dated data catalog, refreshed weekly through a PR.
-- [ADR-0011](adr/0011-agents-pin-their-model.md): agent types pin their model, so picking the agent picks the model.
+- [ADR-0011](adr/0011-agents-pin-their-model.md): agent types pin their model, so picking the agent picks the model. Amended 2026-10-27 (accepted with run 3's plan): the effort ladder, Opus `medium` by default for judges, red teams, reviewers and writers.
 - [ADR-0012](adr/0012-extension-framework.md), accepted 2026-10-27: plugins extend each other through versioned manifests the base owns; no prompt rewriting, soft dependencies only, exact-match declarations from owner-approved sources.
-- [ADR-0013](adr/0013-kit-manifest.md), accepted 2026-10-27: kit records what it set up in `.claude/kit/manifest.json`, written by `kit_manifest.py`, and renders the stop gate's skip list from it.
-- [ADR-0014](adr/0014-worktrees-declared-read-only-agents.md), accepted 2026-10-27: worktrees gives no worktree to agent types kit's manifest declares read-only.
+- [ADR-0013](adr/0013-kit-manifest.md), accepted 2026-10-27: kit records what it set up in `.claude/kit/manifest.json`, written by `kit_manifest.py`, and renders the stop gate's skip list from it. Amended 2026-10-27: the writer refuses read-only declarations of editing types (`READ_ONLY_EDITING_TYPE`), reads stay tolerant, kit 0.3.0.
+- [ADR-0014](adr/0014-worktrees-declared-read-only-agents.md), accepted 2026-10-27: worktrees gives no worktree to agent types kit's manifest declares read-only. Amended 2026-10-27: except the refused editing types, worktrees 0.7.0.
 - [foundry ADR-0001](../plugins/foundry/docs/adr/0001-design-phase.md): foundry's design phase, principle packs, extend-or-change verdicts and plan file.
 - [foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), accepted 2026-10-27: foundry init builds on kit's manifest; new `foundry.json` keys; ports from worktrees' slots.
 - [foundry ADR-0003](../plugins/foundry/docs/adr/0003-event-log-and-retro.md), accepted 2026-10-27: the event log, the `decisions.md` grammar and `scripts/retro.py`.
