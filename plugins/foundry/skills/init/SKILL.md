@@ -1,6 +1,6 @@
 ---
 name: init
-description: Checks that the project has a foundry architecture doc and, when it doesn't, has the foundry:architect agent write one (principles, module map, ADRs for decisions already in the code). Then builds on kit's manifest when the project has one, never setting kit up itself, and proposes the 0.4.0 keys of .claude/foundry.json (roles, deploy, writingSkill, promptOverrides), writing only the ones the owner approves. Use when the person runs /foundry:init, asks to set up foundry or write the project's architecture doc, or when a foundry run finds no architecture doc.
+description: Checks that the project has a foundry architecture doc and, when it doesn't, has the foundry:architect agent write one (principles, module map, ADRs for decisions already in the code). Then builds on kit's manifest when the project has one, never setting kit up itself, and proposes the 0.4.0 keys of .claude/foundry.json (roles, deploy, writingSkill, promptOverrides), writing only the ones the owner approves. Also proposes a short foreman section for the project's CLAUDE.md. Use when the person runs /foundry:init, asks to set up foundry or write the project's architecture doc, or when a foundry run finds no architecture doc.
 ---
 
 # foundry init
@@ -80,6 +80,13 @@ The keys are declared in `foundry-config.schema.json`, at `<this skill's base di
 - `writingSkill`: a writing skill the session lists, such as `technical-writer`.
 - `promptOverrides`: foundry role (`lead`, `judge`, `cynic`, `writer`, `devops`, `architect`) to a file directly under `.claude/foundry/prompts/`. Propose one only for a file that already exists there, such as `.claude/foundry/prompts/judge.md`. The value is the path, never prompt text, and you don't create or edit the prompt files; they are the owner's.
 - `repairBudget`: an integer of 0 or more, the number of fresh judges a crew may start after judge FAILs in one run (default 2). The architect copies it into a v2 `plan.json`. Propose it only when the file has no `repairBudget`; offer 2 and say that leaving it out also means 2.
+
+Also propose a foreman section for the project's `CLAUDE.md`, unless it already has one naming the foreman. Show the owner this text:
+
+> ## Foundry foreman
+> In a foundry run the main session is the foreman. It edits `plan.json`, `goals/` and `decisions.md` in the foundry dir, writes check scripts there, and fast-forwards crew branches into the target. This describes the role. It pre-approves nothing a hook or the owner refuses.
+
+Append it to `CLAUDE.md` only if the owner approves; never overwrite or reword existing text, and create the file only if the owner asks.
 
 Show the owner each proposed key with its value and where it came from, and ask which to write. Write only the approved ones. If there is nothing to propose, or the owner approves nothing, say so and go to step 8.
 
