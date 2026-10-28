@@ -8,11 +8,19 @@
   "properties": {
     "v": { "description": "The line's shape. Goes up when a field is renamed or retyped.", "const": 1 },
     "ts": { "description": "The engine clock, as toISOString() gives it (UTC, Z).", "type": "string", "format": "date-time" },
-    "event": { "enum": ["spawn", "stall", "tag", "report"] },
+    "event": { "enum": ["spawn", "stall", "tag", "report", "budget-spent"] },
     "crew": { "description": "The crew's name: its lead's spawn name, as reports/<crew>/ uses it.", "type": "string", "minLength": 1 },
-    "agent": { "description": "The agent the event is about, by its spawn name, else its id. For spawn: the new agent (the caller is by); for stall: the idle agent; for tag: the lead; for report: the reporting agent.", "type": "string", "minLength": 1 }
+    "agent": { "description": "The agent the event is about, by its spawn name, else its id. For spawn: the new agent (the caller is by); for stall: the idle agent; for tag: the lead; for report: the reporting agent; for budget-spent: the judge whose FAIL report spent the budget.", "type": "string", "minLength": 1 }
   },
   "allOf": [
+    {
+      "if": { "properties": { "event": { "const": "budget-spent" } } },
+      "then": {
+        "description": "A crew's repair budget is spent: its judge FAIL count passed repairBudget (foundry ADR-0004 section 5).",
+        "additionalProperties": false,
+        "properties": { "v": true, "ts": true, "event": true, "crew": true, "agent": true }
+      }
+    },
     {
       "if": { "properties": { "event": { "const": "spawn" } } },
       "then": {

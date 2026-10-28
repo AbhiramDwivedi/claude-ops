@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "foundry plan.json, version 1",
+  "title": "foundry plan.json, versions 1 and 2",
   "description": "<foundry dir>/plan.json: the seam between the architect, the foreman and the hooks. The architect drafts it in plan mode; the foreman owns it after that; the hooks treat it as read-only. See adr/0001-design-phase.md, section 8.",
   "type": "object",
   "additionalProperties": false,
@@ -16,8 +16,8 @@
   ],
   "properties": {
     "version": {
-      "description": "Plan file format version. It goes up whenever a field is added.",
-      "const": 1
+      "description": "Plan file format version. It goes up whenever a field is added; readers gate on version >= 2, never === 2, so a later version inherits every v2 rule. Version 2 adds repairBudget.",
+      "enum": [1, 2]
     },
     "goal": {
       "description": "The run's goal, as the owner gave it.",
@@ -43,6 +43,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "repairBudget": {
+      "description": "How many fresh judges a crew may start after judge FAILs in this run. Required in version 2, forbidden in version 1. The architect copies it from repairBudget in <repo>/.claude/foundry.json, or writes 2 when the key is absent. The same for every crew. See adr/0004-scope-repair-and-head-gates.md, section 5.",
+      "type": "integer",
+      "minimum": 0
+    },
     "maxParallelCrews": {
       "description": "The most crews that may be running at once; extra crews in a wave queue. Default 4, from maxParallelCrews in <repo>/.claude/foundry.json.",
       "type": "integer",
@@ -56,6 +61,22 @@
     }
   },
   "allOf": [
+    {
+      "$comment": "version 2 requires repairBudget (ADR-0004 section 1).",
+      "if": {
+        "properties": { "version": { "const": 2 } },
+        "required": ["version"]
+      },
+      "then": { "required": ["repairBudget"] }
+    },
+    {
+      "$comment": "version 1 forbids repairBudget (ADR-0004 section 1).",
+      "if": {
+        "properties": { "version": { "const": 1 } },
+        "required": ["version"]
+      },
+      "then": { "not": { "required": ["repairBudget"] } }
+    },
     {
       "$comment": "approval \"owner\" implies a wave-0 crew (ADR-0001 section 8). The reverse holds at plan time only, so it isn't checked.",
       "if": {
