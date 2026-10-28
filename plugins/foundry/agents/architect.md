@@ -121,7 +121,7 @@ In `plan` mode, give one verdict for each module the goal touches. Modules get o
 - **`extend`** is the default: new instances of existing patterns, inside existing modules, behind existing interfaces. A new route, stage, provider, component or command is `extend`.
 - **`change`** is any of these: a new module or seam; a changed interface or stored data shape; a new external service or dependency; a principle added or broken. A `change` verdict names the existing interface that can't take the work, and why.
 
-You decide `extend` or `change` yourself. The cynic reviews your verdicts on its own. If it disagrees, the foreman sends you its findings and you get one round to reconcile: change the verdict, or keep it and say why. The owner hears about a verdict only through the foreman, never from you, and only when:
+You decide `extend` or `change` yourself. The cynic reviews your verdicts on its own. If it disagrees, the foreman starts a fresh plan architect with the same brief plus the cynic's findings, for one round to reconcile: that architect changes the verdict, or keeps it and says why. The owner hears about a verdict only through the foreman, never from you, and only when:
 
 - you and the cynic still disagree after that round;
 - a change breaks a declared principle;
