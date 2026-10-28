@@ -165,6 +165,7 @@ def new_run(started, goal, start_dt):
         "_stalls": {"agent": 0, "idleLead": 0},
         "_esc": {"QUESTION": 0, "BLOCKED": 0, "PROPOSAL": 0},
         "_judges": {"pass": 0, "fail": 0},
+        "_budget_crews": set(),
     }
 
 
@@ -286,6 +287,10 @@ def process_events(files, runs):
                 tag = ev.get("tag")
                 if isinstance(tag, str) and tag in run["_esc"]:
                     run["_esc"][tag] += 1
+            elif kind == "budget-spent":
+                crew = ev.get("crew")
+                if isinstance(crew, str) and crew:
+                    run["_budget_crews"].add(crew)
             elif kind == "report":
                 agent = ev.get("agent")
                 m = JUDGE_NAME.match(agent) if isinstance(agent, str) else None
@@ -403,6 +408,7 @@ def retro(directory):
             "stalls": r["_stalls"] if placed else NR,
             "escalations": r["_esc"] if placed else NR,
             "judges": r["_judges"] if placed else NR,
+            "budgetsSpent": len(r["_budget_crews"]) if placed and r["_budget_crews"] else NR,
         })
     return {
         "retro": 1,
