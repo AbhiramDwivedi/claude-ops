@@ -111,7 +111,7 @@ function world(on: On, opts: Opts = {}) {
   on('process.run', async (_, e) => {
     const argv = e.argv as string[]
     const args = argv.join(' ')
-    const cwd = slashed(((e as { init?: { cwd?: string } }).init?.cwd ?? state.sessionCwd) as string)
+    const cwd = slashed(((e as { cwd?: string }).cwd ?? state.sessionCwd) as string)
     calls.push({ args, argv, cwd })
     ran.push(args)
     const out = (stdout: string, exitCode = 0) => ({
@@ -292,7 +292,7 @@ test('11. a throw in the isolation path is logged', async ($, on) => {
   expect(r?.deny).toBeUndefined()
   expect(w.seen.length).toBe(1)
   expect(w.seen[0]?.isolation).toBe(undefined)
-  expect(w.logs.filter(l => l.startsWith('worktrees: isolation failed for kit:builder: ')).length).toBe(1)
+  expect(w.logs.filter(l => l === 'worktrees: isolation failed for kit:builder: Error: boom').length).toBe(1)
   expect(w.toasts.filter(t => t.includes('could not give kit:builder a worktree')).length).toBe(1)
 })
 
