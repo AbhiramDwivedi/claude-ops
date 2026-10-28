@@ -1121,10 +1121,12 @@ async function budgetRecord($: $, state: State, crew: string, agent: string) {
 
 const GIT_MS = 15_000
 
-// A ref git resolves against the checkout it runs in (HEAD, @, ORIG_HEAD and the like, or a revision expression):
-// in the session cwd it names the main checkout's commit, not the crew's, so the head guard treats it as unknown.
+// A ref git resolves against the checkout it runs in (HEAD, @, ORIG_HEAD and the like in any case, as Windows git
+// matches them, a per-worktree namespace, or a revision expression): in the session cwd it names the main
+// checkout's commit, not the crew's, so the head guard treats it as unknown.
+const PER_WORKTREE = /^(?:(?:[a-z_]*_)?head$|refs\/(?:worktree|bisect|rewritten)\/|worktrees\/|main-worktree\/)/i
 function checkoutRelativeRef(ref: string): boolean {
-  return ref === '@' || /^[A-Z_]*HEAD$/.test(ref) || ['@{', '^', '~', ':'].some(c => ref.includes(c))
+  return ref === '@' || PER_WORKTREE.test(ref) || ['@{', '^', '~', ':'].some(c => ref.includes(c))
 }
 
 // the commit `branch` names, or undefined when git fails or prints anything but a 40-hex SHA
