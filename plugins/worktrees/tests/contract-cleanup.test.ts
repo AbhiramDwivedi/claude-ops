@@ -216,13 +216,16 @@ test('4. a finished meta retires active', async ($, on) => {
 })
 
 test('5. a missing or reshaped meta fails open', async ($, on) => {
-  const w = world(on, { merged: b => b === MEMBER.branch })
+  // NATIVE, finished and merged, is the control: the sweep ran, removed it and wrote slots.json
+  const w = world(on, { files: finished(NATIVE), merged: b => b === MEMBER.branch || b === NATIVE.branch })
   for (const meta of [undefined, META_RESHAPED, META_NOT_JSON]) {
     if (meta === undefined) w.files.delete(metaFile(MEMBER))
     else w.files.set(metaFile(MEMBER), meta)
     w.ran.length = 0
     w.writes.length = 0
     await sweep(w, $, MAIN)
+    expect(removes(w, NATIVE).length).toBe(1)
+    expect(slotsWrites(w).length).toBeGreaterThan(0)
     expect(removes(w, MEMBER)).toEqual([])
     for (const x of slotsWrites(w)) {
       expect((JSON.parse(x.text) as { active: Record<string, unknown> }).active[lc(MEMBER)]).toEqual({ path: MEMBER.path, at: NOW - HOUR })
