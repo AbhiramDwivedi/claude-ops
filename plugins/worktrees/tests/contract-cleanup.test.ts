@@ -111,7 +111,7 @@ function world(on: On, opts: Opts = {}) {
   on('process.run', async (_, e) => {
     const argv = e.argv as string[]
     const args = argv.join(' ')
-    const cwd = slashed(((e as { cwd?: string }).cwd ?? state.sessionCwd) as string)
+    const cwd = slashed(((e as { init?: { cwd?: string } }).init?.cwd ?? state.sessionCwd) as string)
     calls.push({ args, argv, cwd })
     ran.push(args)
     const out = (stdout: string, exitCode = 0) => ({
