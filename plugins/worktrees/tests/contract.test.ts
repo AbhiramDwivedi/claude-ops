@@ -1,6 +1,8 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
+import * as W from '../hooks/register.ts'
+
 // Contract test for repo ADR-0014 ("Seams"): worktrees reads kit's manifest at
 // <main checkout>/.claude/kit/manifest.json and gives no worktree to a type it declares read-only.
 // Written by foundry run 2's design crew before the producer exists. It imports nothing from the hooks:
@@ -133,3 +135,76 @@ for (const [label, files, throws] of broken) {
     expect(logs.filter(l => l.startsWith(UNREADABLE)).length).toBe(1)
   })
 }
+
+// ---- amendment 2026-10-27 to ADR-0014: refused read-only types ----
+
+const REFUSED = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer']
+const IGNORING = 'worktrees: kit manifest declares editing types read-only, ignoring them: '
+const ALL_DECLARED = manifest([
+  ...REFUSED.map(name => ({ name, readOnly: true, declaredBy: 'kit' })),
+  { name: 'foundry:judge', readOnly: true, declaredBy: 'foundry' },
+])
+
+for (const type of [...REFUSED, 'General-Purpose']) {
+  test(`5. a declared read-only ${type} still gets isolation "worktree" and is not denied`, async ($, on) => {
+    const { seen } = world(on, new Map([[MANIFEST, ALL_DECLARED]]))
+    const r = await call($, type)
+    expect(r?.deny).toBeUndefined()
+    expect(seen[0]?.isolation).toBe('worktree')
+  })
+}
+
+test('5. an unset subagent_type counts as general-purpose and gets a worktree even when declared read-only', async ($, on) => {
+  const { seen } = world(on, new Map([[MANIFEST, ALL_DECLARED]]))
+  const r = (await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p' } as never)) as { deny?: string }
+  expect(r?.deny).toBeUndefined()
+  expect(seen[0]?.isolation).toBe('worktree')
+})
+
+test('5. positive control: foundry:judge declared read-only beside the refused types still gets no worktree', async ($, on) => {
+  const { seen } = world(on, new Map([[MANIFEST, ALL_DECLARED]]))
+  const r = await call($, 'foundry:judge')
+  expect(r?.deny).toBeUndefined()
+  expect(seen[0]?.isolation).toBe(undefined)
+})
+
+test('6. the debug log holds the ignoring line naming each refused entry, on each call that reads the manifest', async ($, on) => {
+  const { logs } = world(on, new Map([[MANIFEST, ALL_DECLARED]]))
+  await call($, 'foundry:judge')
+  await call($, 'foundry:judge')
+  const lines = logs.filter(l => l.startsWith(IGNORING))
+  expect(lines.length).toBe(2)
+  expect(lines[0]).toBe(`${IGNORING}${REFUSED.join(', ')}`)
+})
+
+test('6. with nothing refused the ignoring line is not logged', async ($, on) => {
+  const { logs } = world(on, new Map([[MANIFEST, DECLARED]]))
+  await call($, 'foundry:judge')
+  expect(logs.filter(l => l.startsWith(IGNORING))).toEqual([])
+})
+
+test('7. REFUSED_READ_ONLY_TYPES is exported: the seven names, lower-case, in the ADR order', () => {
+  expect((W as Record<string, unknown>).REFUSED_READ_ONLY_TYPES).toEqual(REFUSED)
+})
+
+test('7. declaredReadOnly returns types without refused names, refused in file order as written, and error only when broken', () => {
+  const f = (W as Record<string, unknown>).declaredReadOnly as (t: string) => { types: Set<string>; refused: string[]; error?: string }
+  const r = f(ALL_DECLARED)
+  expect([...r.types]).toEqual(['foundry:judge'])
+  expect(r.refused).toEqual(REFUSED)
+  expect(r.error).toBeUndefined()
+  const mixed = f(
+    manifest([
+      { name: 'Foundry:Lead', readOnly: true, declaredBy: 'x' },
+      { name: 'GENERAL-PURPOSE', readOnly: true, declaredBy: 'x' },
+      { name: 'lead', readOnly: true, declaredBy: 'x' },
+      { name: 'plugin:general-purpose', readOnly: true, declaredBy: 'x' },
+      { name: 'kit:builder', readOnly: false, declaredBy: 'x' },
+    ]),
+  )
+  expect(mixed.refused).toEqual(['Foundry:Lead', 'GENERAL-PURPOSE'])
+  expect([...mixed.types].sort()).toEqual(['lead', 'plugin:general-purpose'])
+  const broken = f('{not json')
+  expect(broken.refused).toEqual([])
+  expect(typeof broken.error).toBe('string')
+})
