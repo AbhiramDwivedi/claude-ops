@@ -448,23 +448,38 @@ test('handler: a v1 plan never refuses a judge name, whatever the FAIL count', a
   expect(r.deny).toBeUndefined()
 })
 
-test("handler: on a v2 or v3 plan the main session's foundry:* Agent call without model or with effort max is refused; v1 and no plan go through", async ($, on) => {
-  const model = `${MARK} Refused: on a version 2 or later plan, every foundry:* Agent call from the main session sets \`model\`: "opus" or "sonnet". Call Agent again with model set.`
-  const effort = `${MARK} Refused: on a version 2 or later plan, every foundry:* Agent call from the main session sets \`effort\` to "low", "medium", "high" or "xhigh": "medium" by default, "high" or "xhigh" only on the owner's call. Call Agent again with effort set.`
-  for (const version of [2, 3]) {
-    const w = world($, on)
-    setPlan(w, version, 2)
-    await startSession($)
-    expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', effort: 'medium' })).deny ?? 'not denied').toBe(model)
-    expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', model: 'opus' })).deny ?? 'not denied').toBe(effort)
-    expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', model: 'opus', effort: 'max' })).deny ?? 'not denied').toBe(effort)
-    expect(w.ran.filter(c => c.tool === 'Agent')).toEqual([])
-  }
-  const w1 = world($, on)
-  setPlan(w1, 1, 2)
+const mainModelRefusal = `${MARK} Refused: on a version 2 or later plan, every foundry:* Agent call from the main session sets \`model\`: "opus" or "sonnet". Call Agent again with model set.`
+const mainEffortRefusal = `${MARK} Refused: on a version 2 or later plan, every foundry:* Agent call from the main session sets \`effort\` to "low", "medium", "high" or "xhigh": "medium" by default, "high" or "xhigh" only on the owner's call. Call Agent again with effort set.`
+
+test("handler: on a v2 plan the main session's foundry:* Agent call without model, without effort, or with effort max is refused and runs nothing", async ($, on) => {
+  const w = world($, on)
+  setPlan(w, 2, 2)
   await startSession($)
-  expect((await w1.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge' })).deny).toBeUndefined()
-  const w0 = world($, on)
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', effort: 'medium' })).deny ?? 'not denied').toBe(mainModelRefusal)
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', model: 'opus' })).deny ?? 'not denied').toBe(mainEffortRefusal)
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', model: 'opus', effort: 'max' })).deny ?? 'not denied').toBe(mainEffortRefusal)
+  expect(w.ran.filter(c => c.tool === 'Agent')).toEqual([])
+})
+
+test("handler: on a v3 plan the main session's foundry:* Agent call without model, without effort, or with effort max is refused and runs nothing", async ($, on) => {
+  const w = world($, on)
+  setPlan(w, 3, 2)
   await startSession($)
-  expect((await w0.agentCall(undefined, { subagent_type: 'foundry:architect', name: 'arch' })).deny).toBeUndefined()
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', effort: 'medium' })).deny ?? 'not denied').toBe(mainModelRefusal)
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', model: 'opus' })).deny ?? 'not denied').toBe(mainEffortRefusal)
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge', model: 'opus', effort: 'max' })).deny ?? 'not denied').toBe(mainEffortRefusal)
+  expect(w.ran.filter(c => c.tool === 'Agent')).toEqual([])
+})
+
+test("handler: on a v1 plan the main session's foundry:* Agent call without model or effort goes through", async ($, on) => {
+  const w = world($, on)
+  setPlan(w, 1, 2)
+  await startSession($)
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:judge', name: 'x-judge' })).deny).toBeUndefined()
+})
+
+test("handler: with no plan the main session's foundry:* Agent call without model or effort goes through", async ($, on) => {
+  const w = world($, on)
+  await startSession($)
+  expect((await w.agentCall(undefined, { subagent_type: 'foundry:architect', name: 'arch' })).deny).toBeUndefined()
 })
