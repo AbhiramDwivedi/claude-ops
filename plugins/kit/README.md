@@ -4,7 +4,7 @@ Gives a project the agents, quality gates and review checklist it needs, inferre
 
 ## Agent types
 
-Each agent's model is fixed in its file, so picking the agent picks the model.
+Each agent's model is fixed in its file, so picking the agent picks the model. `kit:reviewer` also pins `effort: medium`.
 
 | Agent | Model | Does |
 |---|---|---|
@@ -50,6 +50,10 @@ The script has two subcommands:
 
 - `write --repo <dir> --facts <file|->` takes the approved facts and writes the manifest.
 - `declare --repo <dir> --by <plugin> --read-only <names>` marks agent types read-only in an existing manifest. The names are comma-separated. Each is `<plugin>:<name>` with the prefix equal to `--by`, or, with `--by project`, a bare name for one of the project's own agents. Foundry uses it to mark its own agent types.
+
+Both subcommands refuse to mark an editing type read-only: a `readOnly: true` entry (or a `declare --read-only` name) that case-folds to `general-purpose`, `kit:builder`, `kit:test-writer`, `foundry:architect`, `foundry:devops`, `foundry:lead` or `foundry:writer` exits 2 with `READ_ONLY_EDITING_TYPE`, after every other bad-input check. The same name at `readOnly: false` is fine. Reading stays tolerant: an old manifest holding such an entry still loads, and the stop gate never skips those names. When `write` or `declare` would carry such an entry over from the old file, it drops it and prints `kit_manifest: warning: dropped <name> (declaredBy <plugin>): READ_ONLY_EDITING_TYPE` to stderr, one line per entry.
+
+This is kit 0.3.0: input that 0.2.0 accepted (a refused type at `readOnly: true`) now exits 2.
 
 Two things read the manifest:
 

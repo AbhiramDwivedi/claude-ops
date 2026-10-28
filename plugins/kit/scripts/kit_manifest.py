@@ -10,8 +10,11 @@ s being updated, unchanged, absent or no-markers. On error stderr is one line, "
 exit 2 for bad input, 3 for the repo's state, 1 (IO_ERROR) when the OS refuses a read or write. An error leaves
 every file as it was, except one the line names as "<path> now holds the new bytes": a failed write couldn't put
 it back, and the line adds "old bytes kept in <temp file>" when the file existed before.
-Exit 0 can add one stderr line, "kit_manifest: warning: ...", naming the temp files left over after every
-file got its new bytes.
+Exit 0 can add stderr lines, all starting "kit_manifest: warning: ": one per dropped entry, then at most one
+naming the temp files left over after every file got its new bytes.
+An agent with readOnly true on the refused list (REFUSED_READ_ONLY_TYPES) is exit 2, READ_ONLY_EDITING_TYPE,
+after every other bad-input code; the manifest read stays tolerant of one. A stored refused entry that a command
+would carry over is dropped with the warning "dropped <name> (declaredBy <plugin>): READ_ONLY_EDITING_TYPE".
 """
 import argparse
 import json
@@ -23,7 +26,7 @@ import sys
 import tempfile
 import time
 
-KIT_VERSION = "0.2.0"
+KIT_VERSION = "0.3.0"
 MANIFEST_VERSION = 1
 
 FACT_KEYS = ("checks", "agents", "riskyPaths", "setupScripts")
@@ -42,6 +45,11 @@ SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 SETUP_SCRIPTS = (".claude/worktree-setup.sh", ".claude/worktree-setup.ps1")
 # Declarers whose agents `write` replaces; any other plugin's declarations survive a rewrite.
 OWN_DECLARERS = ("kit", "project")
+
+# Editing types that may not be declared read-only (repo ADR-0013 amendment); worktrees holds its own copy.
+REFUSED_READ_ONLY_TYPES = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect",
+                           "foundry:devops", "foundry:lead", "foundry:writer")
+REFUSED_FOLDED = tuple(n.casefold() for n in REFUSED_READ_ONLY_TYPES)
 
 # Claude Code's built-in read-only agent types, always first in the gates' skip list.
 BUILTIN_READ_ONLY = ("Explore", "Plan", "claude-code-guide")
@@ -108,6 +116,20 @@ def check_agent_name(name, declared_by, where, err):
     owner = name.split(":", 1)[0] if ":" in name else "project"
     if owner != declared_by:
         raise err("DECLARER_MISMATCH", "%s is %r, which only %r can declare, not %r" % (where, name, owner, declared_by))
+
+
+def is_refused(name):
+    return name.casefold() in REFUSED_FOLDED
+
+
+def refuse(name, where):
+    return bad("READ_ONLY_EDITING_TYPE", "%s %r is an editing type and can't be read-only" % (where, name))
+
+
+def dropped_lines(old_agents, keep):
+    """One warning line per old entry that is read-only and refused, which `keep` says a command would carry over."""
+    return ["dropped %s (declaredBy %s): READ_ONLY_EDITING_TYPE" % (a["name"], a["declaredBy"])
+            for a in old_agents if a["readOnly"] and is_refused(a["name"]) and keep(a)]
 
 
 def validate_facts(facts, err=bad):
@@ -241,7 +263,7 @@ def read_facts(source):
 
 def skip_list(agents):
     names, seen = list(BUILTIN_READ_ONLY), {n.casefold() for n in BUILTIN_READ_ONLY}
-    for name in sorted(a["name"] for a in agents if a["readOnly"]):
+    for name in sorted(a["name"] for a in agents if a["readOnly"] and not is_refused(a["name"])):
         if name.casefold() not in seen:
             seen.add(name.casefold())
             names.append(name)
@@ -433,13 +455,20 @@ def commit(repo, path, old_raw, manifest):
 
 def cmd_write(repo, facts_source):
     facts = validate_facts(read_facts(facts_source))
+    for a in facts["agents"]:
+        if a["readOnly"] and is_refused(a["name"]):
+            raise refuse(a["name"], "agent")
     path = manifest_path(repo)
     old_raw, old = read_manifest(path)
+    drops = []
     if old is not None:
         named = {a["name"].casefold() for a in facts["agents"]}
-        kept = [a for a in old["agents"] if a["declaredBy"] not in OWN_DECLARERS and a["name"].casefold() not in named]
+        carry = [a for a in old["agents"] if a["declaredBy"] not in OWN_DECLARERS and a["name"].casefold() not in named]
+        drops = dropped_lines(old["agents"], lambda a: a in carry)
+        kept = [a for a in carry if not (a["readOnly"] and is_refused(a["name"]))]
         facts["agents"] = sort_agents(facts["agents"] + [{k: a[k] for k in AGENT_KEYS} for a in kept])
-    return commit(repo, path, old_raw, build(facts))
+    out, warnings = commit(repo, path, old_raw, build(facts))
+    return out, drops, warnings
 
 
 def cmd_declare(repo, by, names_arg):
@@ -454,15 +483,20 @@ def cmd_declare(repo, by, names_arg):
         if name.casefold() in seen:
             raise bad("DUPLICATE_AGENT", "--read-only names %r and %r twice" % (seen[name.casefold()], name))
         seen[name.casefold()] = name
+        if is_refused(name):
+            raise refuse(name, "--read-only name")
     path = manifest_path(repo)
     old_raw, old = read_manifest(path)
     if old is None:
         raise Fail("NO_MANIFEST", "%s doesn't exist; run kit init first" % path, 3)
-    agents = [{k: a[k] for k in AGENT_KEYS} for a in old["agents"] if a["name"].casefold() not in seen]
+    carry = [a for a in old["agents"] if a["name"].casefold() not in seen]
+    drops = dropped_lines(old["agents"], lambda a: a in carry)
+    agents = [{k: a[k] for k in AGENT_KEYS} for a in carry if not (a["readOnly"] and is_refused(a["name"]))]
     agents += [{"name": n, "readOnly": True, "declaredBy": by} for n in names]
     facts = {k: old[k] for k in FACT_KEYS}
     facts["agents"] = sort_agents(agents)
-    return commit(repo, path, old_raw, build(facts))
+    out, warnings = commit(repo, path, old_raw, build(facts))
+    return out, drops, warnings
 
 
 def one_line(text):
@@ -487,10 +521,12 @@ def main(argv=None):
         if not os.path.isdir(a.repo):
             raise Fail("NO_REPO", "%s isn't a directory" % a.repo, 3)
         if a.command == "write":
-            out, warnings = cmd_write(a.repo, a.facts)
+            out, drops, warnings = cmd_write(a.repo, a.facts)
         else:
-            out, warnings = cmd_declare(a.repo, a.by, a.read_only)
+            out, drops, warnings = cmd_declare(a.repo, a.by, a.read_only)
         sys.stdout.write(json.dumps(out) + "\n")
+        for line in drops:
+            sys.stderr.write("kit_manifest: warning: %s\n" % one_line(line))
         if warnings:  # every file holds its new bytes; only temp files are left over
             sys.stderr.write("kit_manifest: warning: %s\n" % one_line("wrote everything, but " + "; ".join(warnings)))
         return 0

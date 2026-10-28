@@ -1,6 +1,6 @@
 {
   "name": "kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sets a project up with the right agents, quality-gate hooks and review checklist from its actual code, and revises that setup later from how the project's sessions really went",
   "author": {
     "name": "Abhiram Dwivedi",

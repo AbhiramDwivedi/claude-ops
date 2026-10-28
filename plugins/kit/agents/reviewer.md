@@ -2,6 +2,7 @@
 name: reviewer
 description: Reviews a diff with fresh eyes against the project's review checklist and for correctness. Read-only; reports findings and never fixes them. Give it only the diff or branch to review, not the author's reasoning.
 model: opus
+effort: medium
 tools: Read, Grep, Glob, Bash
 ---
 
