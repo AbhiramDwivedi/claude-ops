@@ -316,11 +316,13 @@ function sessionRepo(on: On, answer: (args: string) => { stdout?: string; exitCo
 
 const bash = (command: string, tool_name = 'Bash') => ({ tool_name, tool_input: { command }, tool_response: '', tool_use_id: 't1', cwd: 'C:/r' }) as never
 
-test('sweeps nothing on a command without merge, another tool, or before the session made a worktree', async ($, on) => {
-  const { ran, clock } = sessionRepo(on)
+test('sweeps nothing on a command without merge, or another tool', async ($, on) => {
+  const { ran, clock, files } = sessionRepo(on)
+  files.set(STATE, JSON.stringify({ slots: {}, active: { [ZZ.toLowerCase()]: { path: ZZ, at: 1_000_000 - 1000 }, [X1.toLowerCase()]: { path: X1, at: 1_000_000 - 1000 } } }))
   await $.classic.PostToolUse(bash('git merge --ff-only worktree-agent-zz'))
   await clock.settle()
-  expect(ran).toEqual([])
+  // ADR-0015 section 3: an empty tracked map no longer skips the sweep, so the sweep runs; it removes nothing that is live
+  expect(ran.some(r => r.includes('worktree remove') || r.includes('branch -'))).toBe(false)
   await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
   ran.length = 0
   await $.classic.PostToolUse(bash('git status'))
@@ -331,13 +333,16 @@ test('sweeps nothing on a command without merge, another tool, or before the ses
 
 test("removes the session's own merged agent worktree and branch after a merge, and leaves another session's alone", async ($, on) => {
   const { ran, toasts, files, clock } = sessionRepo(on)
+  // agent-zz's entry, from its own session's WorktreeCreate: live for 24 hours (ADR-0015 section 5)
+  const zzActive = { [ZZ.toLowerCase()]: { path: ZZ, at: 1_000_000 - 1000 } }
+  files.set(STATE, JSON.stringify({ slots: {}, active: zzActive }))
   await $.classic.WorktreeCreate({ name: 'agent-x1', cwd: 'C:/r' })
   // a merge while the agent still runs removes nothing
   await $.classic.PostToolUse(bash('git merge --ff-only worktree-agent-x1'))
   await clock.settle()
   expect(ran.some(r => r.includes('worktree remove'))).toBe(false)
   // its agent stopped: SubagentStop's cleanup marked it done
-  files.set(STATE, JSON.stringify({ slots: {}, active: {} }))
+  files.set(STATE, JSON.stringify({ slots: {}, active: zzActive }))
   ran.length = 0
   await $.classic.PostToolUse(bash('gh pr merge 12 --squash', 'PowerShell'))
   await clock.settle()
@@ -346,11 +351,11 @@ test("removes the session's own merged agent worktree and branch after a merge, 
   expect(ran.some(r => r.includes('agent-zz') && !r.startsWith('git worktree list'))).toBe(false)
   expect(ran.some(r => r.includes('--force') || r.includes('branch -D') || r.includes('push'))).toBe(false)
   expect(toasts).toEqual(['worktrees: removed merged worktree-agent-x1'])
-  // removed once: a later merge finds nothing tracked
+  // removed once: the sweep still runs (ADR-0015 section 3), but the listing it reads is the mock's fixed one and agent-zz is live
   ran.length = 0
   await $.classic.PostToolUse(bash('git merge other'))
   await clock.settle()
-  expect(ran).toEqual([])
+  expect(ran.some(r => r.includes('worktree remove') && r.includes('agent-zz'))).toBe(false)
 })
 
 test('keeps an unmerged or dirty agent worktree, and toasts nothing', async ($, on) => {
