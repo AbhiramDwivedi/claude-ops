@@ -575,7 +575,7 @@ const activeWrites = (w: CleanupWorld) => w.writes.filter(x => x.path === slashe
 test('a worktree created from the foundry dir is recorded active and survives a sweep', async ($, on) => {
   const w = cleanupWorld(on, { porcelain: PORC_NEW, merged: b => b === NEW.branch, files: { [metaFile(NEW)]: META_RUNNING(NEW.id) } })
   await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: FOUNDRY_CWD } as never)
-  expect(activeWrites(w).some(k => k.includes(NEW.id))).toBe(true)
+  expect(activeWrites(w).some(k => k.some(p => p.endsWith('/agent-' + NEW.id)))).toBe(true)
   await cleanupSweep(w, $, MAIN)
   expect(removes(w, NEW)).toEqual([])
   expect(branchDeletes(w, NEW)).toEqual([])
