@@ -358,6 +358,57 @@ export function isActive(state: State, path: string, now: number, windows: boole
   return hit !== undefined && now - hit.at < ACTIVE_FOR_MS
 }
 
+// The main checkout, from the output of `git rev-parse --path-format=absolute --git-common-dir`; undefined when
+// the output is not a `<checkout>/.git` (empty, a bare repo, a worktree's own git dir).
+export function mainCheckoutOf(commonDirOut: string): string | undefined {
+  const m = /^(.+)[\\/]\.git$/.exec(commonDirOut.trim())
+  return m ? m[1] : undefined
+}
+
+// Where a subagent's meta file lives, from the event's transcript path and the bare agent id.
+export function metaPathFor(transcriptPath: string, id: string): string {
+  const path = transcriptPath.replace(/\\/g, '/')
+  const parts = path.split('/')
+  // a subagent's transcript is `<session>/subagents/agent-<id>.jsonl`; a session transcript in a folder named subagents is not
+  const inSubagents = parts[parts.length - 2] === 'subagents' && /^agent-[^/]*\.jsonl$/.test(parts[parts.length - 1])
+  const sessionDir = inSubagents ?parts.slice(0, -2).join('/') : path.replace(/\.jsonl$/, '')
+  return `${sessionDir}/subagents/agent-${id}.meta.json`
+}
+
+// A meta file that says its agent finished: a JSON object with `finished` exactly true. Never throws.
+export function metaFinished(text: string | undefined): boolean {
+  try {
+    const raw: unknown = JSON.parse(text ?? '')
+    return typeof raw === 'object' && raw !== null && !Array.isArray(raw) && (raw as { finished?: unknown }).finished === true
+  } catch {
+    return false
+  }
+}
+
+// `git cherry` output where every commit of the branch has an equivalent upstream (every line starts `- `).
+export function cherryMerged(r: { exitCode: number; stdout: string }): boolean {
+  if (r.exitCode !== 0) return false
+  const lines = r.stdout.replace(/\r/g, '').split('\n').filter(l => l !== '')
+  return lines.length > 0 && lines.every(l => l.startsWith('- '))
+}
+
+// The id of an `agent-<id>` worktree directly under the main checkout's .claude/worktrees; undefined for any other path.
+export function agentWorktreeId(path: string, main: string, windows: boolean): string | undefined {
+  const prefix = normPath(main, windows) + '/.claude/worktrees/agent-'
+  const p = normPath(path, windows)
+  if (!p.startsWith(prefix)) return undefined
+  const id = p.slice(prefix.length)
+  return /^[0-9a-z]+$/.test(id) ? id : undefined
+}
+
+// The state without the entries that are stale, whose agent finished, or whose worktree is gone.
+export function sweepActive(state: State, f: { now: number; finished: readonly string[]; gone: readonly string[] }, windows: boolean): State {
+  const drop = new Set([...f.finished, ...f.gone].map(p => normPath(p, windows)))
+  const active: State['active'] = {}
+  for (const [key, v] of Object.entries(state.active)) if (f.now - v.at < ACTIVE_FOR_MS && !drop.has(key)) active[key] = v
+  return { ...state, active }
+}
+
 // the lock beside slots.json: a lock older than this was left by a process that died holding it
 export const LOCK_STALE_MS = 10_000
 
@@ -523,21 +574,23 @@ export type SelfCleanFacts = {
   dirty: boolean
   // its branch is in the session checkout's HEAD: an ancestor, or merging it gives HEAD's own tree
   merged: boolean
+  // how it was found merged
+  mergedBy?: 'ancestor' | 'tree' | 'cherry'
 }
 
 // `forget`: the path drops out of the session's tracking, as it can never qualify again
-export type SelfCleanPlan = { kind: 'remove'; path: string; branch: string } | { kind: 'skip'; path: string; reason: string; forget: boolean }
+export type SelfCleanPlan = { kind: 'remove'; path: string; branch: string; deleteFlag: '-d' | '-D' } | { kind: 'skip'; path: string; reason: string; forget: boolean }
 
 export function decideSelfClean(f: SelfCleanFacts): SelfCleanPlan {
   const skip = (reason: string, forget = false): SelfCleanPlan => ({ kind: 'skip', path: f.path, reason, forget })
   if (f.isSession) return skip('the session works in it', true)
   if (!f.registered) return skip('no longer a registered worktree', true)
   if (f.branch === undefined || !f.branch.startsWith('worktree-')) return skip(`not on a worktree-* branch (${f.branch ?? 'detached'})`)
-  if (f.locked !== undefined) return skip(`locked (${f.locked})`)
   if (f.active) return skip('its agent has not stopped yet')
+  if (f.locked !== undefined) return skip(`locked (${f.locked})`)
   if (f.dirty) return skip('uncommitted changes')
   if (!f.merged) return skip(`${f.branch} is not merged into the session's HEAD`)
-  return { kind: 'remove', path: f.path, branch: f.branch }
+  return { kind: 'remove', path: f.path, branch: f.branch, deleteFlag: f.mergedBy === 'tree' || f.mergedBy === 'cherry' ? '-D' : '-d' }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -718,15 +771,34 @@ async function repoAt($: $, cwd?: string): Promise<Repo | undefined> {
   return { top: top.out, common: common.out, mainRoot: common.out.replace(/[\\/]\.git$/, '') }
 }
 
+export type ProjectRepo = { main: string; common: string }
+
+// The repo the session works for: the first of the project dir, the event's cwd and the session cwd whose git
+// common dir is a `<checkout>/.git`. The hook may run from inside the common dir or any folder that is not a work
+// tree, so there is no `--is-inside-work-tree` check. undefined when no candidate is in a repo.
+export async function projectRepo($: $, eventCwd?: string): Promise<ProjectRepo | undefined> {
+  const candidates: string[] = []
+  const project = await $.env.get('CLAUDE_PROJECT_DIR')
+  if (typeof project === 'string' && project !== '') candidates.push(project)
+  if (typeof eventCwd === 'string' && eventCwd !== '') candidates.push(eventCwd)
+  const session = await $.session.cwd()
+  if (typeof session === 'string' && session !== '') candidates.push(session)
+  for (const cwd of new Set(candidates)) {
+    const r = await git($, cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    if (!r.ok) continue
+    const main = mainCheckoutOf(r.out)
+    if (main !== undefined) return { main, common: r.out }
+  }
+  return undefined
+}
+
 // Whether kit's manifest in the main checkout declares this Agent call's type read-only (repo ADR-0014). Read on
 // every call, never cached. A full-name match only: no bare-name fallback. Anything that goes wrong is false, so the
 // call keeps today's behaviour; an absent file is silent, any other failure goes to the debug log.
-async function declaredByKit($: $, input: Record<string, unknown>): Promise<boolean> {
+async function declaredByKit($: $, input: Record<string, unknown>, main: string): Promise<boolean> {
   try {
     const type = typeof input.subagent_type === 'string' && input.subagent_type !== '' ? input.subagent_type : 'general-purpose'
-    const common = await git($, undefined, 'rev-parse', '--path-format=absolute', '--git-common-dir')
-    if (!common.ok || !/[\\/]\.git$/.test(common.out)) return false
-    const path = `${common.out.replace(/[\\/]\.git$/, '')}/.claude/kit/manifest.json`
+    const path = `${main}/.claude/kit/manifest.json`
     if (!(await $.fs.exists(path))) return false
     let text: string
     try {
@@ -880,9 +952,8 @@ async function copyIncluded($: $, repo: Repo, path: string, windows: boolean): P
 
 // The nested repos of the session's repo that its .gitignore hides, and whether agents stay in the main checkout
 // for them: only when the repo has no setup script for this platform.
-async function nestedRepos($: $): Promise<{ skip: boolean; toast: string }> {
-  const top = await git($, undefined, 'rev-parse', '--show-toplevel')
-  if (!top.ok || top.out === '') return { skip: false, toast: '' }
+async function nestedRepos($: $, main: string): Promise<{ skip: boolean; toast: string }> {
+  const top = { out: main }
   const ls = await git($, top.out, '-c', 'core.quotePath=false', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')
   if (!ls.ok) return { skip: false, toast: '' }
   const nested: string[] = []
@@ -1284,7 +1355,8 @@ export const register: Register = (on, options) => {
   const noIsolate = noIsolateTypes(options.noIsolateAgents, options.readOnlyAgents)
   const isolateNested = options.isolateNestedRepos === true || options.isolateNestedRepos === 'true'
   const base = portBaseOf(options)
-  let inRepo: boolean | undefined
+  // the repo this session works for, kept once found; a failed search is never kept
+  let repoFound: ProjectRepo | undefined
   // whether this session's repo keeps its agents in the main checkout for its nested repos, found once; and
   // whether the session was told so
   let nested: Promise<{ skip: boolean; toast: string }> | undefined
@@ -1295,26 +1367,72 @@ export const register: Register = (on, options) => {
   const tracked = own.tracked
 
   // 1. Every Agent call that can edit gets a worktree.
+  let toldFailed = false
   on('classic.PreToolUse', { tool: 'Agent' }, async ($, e, next) => {
     const input = e as unknown as Record<string, unknown>
-    if (input.isolation !== undefined) return next(e)
-    inRepo ??= (await git($, undefined, 'rev-parse', '--is-inside-work-tree')).out === 'true'
-    if (!needsWorktree(input, inRepo, noIsolate)) return next(e)
-    if (!isolateNested) {
-      nested ??= nestedRepos($)
-      const found = await nested
-      if (found.skip) {
-        if (!toldNested) {
-          toldNested = true
-          await $.ui.toast(found.toast)
-        }
-        return next(e)
+    const type = typeof input.subagent_type === 'string' && input.subagent_type !== '' ? input.subagent_type : 'general-purpose'
+    const log = async (text: string) => {
+      try {
+        await $.ui.log(text, { to: 'debug' })
+      } catch {
+        // the log is best effort
       }
     }
-    if (await declaredByKit($, input)) return next(e)
-    const result = await next(e)
-    if (result.deny !== undefined || result.updatedInput !== undefined) return result
-    return { ...result, updatedInput: withWorktree(input) }
+    const skipped = (reason: string) => log(`worktrees: isolation skipped ${type}: ${reason}`)
+    let result: Awaited<ReturnType<typeof next>> | undefined
+    try {
+      if (input.isolation !== undefined) {
+        await skipped('explicit isolation')
+        return next(e)
+      }
+      repoFound ??= await projectRepo($, (e as unknown as { cwd?: string }).cwd)
+      const repo = repoFound
+      if (repo === undefined) {
+        await skipped('no repo found')
+        return next(e)
+      }
+      if (!needsWorktree(input, true, noIsolate)) {
+        await skipped('no-isolate type')
+        return next(e)
+      }
+      if (!isolateNested) {
+        nested ??= nestedRepos($, repo.main).catch(error => {
+          nested = undefined
+          throw error
+        })
+        const found = await nested
+        if (found.skip) {
+          if (!toldNested) {
+            toldNested = true
+            await $.ui.toast(found.toast)
+          }
+          await skipped('nested repos')
+          return next(e)
+        }
+      }
+      if (await declaredByKit($, input, repo.main)) {
+        await skipped('kit manifest declares it read-only')
+        return next(e)
+      }
+      result = await next(e)
+      if (result.deny !== undefined || result.updatedInput !== undefined) {
+        await skipped('another hook answered')
+        return result
+      }
+      await log(`worktrees: isolating ${type}`)
+      return { ...result, updatedInput: withWorktree(input) }
+    } catch (error) {
+      await log(`worktrees: isolation failed for ${type}: ${String(error)}`)
+      if (!toldFailed) {
+        toldFailed = true
+        try {
+          await $.ui.toast(`worktrees: could not give ${type} a worktree; it runs in the current checkout. See the debug log.`)
+        } catch {
+          // the toast is best effort
+        }
+      }
+      return result ?? next(e)
+    }
   }).catch(passThrough)
 
   // 2. The plugin creates every worktree itself, from the HEAD of the checkout the hook runs in: Claude Code's
