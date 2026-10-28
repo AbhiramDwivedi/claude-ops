@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import { COMMON, DIRTY, FOUNDRY_CWD, LEAD, LIVE_OTHER, LOCKED, MAIN, MEMBER, META_DIR, META_FINISHED, META_RUNNING, NOW, SLOTS_JSON, SLOTS_PATH, TRANSCRIPT, WORKTREE_LIST_PORCELAIN, type AgentFixture } from './fixtures/run3'
 
 // the engine beneath the plugin: git says the session is in a repo, and the Agent call records what reached it
 function world(on: On, inRepo = true) {
@@ -439,3 +440,225 @@ test('kit manifest match folds ASCII case only: KELVIN SIGN does not match a dec
     await $.tool.call({ tool: 'Agent', description: 'd', prompt: 'p', subagent_type: t } as never)
   expect(seen.map(e => e.isolation)).toEqual(['worktree', undefined, undefined])
 })
+
+// ---------------- sweep and spawn races: the cleanup sweep must never remove a live agent ----------------
+const slashed = (p: string) => p.replace(/\\/g, '/')
+const metaFile = (a: AgentFixture) => `${META_DIR}/agent-${a.id}.meta.json`
+
+type CleanupAnswer = { stdout?: string; exitCode?: number }
+type CleanupOpts = {
+  files?: Record<string, string>
+  // agents whose branch is an ancestor of HEAD in the given cwd
+  merged?: (branch: string, cwd: string) => boolean
+  status?: (cwd: string) => string
+  // overrides what git says to one command; undefined falls through to the defaults
+  answer?: (args: string, cwd: string) => CleanupAnswer | undefined
+  porcelain?: string
+  gone?: string[] // worktree folders fs.exists reports missing
+  sessionCwd?: string
+  hook?: (args: string, cwd: string) => Promise<CleanupAnswer | undefined> | CleanupAnswer | undefined
+  porcelainFn?: () => string | undefined
+}
+
+// the engine beneath the plugin: a repo at MAIN on Windows, git answered by argv and cwd, files from a map,
+// everything the plugin does recorded
+function cleanupWorld(on: On, opts: CleanupOpts = {}) {
+  const files = new Map<string, string>(Object.entries({ [SLOTS_PATH]: SLOTS_JSON, ...opts.files }).map(([k, v]) => [slashed(k), v]))
+  const state = { sessionCwd: opts.sessionCwd ?? MAIN, failGit: false, envThrows: false }
+  const calls: { args: string; argv: string[]; cwd: string }[] = []
+  const ran: string[] = []
+  const reads: string[] = []
+  const writes: { path: string; text: string }[] = []
+  const logs: string[] = []
+  const toasts: string[] = []
+  const seen: Record<string, unknown>[] = []
+  const clock = mock.clock(on, { now: NOW })
+  const gone = new Set((opts.gone ?? []).map(slashed))
+
+  on('classic.WorktreeCreate', async () => ({}))
+  on('classic.PostToolUse', async () => ({}))
+  on('env.get', async (_, e) => {
+    if (state.envThrows) throw new Error('boom')
+    const v: Record<string, string> = { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\x', HOME: 'C:/Users/x' }
+    return { value: v[(e as { name?: string; key?: string }).name ?? (e as { key?: string }).key ?? ''] }
+  })
+  on('session.cwd', async () => ({ value: state.sessionCwd }))
+  on('ui.log', async (_, e) => {
+    logs.push((e as { text: string }).text)
+    return { value: undefined }
+  })
+  on('ui.toast', async (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined } as never
+  })
+  on('fs.exists', async (_, e) => {
+    const p = slashed(e.path)
+    reads.push(p)
+    return { value: files.has(p) || (!gone.has(p) && p.includes('/.claude/worktrees/agent-') && !p.endsWith('.json')) }
+  })
+  on('fs.read', async (_, e) => {
+    const p = slashed(e.path)
+    reads.push(p)
+    const text = files.get(p)
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: text }
+  })
+  on('fs.write', async (_, e) => {
+    writes.push({ path: slashed(e.path), text: e.text })
+    files.set(slashed(e.path), e.text)
+    return { value: undefined }
+  })
+  on('tool.call', async (_, e) => {
+    seen.push(e as unknown as Record<string, unknown>)
+    return { result: 'ok' }
+  })
+
+  on('process.run', async (_, e) => {
+    const argv = e.argv as string[]
+    const args = argv.join(' ')
+    const cwd = slashed(((e as { init?: { cwd?: string } }).init?.cwd ?? state.sessionCwd) as string)
+    calls.push({ args, argv, cwd })
+    ran.push(args)
+    const out = (stdout: string, exitCode = 0) => ({
+      value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'fatal: error', isStdoutTruncated: false, isStderrTruncated: false },
+    })
+    if (state.failGit && args.includes('rev-parse')) return out('', 128)
+    const custom = (await opts.hook?.(args, cwd)) ?? opts.answer?.(args, cwd)
+    if (custom !== undefined) return out(custom.stdout ?? '', custom.exitCode ?? 0)
+    const inAgent = /^(C:\/r\/\.claude\/worktrees\/[^/]+)/.exec(cwd)
+    if (args.includes('--show-toplevel')) return cwd === MAIN ? out(`${MAIN}\n`) : inAgent ? out(`${inAgent[1]}\n`) : out('', 128)
+    if (args.includes('--git-common-dir')) return out(`${COMMON}\n`)
+    if (args.includes('--is-inside-work-tree')) return out(cwd.startsWith(COMMON) ? 'false\n' : 'true\n')
+    if (args === "git worktree list --porcelain") return out(opts.porcelainFn?.() ?? opts.porcelain ?? WORKTREE_LIST_PORCELAIN)
+    if (args.startsWith('git merge-base --is-ancestor')) {
+      const branch = argv[argv.indexOf('--is-ancestor') + 1] as string
+      return out('', opts.merged?.(branch, cwd) ? 0 : 1)
+    }
+    if (args.startsWith('git status')) return out(opts.status?.(cwd) ?? '')
+    if (args.endsWith('--verify --quiet HEAD')) return out('4bada1f0123456789abcdef0123456789abcdef0\n')
+    if (args === 'git rev-parse HEAD^{tree}') return out('headtree\n')
+    if (args.startsWith('git merge-tree')) return out('differenttree\n')
+    if (args.includes('origin/main')) return out('0123456789012345678901234567890123456789\n')
+    return out('')
+  })
+  return { files, state, calls, ran, reads, writes, logs, toasts, seen, clock, gone }
+}
+
+type CleanupDollar = Parameters<Parameters<typeof test>[1]>[0]
+type CleanupWorld = ReturnType<typeof cleanupWorld>
+
+// a merge by the main thread: the PostToolUse event, then the scheduled sweep run to completion
+async function cleanupSweep(w: CleanupWorld, $: CleanupDollar, cwd: string, transcript = TRANSCRIPT, command = 'git merge --no-ff worktree-agent-a2member') {
+  await $.classic.PostToolUse({
+    tool_name: 'Bash',
+    tool_input: { command },
+    tool_response: '',
+    tool_use_id: 't1',
+    cwd,
+    transcript_path: transcript,
+  } as never)
+  await w.clock.settle()
+}
+
+const slotsWrites = (w: CleanupWorld) => w.writes.filter(x => x.path === slashed(SLOTS_PATH))
+const removes = (w: CleanupWorld, a: AgentFixture) => w.ran.filter(r => r.includes('worktree remove') && r.includes(a.path))
+const branchDeletes = (w: CleanupWorld, a: AgentFixture) => w.ran.filter(r => /^git (-c \S+ )?branch -[dD] /.test(r) && r.includes(a.branch))
+const finished = (...as: AgentFixture[]) => Object.fromEntries(as.map(a => [metaFile(a), META_FINISHED(a.id)]))
+
+// ---------------- red-team probes ----------------
+const WTD = '/.claude/worktrees/'
+const NEW: AgentFixture = { id: 'b1new', path: MAIN + WTD + 'agent-b1new', branch: 'worktree-agent-b1new' }
+const wtOf = (a: AgentFixture) => 'worktree ' + a.path + '\nHEAD 4bada1f0123456789abcdef0123456789abcdef0\nbranch refs/heads/' + a.branch + '\n'
+const PORC_NEW = WORKTREE_LIST_PORCELAIN + '\n' + wtOf(NEW)
+const activeWrites = (w: CleanupWorld) => w.writes.filter(x => x.path === slashed(SLOTS_PATH)).map(x => Object.keys((JSON.parse(x.text) as { active: object }).active))
+
+test('a worktree created from the foundry dir is recorded active and survives a sweep', async ($, on) => {
+  const w = cleanupWorld(on, { porcelain: PORC_NEW, merged: b => b === NEW.branch, files: { [metaFile(NEW)]: META_RUNNING(NEW.id) } })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: FOUNDRY_CWD } as never)
+  expect(activeWrites(w).some(k => k.includes(NEW.id))).toBe(true)
+  await cleanupSweep(w, $, MAIN)
+  expect(removes(w, NEW)).toEqual([])
+  expect(branchDeletes(w, NEW)).toEqual([])
+})
+
+test('a sweep during WorktreeCreate does not remove the new worktree', async ($, on) => {
+  let release!: () => void
+  const gate = new Promise<void>(r => (release = r))
+  let added = false
+  let gated = false
+  const w: CleanupWorld = cleanupWorld(on, {
+    files: { 'C:/r/.worktreeinclude': '.env\n', [metaFile(NEW)]: META_RUNNING(NEW.id) },
+    gone: [NEW.path],
+    merged: b => b === NEW.branch,
+    porcelainFn: () => (added ? PORC_NEW : undefined),
+    hook: async args => {
+      if (args.includes(' worktree ad' + 'd')) {
+        added = true
+        w.gone.delete(NEW.path)
+        return {}
+      }
+      if (args.includes('ls-files --others --ignored --exclude-from')) {
+        gated = true
+        await gate
+        return { stdout: '' }
+      }
+      return undefined
+    },
+  })
+  const creating = $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  for (let i = 0; i < 5000 && !gated; i++) await Promise.resolve()
+  await cleanupSweep(w, $, MAIN)
+  const during = removes(w, NEW)
+  release()
+  await creating
+  expect(during).toEqual([])
+})
+
+test('an unparseable slots.json makes the sweep remove and write nothing', async ($, on) => {
+  const trunc = SLOTS_JSON.slice(0, SLOTS_JSON.indexOf('a4other'))
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: trunc }, merged: b => b === LIVE_OTHER.branch })
+  await cleanupSweep(w, $, MAIN)
+  expect(removes(w, LIVE_OTHER)).toEqual([])
+  expect(slotsWrites(w)).toEqual([])
+  expect(w.files.get(slashed(SLOTS_PATH))).toBe(trunc)
+})
+
+test('a non-agent worktree name and the session own checkout are never swept', async ($, on) => {
+  const FOO: AgentFixture = { id: 'x', path: MAIN + WTD + 'foo', branch: 'worktree-foo' }
+  const w = cleanupWorld(on, { porcelain: WORKTREE_LIST_PORCELAIN + '\n' + wtOf(FOO), files: finished(LEAD), merged: () => true })
+  await cleanupSweep(w, $, LEAD.path)
+  expect(removes(w, FOO)).toEqual([])
+  expect(removes(w, LEAD)).toEqual([])
+})
+
+test('a mixed-case backslash porcelain path still matches its active entry', async ($, on) => {
+  const odd = LIVE_OTHER.path.toUpperCase().split('/').join(String.fromCharCode(92))
+  const porc = WORKTREE_LIST_PORCELAIN.replace('worktree ' + LIVE_OTHER.path, 'worktree ' + odd)
+  const w = cleanupWorld(on, { porcelain: porc, merged: b => b === LIVE_OTHER.branch })
+  await cleanupSweep(w, $, MAIN)
+  const r = w.ran.filter(x => x.includes('worktree remove') && x.toLowerCase().includes('a4other'))
+  expect(r).toEqual([])
+})
+
+test('a throwing slots.json read removes nothing and leaves the lock balanced', async ($, on) => {
+  const w = cleanupWorld(on, { files: finished(MEMBER), merged: b => b === MEMBER.branch })
+  w.files.set(slashed(SLOTS_PATH), undefined as unknown as string)
+  await cleanupSweep(w, $, MAIN)
+  const mk = w.ran.filter(x => x.includes('mkdir')).length
+  const rm = w.ran.filter(x => x.includes('rmdir')).length
+  expect(mk).toBe(rm)
+})
+
+test('a worktree with untracked files, and a locked one, are kept without force', async ($, on) => {
+  const w = cleanupWorld(on, { files: finished(DIRTY, LOCKED), merged: b => b === DIRTY.branch || b === LOCKED.branch, status: c => (c === DIRTY.path ? '?? new.txt\n' : '') })
+  await cleanupSweep(w, $, MAIN)
+  expect(removes(w, DIRTY)).toEqual([])
+  expect(removes(w, LOCKED)).toEqual([])
+})
+
+test('a failing git status counts as dirty and the worktree is kept', async ($, on) => {
+  const w = cleanupWorld(on, { files: finished(MEMBER), merged: b => b === MEMBER.branch, answer: (a, c) => (a.includes(' status') && c === MEMBER.path ? { exitCode: 128 } : undefined) })
+  await cleanupSweep(w, $, MAIN)
+  expect(removes(w, MEMBER)).toEqual([])
+})
+
