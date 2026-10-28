@@ -775,7 +775,6 @@ type State = {
   handedBack: Set<string>
   planArchitects: Set<string>
   pendingPlanCalls: Set<string>
-  planConsumed: Set<string>
   // each pending hand-back's message, by agent: what a lead's stop is judged on
   handBacks: Map<string, string>
   // leads whose pending hand-back was held back from the report file by the Examined check (ADR-0004 s6); the stop
@@ -1503,7 +1502,6 @@ export const register: Register = on => {
     handedBack: new Set(),
     planArchitects: new Set(),
     pendingPlanCalls: new Set(),
-    planConsumed: new Set(),
     handBacks: new Map(),
     withheld: new Set(),
     waiting: new Map(),
@@ -1530,7 +1528,6 @@ export const register: Register = on => {
     state.handedBack.clear()
     state.planArchitects.clear()
     state.pendingPlanCalls.clear()
-    state.planConsumed.clear()
     state.handBacks.clear()
     state.withheld.clear()
     state.waiting.clear()
@@ -1553,7 +1550,7 @@ export const register: Register = on => {
     const id = started.agentId
     // a plan-mode architect's spawn is bound by its Agent call's tool_use_id, never by order (ADR-0015 s9)
     const call = (e as unknown as { tool_use_id?: unknown }).tool_use_id
-    if (id !== undefined && typeof call === 'string' && state.pendingPlanCalls.delete(call) && !state.planConsumed.has(id)) state.planArchitects.add(id)
+    if (id !== undefined && typeof call === 'string' && state.pendingPlanCalls.delete(call)) state.planArchitects.add(id)
     if (id !== undefined) {
       const label = e.name !== undefined && e.name !== '' ? e.name : id
       state.labels.set(id, label)
@@ -1657,12 +1654,16 @@ export const register: Register = on => {
     const callId = (e as unknown as { tool_use_id?: unknown }).tool_use_id
     const pending = planCall && typeof callId === 'string' && callId !== '' ? callId : undefined
     if (pending !== undefined) state.pendingPlanCalls.add(pending)
-    const result = await next(e)
-    if (pending !== undefined) state.pendingPlanCalls.delete(pending)
+    let result: Awaited<ReturnType<typeof next>>
+    try {
+      result = await next(e)
+    } finally {
+      if (pending !== undefined) state.pendingPlanCalls.delete(pending)
+    }
     if (result.deny !== undefined) return result
     const raw = (result.result as { agentId?: unknown } | undefined)?.agentId
     const id = typeof raw === 'string' ? raw : undefined
-    if (planCall && id !== undefined && !state.planConsumed.has(id)) state.planArchitects.add(id)
+    if (planCall && id !== undefined) state.planArchitects.add(id)
     if (caller?.crew === undefined && !startsLead) return result
     // the name agent.spawn recorded, which the report file will carry
     const name = (id === undefined ? undefined : state.labels.get(id)) ?? (typeof e.name === 'string' && e.name !== '' ? e.name : id)
@@ -1726,9 +1727,8 @@ export const register: Register = on => {
       })
     }
     const passed = await next(e)
-    // the plan-file route runs only for a hand-back that went through; a denied one leaves the id usable
-    if (passed.deny === undefined && state.planArchitects.delete(id)) {
-      state.planConsumed.add(id)
+    // the plan-file route runs only for a hand-back that went through, not denied and not an error
+    if (passed.deny === undefined && !(passed as { isError?: unknown }).isError && state.planArchitects.has(id)) {
       await safely($, 'plan-file route', () => writePlanFiles($, state, message))
     }
     return passed
