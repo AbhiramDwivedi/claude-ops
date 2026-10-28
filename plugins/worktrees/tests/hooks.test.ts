@@ -662,3 +662,112 @@ test('a failing git status counts as dirty and the worktree is kept', async ($, 
   expect(removes(w, MEMBER)).toEqual([])
 })
 
+
+// ---------------- second red team: the create window, and an unreadable slots.json ----------------
+const ADD_ARGS = ' worktree ad' + 'd'
+const activeNow = (w: CleanupWorld, a: AgentFixture) =>
+  Object.keys((JSON.parse(w.files.get(slashed(SLOTS_PATH)) as string) as { active: object }).active).filter(k => k.endsWith('/agent-' + a.id))
+
+test('an active entry stays through a full sweep run in the create window, before the folder exists', async ($, on) => {
+  let added = false
+  let swept = false
+  let afterSweep: string[] = []
+  const w: CleanupWorld = cleanupWorld(on, {
+    files: { [metaFile(NEW)]: META_RUNNING(NEW.id) },
+    gone: [NEW.path],
+    merged: b => b === NEW.branch,
+    porcelainFn: () => (added ? PORC_NEW : undefined),
+    hook: async args => {
+      if (!swept && args.includes('--verify --quiet refs/heads/worktree-agent-b1new')) {
+        swept = true
+        await cleanupSweep(w, $, MAIN)
+        afterSweep = activeNow(w, NEW)
+        return { exitCode: 1 }
+      }
+      if (args.includes(ADD_ARGS)) {
+        added = true
+        w.gone.delete(NEW.path)
+        return {}
+      }
+      return undefined
+    },
+  })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  expect(swept).toBe(true)
+  expect(afterSweep).toHaveLength(1)
+  expect(activeNow(w, NEW)).toHaveLength(1)
+  await cleanupSweep(w, $, MAIN)
+  expect(activeNow(w, NEW)).toHaveLength(1)
+  expect(removes(w, NEW)).toEqual([])
+  expect(branchDeletes(w, NEW)).toEqual([])
+})
+
+const goneEntry = (ageMs: number) => {
+  const G: AgentFixture = { id: 'c1gone', path: MAIN + WTD + 'agent-c1gone', branch: 'worktree-agent-c1gone' }
+  const st = JSON.parse(SLOTS_JSON) as { active: Record<string, unknown> }
+  st.active[G.path.toLowerCase()] = { path: G.path, at: NOW - ageMs }
+  return { G, slots: JSON.stringify(st) }
+}
+
+test('an active entry whose folder is missing and not in the worktree list is retired when 11 minutes old', async ($, on) => {
+  const { G, slots } = goneEntry(11 * 60_000)
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: slots }, gone: [G.path] })
+  await cleanupSweep(w, $, MAIN)
+  expect(activeNow(w, G)).toEqual([])
+})
+
+test('an active entry whose folder is missing and not in the worktree list is kept when 9 minutes old', async ($, on) => {
+  const { G, slots } = goneEntry(9 * 60_000)
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: slots }, gone: [G.path] })
+  await cleanupSweep(w, $, MAIN)
+  expect(activeNow(w, G)).toHaveLength(1)
+})
+
+test('an unreadable slots.json is never written by a sweep, a create or the sweep after it', async ($, on) => {
+  const trunc = SLOTS_JSON.slice(0, SLOTS_JSON.indexOf('a4other'))
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: trunc }, merged: b => b === LIVE_OTHER.branch })
+  await cleanupSweep(w, $, MAIN)
+  const created = await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  await cleanupSweep(w, $, MAIN)
+  expect(slotsWrites(w)).toEqual([])
+  expect(w.files.get(slashed(SLOTS_PATH))).toBe(trunc)
+  expect(removes(w, LIVE_OTHER)).toEqual([])
+  expect(w.ran.filter(r => r.includes('worktree remove'))).toEqual([])
+  expect(created).toBeDefined()
+  expect(w.ran.some(r => r.includes(ADD_ARGS))).toBe(true)
+  expect(w.logs.some(l => l.startsWith('worktrees: slots.json unreadable'))).toBe(true)
+})
+
+test('a mixed-case name created from the foundry dir survives a sweep', async ($, on) => {
+  const MIX: AgentFixture = { id: 'b1new', path: MAIN + WTD + 'Agent-B1New', branch: 'worktree-Agent-B1New' }
+  const w = cleanupWorld(on, { porcelain: WORKTREE_LIST_PORCELAIN + '\n' + wtOf(MIX), merged: b => b === MIX.branch })
+  await $.classic.WorktreeCreate({ name: 'Agent-B1New', cwd: FOUNDRY_CWD } as never)
+  await cleanupSweep(w, $, MAIN)
+  expect(removes(w, MIX)).toEqual([])
+})
+
+test('a non-agent name created from the foundry dir is never swept', async ($, on) => {
+  const FEAT: AgentFixture = { id: 'x', path: MAIN + WTD + 'feature-x', branch: 'worktree-feature-x' }
+  const w = cleanupWorld(on, { porcelain: WORKTREE_LIST_PORCELAIN + '\n' + wtOf(FEAT), merged: () => true })
+  await $.classic.WorktreeCreate({ name: 'feature-x', cwd: FOUNDRY_CWD } as never)
+  await cleanupSweep(w, $, MAIN)
+  expect(removes(w, FEAT)).toEqual([])
+})
+
+test('a failed worktree add drops only its own active entry and claims no slot', async ($, on) => {
+  const w = cleanupWorld(on, { gone: [NEW.path], answer: a => (a.includes(ADD_ARGS) ? { exitCode: 128 } : undefined) })
+  const before = Object.keys((JSON.parse(SLOTS_JSON) as { active: object }).active)
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  const st = JSON.parse(w.files.get(slashed(SLOTS_PATH)) as string) as { active: object; slots: object }
+  expect(Object.keys(st.active)).toEqual(before)
+  expect(st.slots).toEqual({})
+})
+
+test('two creates claim slots 1 and 2 and keep both active entries', async ($, on) => {
+  const w = cleanupWorld(on, { files: { 'C:/r/.claude/worktree-setup.ps1': 'x' } })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  await $.classic.WorktreeCreate({ name: 'agent-b2new', cwd: MAIN } as never)
+  const st = JSON.parse(w.files.get(slashed(SLOTS_PATH)) as string) as { slots: object; active: object }
+  expect(Object.keys(st.slots)).toEqual(['1', '2'])
+  expect(Object.keys(st.active).filter(k => /agent-b[12]new$/.test(k))).toHaveLength(2)
+})
