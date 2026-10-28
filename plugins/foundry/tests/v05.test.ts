@@ -89,8 +89,9 @@ function build($: never, on: never, o: Opts = {}) {
     }
     return rawOn(ev, h)
   }) as never
-  const w = quiet(world($ as never, wrapped, o.inRepo === false ? { inRepo: false } : {}))
-  return { w, gitCalls, ctl }
+  const wopts: { inRepo?: boolean; listFails?: boolean } = o.inRepo === false ? { inRepo: false } : {}
+  const w = quiet(world($ as never, wrapped, wopts))
+  return { w, gitCalls, ctl, wopts }
 }
 
 // one world per test (the kit refuses a second world()); between cases a test resets what the hooks read
@@ -799,4 +800,65 @@ test('logs: each refusal and send-back adds a [foundry]/foundry: line naming the
   await settle()
 
   expect(w.logs.join('\n')).not.toContain(SENTINEL)
+})
+
+// ---------------------------------------------------------------------------------------------
+// 9. regression tests for red-team breaks
+// ---------------------------------------------------------------------------------------------
+
+test('regression A: a held-back v2 hand-back is saved when the stop goes through on a failing agent list', async ($, on) => {
+  str('EXAMINED_REASON')
+  const { w, wopts } = await cleanWorld($ as never, on as never)
+  await handBack($ as never, 'L1', report({ extra: [], marker: 'HB-HELD' }))
+  await settle()
+  expect(savedWith(w, 'HB-HELD')).toBe(false)
+  wopts.listFails = true
+  expect(await lead($ as never, 'sign-off, no report here')).toBeUndefined()
+  await settle()
+  expect(savedWith(w, 'HB-HELD')).toBe(true)
+})
+
+test('regression B: a Branch name git would read as a revision expression runs no git and goes through', async ($, on) => {
+  str('NO_HEAD_REASON')
+  const { gitCalls } = await cleanWorld($ as never, on as never, { git: gitAt(H2, P2) })
+  for (const name of ['HEAD', '@', 'a@{1}', 'a~1']) {
+    gitCalls.length = 0
+    const branch = `${name} at abc1234, based on def5678.`
+    expect([branch, await lead($ as never, report({ branch }))]).toEqual([branch, undefined])
+    expect([branch, gitCalls]).toEqual([branch, []])
+  }
+})
+
+test('regression C: a hung read of the judge file does not hold a lead stop past the 2000 ms bound', async ($, on) => {
+  str('NO_PASS_REASON')
+  const { w } = await cleanWorld($ as never, on as never)
+  w.holds.set(judgePath('auth-judge'), new Promise(() => {}))
+  let done = false
+  let block: string | undefined = 'pending'
+  void lead($ as never, report()).then(b => {
+    block = b
+    done = true
+  })
+  await settle()
+  await w.clock.advance(3000)
+  await settle()
+  expect(done).toBe(true)
+  expect(block).toBeUndefined()
+})
+
+test('regression C: a hung read of plan.json does not hold a main-session foundry:judge call past the bound', async ($, on) => {
+  str('MAIN_MODEL_REFUSAL')
+  const { w } = await cleanWorld($ as never, on as never)
+  w.holds.set(PLAN, new Promise(() => {}))
+  let done = false
+  let deny: string | undefined = 'pending'
+  void mainCall(w, { model: 'opus', effort: 'medium' }).then(r => {
+    deny = r.deny
+    done = true
+  })
+  await settle()
+  await w.clock.advance(3000)
+  await settle()
+  expect(done).toBe(true)
+  expect(deny).toBeUndefined()
 })
