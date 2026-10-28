@@ -771,3 +771,46 @@ test('two creates claim slots 1 and 2 and keep both active entries', async ($, o
   expect(Object.keys(st.slots)).toEqual(['1', '2'])
   expect(Object.keys(st.active).filter(k => /agent-b[12]new$/.test(k))).toHaveLength(2)
 })
+
+// ---------------- third red team: /tidy with an unreadable slots.json, and telling the user once ----------------
+const TIP = '4bada1f0123456789abcdef0123456789abcdef0'
+// git's answers for /tidy: the new agent branch sits on the default branch, so it counts as merged
+const tidyGit = (args: string): CleanupAnswer | undefined => {
+  if (args.includes('symbolic-ref')) return { stdout: 'origin/main\n' }
+  if (args.includes('--show-current')) return { stdout: 'main\n' }
+  if (args.includes('for-each-ref') && args.includes('refs/heads')) return { stdout: `main ${TIP}\n${NEW.branch} ${TIP}\n` }
+  if (args.includes('for-each-ref') && args.includes('refs/remotes')) return { stdout: `origin/main ${TIP}\n` }
+  if (args.includes('branch --merged')) return { stdout: `main\n${NEW.branch}\n` }
+  return undefined
+}
+const tidyRun = async ($: CleanupDollar) => ((await $.command.run({ command: 'tidy', args: '' } as never)) as unknown as { text: string }).text
+
+test('tidy removes nothing and says slots.json is unreadable while slots.json is unreadable', async ($, on) => {
+  const trunc = SLOTS_JSON.slice(0, SLOTS_JSON.indexOf('a4other'))
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: trunc, [metaFile(NEW)]: META_RUNNING(NEW.id) }, gone: [NEW.path], porcelain: PORC_NEW, merged: () => true, answer: tidyGit })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  const text = await tidyRun($)
+  expect(w.ran.filter(r => r.includes('worktree remove'))).toEqual([])
+  expect(w.ran.filter(r => /branch -[dD] /.test(r))).toEqual([])
+  expect(text).toContain('slots.json unreadable')
+  expect(w.files.get(slashed(SLOTS_PATH))).toBe(trunc)
+})
+
+test('tidy removes nothing for an agent that has not stopped when slots.json is readable', async ($, on) => {
+  const w = cleanupWorld(on, { files: { [metaFile(NEW)]: META_RUNNING(NEW.id) }, gone: [NEW.path], porcelain: PORC_NEW, merged: () => true, answer: tidyGit })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  await tidyRun($)
+  expect(w.ran.filter(r => r.includes('worktree remove'))).toEqual([])
+  expect(w.ran.filter(r => /branch -[dD] /.test(r))).toEqual([])
+})
+
+test('an unreadable slots.json is reported to the user with one toast per session', async ($, on) => {
+  const trunc = SLOTS_JSON.slice(0, SLOTS_JSON.indexOf('a4other'))
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: trunc }, gone: [NEW.path], merged: b => b === LIVE_OTHER.branch })
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  await cleanupSweep(w, $, MAIN)
+  await $.classic.WorktreeCreate({ name: 'agent-b2new', cwd: MAIN } as never)
+  await cleanupSweep(w, $, MAIN)
+  expect(w.toasts).toHaveLength(1)
+  expect(w.toasts[0]).toContain('slots.json')
+})
