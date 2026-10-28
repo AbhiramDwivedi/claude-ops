@@ -17,7 +17,7 @@ Since 0.3.0 an architect agent plans each run against your project's architectur
 - **No Opus for coding.** No Opus member writes code or does a checkout. Builders and test-writers run on Sonnet. Opus runs judges, red teams, writers and the architect, at effort `medium`; `high` and `xhigh` need your explicit call. A Sonnet builder that fails twice on the same check gets an Opus root-cause analysis that writes no code, then a fresh Sonnet builder; if that one fails, the lead sends `BLOCKED:`.
 - **No check code from the architect.** A done-check is a test command. A check that needs logic is a contract test written by a crew's Sonnet test-writer.
 - **Judges and cynics without a worktree.** `/foundry:init` advises setting worktrees' `noIsolateAgents` to `foundry:judge,foundry:cynic`. Red teams keep their worktree.
-- **Retro reports leftovers.** A new `leftovers` key lists the worktrees and branches a run left behind.
+- **Retro reports leftovers.** A new `leftovers` key lists the `worktree-agent-<id>` branches and `.claude/worktrees/agent-<id>` folders still present for the run's spawned agents, or says `"not recorded"` when there is no event log or git can't be read.
 
 ## What changed in 0.5.1
 
@@ -182,7 +182,7 @@ The `foundry:retro` skill runs `python scripts/retro.py <foundry dir>` (Python 3
 - lead-to-lead messages;
 - from `events.jsonl`, spawns by model and effort, stalls, escalations (`QUESTION`, `BLOCKED`, `PROPOSAL`) and judge verdicts.
 
-For the whole folder it also counts the judge files by verdict, and the plan's crews, waves and estimated agents. From 0.6.0 its `leftovers` key reports the worktrees and branches a run left behind. With no such folder it exits 2 with `retro: NO_FOUNDRY_DIR: <path>`.
+For the whole folder it also counts the judge files by verdict, and the plan's crews, waves and estimated agents. From 0.6.0 its `leftovers` key lists, with a `count` of agents, the `worktree-agent-<id>` branches and `.claude/worktrees/agent-<id>` folders still present for agents the event log shows were spawned; it is `"not recorded"` when there is no event log, the folder isn't `<git common dir>/foundry/<session>`, or git can't be read. With no such folder it exits 2 with `retro: NO_FOUNDRY_DIR: <path>`.
 
 The skill shows you the counts and proposes changes to `.claude/foundry.json` keys and prompt-override files, and writes only what you approve. It hands repeated work it finds to `kit:revise` when that skill is listed, and says so when it isn't.
 
