@@ -725,7 +725,7 @@ test('an active entry whose folder is missing and not in the worktree list is ke
 
 test('an unreadable slots.json is never written by a sweep, a create or the sweep after it', async ($, on) => {
   const trunc = SLOTS_JSON.slice(0, SLOTS_JSON.indexOf('a4other'))
-  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: trunc }, merged: b => b === LIVE_OTHER.branch })
+  const w = cleanupWorld(on, { files: { [SLOTS_PATH]: trunc }, gone: [NEW.path], merged: b => b === LIVE_OTHER.branch })
   await cleanupSweep(w, $, MAIN)
   const created = await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
   await cleanupSweep(w, $, MAIN)
