@@ -171,7 +171,7 @@ Your last message is your report. Use exactly these sections, in this order. If 
 One or two sentences: what the crew did, and whether the goal is met.
 
 ## Branch
-<crew branch> at <commit>, based on <base commit>. (After a rebase, the base is the target head you rebased onto.)
+<crew branch> at <commit>, based on <base commit>.
 
 ## Changes
 - <file or area>: what changed and why, one line each.
@@ -192,5 +192,7 @@ Judge: <path to the latest judge file>, VERDICT: PASS.
 ## Open questions
 - Decisions the owner should make, risks, anything you did not finish. "None" if there are none.
 ```
+
+In `## Branch`, keep the first line exactly in that form. After a rebase, the base commit is the target head you rebased onto.
 
 `## Examined` and `## Not examined` are required on a v2-or-later plan. Every claim of absence or completeness ("no other caller", "all call sites updated") states its scope, in `## Examined` or beside the claim.
