@@ -940,7 +940,7 @@ async function writeReport($: $, state: State, crew: Crew, id: string, text: str
   await $.fs.write(tags ? reportPath(dir, crew.crew, label) : interimPath(dir, crew.crew, label), text)
   if (tags) await logEvent($, state, { event: 'report', crew: crew.crew, agent: label, marker: markerOf(text) })
   // a judge's FAIL that spends the crew's repair budget is recorded once more, as its own event (ADR-0004 s5)
-  if (tags && markerOf(text) === 'VERDICT: FAIL' && isJudgeName(crew.crew, label)) await safely($, 'repair budget record', () => budgetRecord($, state, crew.crew, label))
+  if (tags && markerOf(text) === 'VERDICT: FAIL' && isJudgeName(crew.crew.toLowerCase(), label.toLowerCase())) await safely($, 'repair budget record', () => budgetRecord($, state, crew.crew, label))
   if (!crew.isLead || !tags) return
   // a lead's captured text tells whether it stopped on a question, a blocker or a proposal
   const tag = tagOf(text)
@@ -1081,10 +1081,10 @@ async function judgeFilesOf($: $, dir: string, crew: string, since: number, with
   const files: JudgeFile[] = []
   if (!(await $.fs.exists(dir))) return files
   for (const f of await $.fs.list(dir)) {
-    if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew, f.name)) continue
+    if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew.toLowerCase(), f.name.toLowerCase())) continue
     const { mtimeMs } = await $.fs.stat(`${dir}/${f.name}`)
     if (!(mtimeMs >= since)) continue
-    files.push({ name: f.name, text: withText ? String(await $.fs.read(`${dir}/${f.name}`)) : '', mtimeMs })
+    files.push({ name: f.name.toLowerCase(), text: withText ? String(await $.fs.read(`${dir}/${f.name}`)) : '', mtimeMs })
   }
   return files
 }
@@ -1099,14 +1099,18 @@ async function failsOf($: $, state: State, crew: string): Promise<{ plan: Plan; 
   const dir = await rootOf($, state)
   if (dir === undefined) return undefined
   const files = await within($, EVENT_WAIT_MS, () => judgeFilesOf($, reportDir(dir, crew), crew, since, true))
-  return files === undefined ? undefined : { plan, fails: judgeFails(crew, files, since) }
+  return files === undefined ? undefined : { plan, fails: judgeFails(crew.toLowerCase(), files, since) }
 }
 
 // ADR-0004 s5: a judge-named Agent call from inside a crew whose repair budget is spent is refused
 async function budgetGate($: $, state: State, crew: string, name: unknown): Promise<{ deny: string } | undefined> {
-  if (!isJudgeName(crew, name)) return undefined
+  // NTFS names are case-insensitive, so judge names and the crew compare case-folded; the refusal names the crew as given
+  const folded = typeof name === 'string' ? name.toLowerCase() : name
+  if (!isJudgeName(crew.toLowerCase(), folded)) return undefined
   const counted = await failsOf($, state, crew)
-  const refused = counted === undefined ? undefined : judgeBudgetVerdict(counted.plan, crew, name, counted.fails)
+  const verdict = counted === undefined ? undefined : judgeBudgetVerdict(counted.plan, crew.toLowerCase(), folded, counted.fails)
+  const budget = counted === undefined ? undefined : repairBudgetOf(counted.plan)
+  const refused = verdict === undefined || budget === undefined ? undefined : { deny: budgetRefusal(crew, counted?.fails ?? 0, budget) }
   if (refused !== undefined) await logRule($, `repair budget gate refused a judge spawn in crew ${crew}: ${counted?.fails} judge FAILs this run`)
   return refused
 }
@@ -1168,7 +1172,7 @@ async function finalReportVerdict($: $, state: State, id: string, text: string):
   if (isTagged(text) || since === undefined || crew === undefined || dir === undefined) return undefined
   const reports = reportDir(dir, crew.crew)
   const read = await within($, EVENT_WAIT_MS, async () => {
-    const latest = latestJudge(crew.crew, await judgeFilesOf($, reports, crew.crew, since, false), since)
+    const latest = latestJudge(crew.crew.toLowerCase(), await judgeFilesOf($, reports, crew.crew, since, false), since)
     return { ruling: latest === undefined ? undefined : judgeRuling(String(await $.fs.read(`${reports}/${latest.name}`))) }
   })
   if (read === undefined) return undefined
@@ -1577,7 +1581,7 @@ export const register: Register = on => {
     if (caller?.refused !== undefined) return caller.refused
     // ADR-0004 s5: a judge-named call from inside a crew whose repair budget is spent
     const callerCrew = caller?.crew?.crew
-    if (callerCrew !== undefined && isJudgeName(callerCrew, e.name)) {
+    if (callerCrew !== undefined && isJudgeName(callerCrew.toLowerCase(), typeof e.name === 'string' ? e.name.toLowerCase() : e.name)) {
       const spent = await safely($, 'repair budget gate', () => budgetGate($, state, callerCrew, e.name))
       if (spent !== undefined) return spent
     }
