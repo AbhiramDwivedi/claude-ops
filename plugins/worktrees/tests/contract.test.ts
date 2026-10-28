@@ -45,6 +45,7 @@ function world(on: On, files: Map<string, string>, readThrows = false) {
     return { value: undefined }
   })
   on('env.get', async () => ({ value: undefined }))
+  on('session.cwd', async () => ({ value: 'C:/r' }))
   on('ui.log', async (_, e) => {
     logs.push((e as { text: string }).text)
     return { value: undefined }

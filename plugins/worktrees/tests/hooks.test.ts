@@ -4,8 +4,11 @@ import { expect, mock, test } from 'claude-code/testing'
 // the engine beneath the plugin: git says the session is in a repo, and the Agent call records what reached it
 function world(on: On, inRepo = true) {
   const seen: Record<string, unknown>[] = []
+  on('env.get', async () => ({ value: undefined }))
+  on('session.cwd', async () => ({ value: 'C:/r' }))
+  on('ui.log', async () => ({ value: undefined }))
   on('process.run', async (_, e) => ({
-    value: { exitCode: inRepo ? 0 : 128, stdout: inRepo && e.argv.includes('--is-inside-work-tree') ? 'true\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    value: { exitCode: inRepo ? 0 : 128, stdout: inRepo && e.argv.includes('--git-common-dir') ? 'C:/r/.git\n' : inRepo && e.argv.includes('--is-inside-work-tree') ? 'true\n' : '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
   on('tool.call', async (_, e) => {
     seen.push(e as unknown as Record<string, unknown>)
@@ -91,6 +94,7 @@ function workspace(on: On, setup: boolean, grouped = false) {
   const at = grouped ? 'C:/w/services' : 'C:/w'
   const present = new Set([`${at}/svc-a/.git`, `${at}/svc-b/.git`, ...(setup ? ['C:/w/.claude/worktree-setup.sh'] : [])])
   on('env.get', async () => ({ value: undefined }))
+  on('session.cwd', async () => ({ value: 'C:/w' }))
   on('fs.exists', async (_, e) => ({ value: present.has(e.path.replace(/\\/g, '/')) }))
   const listings: Record<string, { name: string; kind: 'file' | 'dir' | 'other'; size: number; isLink: boolean }[]> = {
     'C:/w/services': [
@@ -114,8 +118,8 @@ function workspace(on: On, setup: boolean, grouped = false) {
   on('process.run', async (_, e) => {
     const argv = e.argv.join(' ')
     ran.push(argv)
-    const out = argv.includes('--is-inside-work-tree')
-      ? 'true\n'
+    const out = argv.includes('--git-common-dir')
+      ? 'C:/w/.git\n'
       : argv.includes('--show-toplevel')
         ? 'C:/w\n'
         : argv.includes('ls-files')
@@ -420,6 +424,7 @@ test('kit manifest match folds ASCII case only: KELVIN SIGN does not match a dec
   on('fs.exists', async (_, e) => ({ value: e.path.replace(/\\/g, '/') === MANIFEST }))
   on('fs.read', async () => ({ value: text }))
   on('env.get', async () => ({ value: undefined }))
+  on('session.cwd', async () => ({ value: 'C:/r' }))
   on('ui.log', async () => ({ value: undefined }))
   on('tool.call', async (_, e) => {
     seen.push(e as unknown as Record<string, unknown>)
