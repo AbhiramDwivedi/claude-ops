@@ -71,3 +71,12 @@ Refused read-only types: general-purpose, kit:builder, kit:test-writer, foundry:
 5. With a manifest declaring all seven refused types and `foundry:judge` at `readOnly: true`, a call of each refused type, of `General-Purpose`, and with no `subagent_type`, reaches the engine with `isolation: "worktree"`; a `foundry:judge` call still gets none. The call is not denied.
 6. The same run's debug log holds a line starting `worktrees: kit manifest declares editing types read-only, ignoring them: ` that names each refused entry.
 7. `declaredReadOnly` on that manifest's text returns `types` without any refused name and with `foundry:judge`, and `refused` equal to the seven names in file order; a manifest entry `Foundry:Lead` lands in `refused` as `Foundry:Lead`. On a broken manifest (`{not json`), `refused` is `[]` and `error` is set.
+
+## Amendment, 2026-10-28: the main checkout comes from the project dir, and the isolation path logs
+
+Status: accepted. The owner approved foundry run 4's plan at 2026-10-28T15:11:50Z, and this amendment is part of that plan (its wave-0 design crew wrote it, in [ADR-0015](0015-agent-worktree-cleanup.md), items 4 and 13). The decisions above stand except where this section narrows them.
+
+- The main checkout whose `.claude/kit/manifest.json` worktrees reads is the one ADR-0015 item 4 resolves: `CLAUDE_PROJECT_DIR`, else the event's `cwd`, else `$.session.cwd()`, each tried with `git rev-parse --path-format=absolute --git-common-dir`. `declaredByKit` no longer runs git with no `cwd` (`plugins/worktrees/hooks/register.ts:727`, as of worktrees 0.7.0). A repo that was not found is never cached, so a spawn from inside the git dir followed by one from the main checkout both read the manifest.
+- The manifest rules (full names only, refused types ignored, absent means silent, unreadable means logged) don't change. A manifest that declares a type now also logs `worktrees: isolation skipped <type>: kit manifest declares it read-only`, one of the isolation path's skip lines in ADR-0015.
+- `noIsolateAgents` stays untouched. It is the route for judges and cynics (ADR-0015 item 7); no new declaration source is added.
+- The seams above hold. Their mocks answer `--git-common-dir` for any `cwd`, so they still pass.

@@ -3,6 +3,8 @@
 Status: accepted, 2026-10-28
 Accepted on the owner's approval of the foundry run-3 plan (`plan.json` `approvedAt` 2026-10-28T00:31:42Z). Proposed by run 3's design crew (wave 0), for foundry 0.5.0. The effort-ladder principle itself (who runs at which effort) is recorded in the repo's [ADR-0011](../../../../docs/adr/0011-agents-pin-their-model.md) amendment; this ADR records what foundry's hooks, prompts and retro do about it.
 
+Amended 2026-10-28 by repo [ADR-0015](../../../../docs/adr/0015-agent-worktree-cleanup.md), item 11, accepted with the run-4 plan (`approvedAt` 2026-10-28T15:11:50Z), for foundry 0.6.0: leads merge the target into the crew branch instead of rebasing, so `<base>` (section 6) is the target head last merged in, and the patch-id carry applies across that merge. The passages that said "rebase" now say so; the context below still describes 0.4.3 as it was.
+
 ## Context
 
 Run 3's goal items 2, 3 and 7 (`plan.json` `goal`) need four things foundry 0.4.3 can't express:
@@ -63,7 +65,7 @@ Each literal below is written once, here. The prompts (`agents/judge.md`, `agent
 git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable
 ```
 
-`<base>` is the commit the crew's change is measured from: the base commit in the lead's brief, or after a rebase, the target head the branch was rebased onto. The flags pin the diff text against the user's git config (colour, external diff tools, rename detection, `diff.noprefix`), so the judge's shell and the hook's argv produce the same id. Each line is matched in full: the literal at column 0, then exactly 40 characters of `[0-9a-f]`, then nothing but spaces or tabs. A judge that writes uppercase hex, a short SHA or a 64-digit SHA-256 id gets no match (section 6 says what follows).
+`<base>` is the commit the crew's change is measured from: the target head last merged in: the base commit in the lead's brief until the lead first runs `git merge <target>` into the crew branch, then the target head of its latest such merge (amended 2026-10-28 by repo [ADR-0015](../../../../docs/adr/0015-agent-worktree-cleanup.md), item 11: leads merge the target in and never rebase). Because the crew branch then contains `<base>`, `<base>...<head>` is the crew's net change on top of the target. The flags pin the diff text against the user's git config (colour, external diff tools, rename detection, `diff.noprefix`), so the judge's shell and the hook's argv produce the same id. Each line is matched in full: the literal at column 0, then exactly 40 characters of `[0-9a-f]`, then nothing but spaces or tabs. A judge that writes uppercase hex, a short SHA or a 64-digit SHA-256 id gets no match (section 6 says what follows).
 
 ### 4. Scope-bounded claims
 
@@ -102,7 +104,7 @@ retro counts only the events line (section 7), because events lines hold no repo
 
 **The judge** writes `HEAD_LINE` and `PATCH_LINE` under `## Proof checked`, first in that section, on every ruling, in every merge mode, the integration judge's included. `<base>` for `PATCH_COMMAND` comes from the lead's brief. With an empty diff, `git patch-id` prints nothing, so there is no patch line, and the guard treats the ruling as having no head lines.
 
-**The lead's Branch line.** The first non-empty line under `## Branch` keeps the 0.4.3 form, `<crew branch> at <commit>, based on <base commit>.`. Each of the three may be wrapped in single backticks. After a rebase, `<base commit>` is the target head the branch was rebased onto. `branchOf` reads the branch and the base from it. Neither may start with `-`, so neither can reach git as an option.
+**The lead's Branch line.** The first non-empty line under `## Branch` keeps the 0.4.3 form, `<crew branch> at <commit>, based on <base commit>.`. Each of the three may be wrapped in single backticks. `<base commit>` is the target head last merged in: the brief's base until the lead first merges the target into the crew branch, then the target head of its latest `git merge <target>` (repo ADR-0015, item 11; it was "the target head the branch was rebased onto" before leads stopped rebasing). `branchOf` reads the branch and the base from it. Neither may start with `-`, so neither can reach git as an option.
 
 **The guard**, in the lead stop gate, applies on a v2 or later plan to an untagged stop text that would pass by its `## Proof` section and has both of section 4's headings. It reads the crew's **latest this-run judge file** (`latestJudge`: the newest modification time at or after `runStart`, ties going to the higher `-judge-<k>`) and parses it with `judgeRuling`. When `branchOf` reads the lead's Branch line, the hook runs, with `cwd` the session's working directory and `timeoutMs: 15_000` on each call:
 
@@ -118,12 +120,12 @@ A non-zero exit, a timeout or an unparsable output gives `undefined`. The verdic
 | head unknown (no Branch line, or git failed) | goes through (fail open) |
 | head equals the judged head | goes through |
 | head moved, patch id unknown | goes through (fail open) |
-| head moved, patch id equals the judged patch | goes through: the PASS survives the rebase |
+| head moved, patch id equals the judged patch | goes through: the PASS survives the merge of the target |
 | head moved, patch id differs | sent back with `headMovedReason(judged head, head)` |
 
 These send-backs count in the same streak as `LEAD_STOP_REASON`, so after `LEAD_STOP_BLOCKS` (2) in a row the next stop goes through, as in 0.4.3. An unanswered tag doesn't excuse them: the text is a final report, not a question. If reading the judge folder throws, or anything else in the step does, the step is skipped and the stop goes through (`safely`).
 
-**A patch-bound PASS across a rebase.** A PASS stands for a rebased head when `PATCH_COMMAND` gives the same id the judge wrote, and the checks from the brief pass again on the rebased head, listed under `## Checks run`. Then no fresh judge is needed. Otherwise the rebased head needs a fresh judge, as in 0.4.3. The hook can see the patch id but can't run checks, so the lead (section 12 of its prompt) and the foreman's merge gate both require the re-run. **The foreman's merge gate** (`skills/run/SKILL.md`, merge section) uses the same file and the same rule. The file is the crew's newest judge file modified at or after `approvedAt`, which replaces "highest-numbered" and closes ADR-0003's open item for the gate. The ruling must be a PASS with no `UNSCOPED` line. Its `HEAD_LINE` value must equal `git rev-parse <crew branch>`, or its `PATCH_LINE` value must equal `PATCH_COMMAND`'s id with the lead's checks re-run green after the rebase.
+**A patch-bound PASS across a merge of the target.** (Amended 2026-10-28 by repo ADR-0015, item 11: leads make a branch ready with `git merge <target>` into the crew branch, a real merge, never a rebase or cherry-pick, and the foreman still runs `git merge --ff-only`.) The patch-id carry stays. The judge's `PATCH_LINE` is computed with `<base>` from the Branch line it was given; after the lead merges the target in, the Branch line's `<base>` is the new target head, and `PATCH_COMMAND` measures the crew's net change against it. A merge that touched none of the crew's hunks gives the same id. A PASS stands for the merged head when `PATCH_COMMAND` gives the same id the judge wrote, and the checks from the brief pass again on the merged head, listed under `## Checks run`. Then no fresh judge is needed. Otherwise the merged head needs a fresh judge, as in 0.4.3. The hook can see the patch id but can't run checks, so the lead (section 12 of its prompt) and the foreman's merge gate both require the re-run. **The foreman's merge gate** (`skills/run/SKILL.md`, merge section) uses the same file and the same rule. The file is the crew's newest judge file modified at or after `approvedAt`, which replaces "highest-numbered" and closes ADR-0003's open item for the gate. The ruling must be a PASS with no `UNSCOPED` line. Its `HEAD_LINE` value must equal `git rev-parse <crew branch>`, or its `PATCH_LINE` value must equal `PATCH_COMMAND`'s id with the lead's checks re-run green after the merge of the target.
 
 **The hand-back path.** A lead's hand-back is saved as its report only if it passes `leadStopPasses` and `examinedVerdict`. The head guard runs only in the stop gate, since it calls git. A hand-back the guard then sends back stays in the report file until the lead's next stop overwrites it.
 
@@ -224,7 +226,7 @@ The contract tests read only `plugins/foundry/tests/fixtures/contract-050/**` or
 
 ## Consequences
 
-- One rebase no longer costs one judge when the crew's patch doesn't change. A rebase that resolves a conflict changes the patch id and still needs a fresh judge.
+- One merge of the target no longer costs one judge when the crew's patch doesn't change. A merge that resolves a conflict in the crew's hunks changes the patch id and still needs a fresh judge. (Written for rebases in run 3; amended for real merges by repo ADR-0015.)
 - A crew stops at `repairBudget + 1` FAILs and goes to the foreman, instead of looping. A successor lead gets a fresh count. The foreman's decision to start one is the extra spend, and it is logged.
 - The guard and the budget trust file modification times against `approvedAt`. A re-approval that rewrites `approvedAt` mid-run resets every count. A clock that runs behind the file system would hide this run's files and fail open, not closed.
 - The judge's file can't prove the patch line was computed from the right base. The guard only compares ids. A judge that used the wrong base gets a mismatch, and the lead a send-back, never a wrong merge.
