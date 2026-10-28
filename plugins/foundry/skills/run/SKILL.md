@@ -101,17 +101,17 @@ Agent({
 })
 ```
 
-Run it in the foreground. The plugin doesn't save its report, so read its hand-back directly. The brief's first line is `Mode: plan`. After it, the brief gives:
+Run it in the foreground. The plugin doesn't save its report, so read its hand-back directly. The brief's first line is exactly `Mode: plan`; foundry's hook takes the plan from the hand-back only for an architect you start with that first line. After it, the brief gives:
 
 - the goal the owner chose in section 1, and your depth-pass answers;
-- the foundry dir: the architect writes `<foundry dir>/plan.json` and `<foundry dir>/plan.md` there;
+- the foundry dir. The architect doesn't write there: it hands `plan.json` and `plan.md` back as two fenced blocks in its report, and foundry's hook writes them to `<foundry dir>/plan.json` and `<foundry dir>/plan.md`;
 - the architecture doc's path, from `.claude/foundry.json`;
 - `agentCap` and `maxParallelCrews`, from `.claude/foundry.json` or the defaults;
 - the plan schema's absolute path, `<plugin>/docs/plan.schema.json`, where `<plugin>` is two levels above this skill's base directory (`<plugin>/skills/run`);
-- `repairBudget` from `.claude/foundry.json` (default 2). The architect writes a v2 plan and copies the number into it;
+- `repairBudget` from `.claude/foundry.json` (default 2). The architect drafts a v2 plan and copies the number into it;
 - when `promptOverrides` sets an `architect` file, the line "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold." The `architect-plan-2` brief carries it too.
 
-The architect gives each module the goal touches a verdict, `extend` by default or `change`, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. Its draft sets `approval` to `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise, and sets every crew's `status` to `"planned"`. An owner draft leaves `approvedAt` null; an auto draft carries the architect's write time there, because `plan.schema.json` requires a date-time when `approval` is `"auto"`. That time isn't an approval: you overwrite it with your own log time when you auto-start. From here you own both files: you set `approvedAt` and each crew's `status`, and you add mid-run design slices.
+The architect gives each module the goal touches a verdict, `extend` by default or `change`, splits the work into crews and waves by the leaf test, runs each crew's done-check once to prove it, and estimates agents per crew. Its draft sets `approval` to `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise, and sets every crew's `status` to `"planned"`. The hook writes the plan with `approvedAt: null` whatever the draft carried, and never overwrites a plan on disk whose `approvedAt` is set. An `auto` plan on disk therefore fails `plan.schema.json` until you log it, because the schema wants a date-time there; you set it with your own log time when you auto-start. After the hand-back, read `<foundry dir>/plan.json` and `<foundry dir>/plan.md` from the foundry dir, not from the message. If they aren't there, the hook wrote nothing (it logs why); send the architect back with that reason. From here you own both files: you set `approvedAt` and each crew's `status`, and you add mid-run design slices.
 
 Check the draft before anyone sees it. Send it back to the architect, with what's wrong, if:
 
@@ -120,6 +120,8 @@ Check the draft before anyone sees it. Send it back to the architect, with what'
 - a crew has a done-check it can game: it should run code the crew doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
 - a crew can't run its done-check with its own access (`doneCheckProved` is false);
 - the total of `estAgents` is over `agentCap`. The architect re-plans with fewer, larger crews or more waves.
+
+The architect never writes check code; a done-check is a test command; a check that needs logic is a contract test written by a crew's Sonnet test-writer.
 
 ### Have a cynic review the verdicts
 
@@ -139,7 +141,7 @@ The cynic's `Owner:` line says whether one of these applies. In an extend-only r
 The plan gives each crew its slug, wave, verdict, modules, owned paths, done-check and estimated agents. `plan.md` also proposes each crew's high-impact paths, red team and resource slice. Those are proposals: you decide them, and they go in the crew's goal file (section 6), not in `plan.json`. For each crew, decide:
 
 - **slug**: the plan's slug names the crew, its goal file and its first lead, and its members' names start with their lead's name.
-- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work. Builders and test-writers default to Sonnet; an Opus builder comes only as a ladder climb after a Sonnet attempt on the same task fails, never as a plan-time pick, and then starts at `medium`. Deterministic steps (checkouts, rebases, merges, patch-id comparisons, done-check runs, version bumps) run as commands or scripts; the lead runs them itself and starts no member for them. Mechanical edits go to Sonnet at effort `low`. Every member brief names the exact files, functions and line ranges, so the member doesn't read the codebase to find them. Judges, red teams, reviewers and writers run at `medium`. `high` and `xhigh` are for the owner's explicit call only, cited in the goal file or the brief; never a default, and never a reason to raise the judge because a builder runs high. Every crew has a judge (`foundry:judge`), never the builder, on Opus at effort `medium`; the judge is the review, so a crew with a judge gets no `kit:reviewer`. Add a writer (`foundry:writer`, Opus, effort `medium`) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline. A `design` crew's lead starts the architect in `design` mode as one of its members.
+- **members**: role, agent type, model and effort. No Opus member writes code or does a checkout: builders and test-writers run on Sonnet, at effort `low` for lookups and mechanical edits and `medium` for well-specified work. Opus is for judges, red teams, writers and the architect, at effort `medium`. When a Sonnet builder fails twice on the same check, the lead has an Opus agent at `medium` find the root cause, writing no code, and starts a fresh Sonnet builder with that analysis; if that builder fails too, the lead sends `BLOCKED:`. Deterministic steps (checkouts, merges, patch-id comparisons, done-check runs, version bumps) run as commands or scripts; the lead runs them itself and starts no member for them. Mechanical edits go to Sonnet at effort `low`. Every member brief names the exact files, functions and line ranges, so the member doesn't read the codebase to find them. No member runs at `high` or `xhigh` unless the owner explicitly calls it, cited in the goal file or the brief; never a default. Every crew has a judge (`foundry:judge`), never the builder, on Opus at effort `medium`; the judge is the review, so a crew with a judge gets no `kit:reviewer`. Add a writer (`foundry:writer`, Opus, effort `medium`) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline. A `design` crew's lead starts the architect in `design` mode as one of its members.
 - **high-impact paths**: hooks, stored schemas and data shapes, auth or money code. A crew with any gets a red team (an Opus member at effort `medium` whose job is to break the crew's work); a crew with none gets none. Having a red team raises nobody's effort.
 - **resources**: a database or temp directory of its own, so parallel end-to-end tests don't collide, and its ports as exactly one of two lines. When the repo has a `.claude/worktree-setup.*`, it is `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`: worktrees gives each worktree its own `PORT_BASE`, and the setup script passes it on, for example in `.env`. When the repo has none, it is `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`. Never invent a port range. A crew that needs a port in a repo without a setup script raises a `QUESTION:`.
 
@@ -170,7 +172,7 @@ Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, 
 
 Ask the owner two more things:
 
-- **Merge mode.** `sequential`: crews merge into the target one at a time, each rebased on what merged before it, one reviewable merge per crew. `single`: all crew branches merge into one integration branch with one PR; use it when every merge to the target triggers something expensive, such as a deploy per merge.
+- **Merge mode.** `sequential`: crews merge into the target one at a time, each with what merged before it merged into its branch by its lead, one reviewable merge per crew. `single`: all crew branches merge into one integration branch with one PR; use it when every merge to the target triggers something expensive, such as a deploy per merge.
 - **Target branch**: the branch the work lands on. Offer the current branch as the default.
 
 When the owner approves, set `approvedAt` to now and add the merge mode, the target and the members to `plan.md`. Later waves start as earlier ones merge, with no further pause.
@@ -283,7 +285,7 @@ Before you merge, give a cynic each crew's final report, with its open questions
 Merge a crew only on a judge file that passes this gate. Read the crew's newest judge file modified at or after `approvedAt`: `<foundry dir>/reports/<lead name>/<lead name>-judge*.md`, where `<lead name>` is the crew's newest lead, `<slug>` or its latest successor `<slug>-<n>` (for example `reports/auth-2/auth-2-judge.md`). Read the file yourself; a lead's summary of the verdict doesn't count. The gate holds when all of these are true:
 
 - It starts with `VERDICT: PASS` and has no `- UNSCOPED: ` line under `## Findings`. A PASS with such a line doesn't count.
-- Its `Head: ` value equals `git rev-parse <crew branch>`; or its `Patch: ` value equals the patch id of the branch, computed as `git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable`, where `<base>` is the base commit on the lead's `## Branch` line (after a rebase, the target head the branch was rebased onto) and `<head>` is the crew branch, and the lead's checks were re-run green after the rebase. When only `Patch: ` matches, the head moved: a Patch: match counts only with the checks re-run green on the rebased head.
+- Its `Head: ` value equals `git rev-parse <crew branch>`; or its `Patch: ` value equals the patch id of the branch, computed as `git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable`, where `<base>` is the base commit on the lead's `## Branch` line (the target head last merged into the crew branch: the brief's base until the lead first runs `git merge <target>`) and `<head>` is the crew branch, and the lead's checks were re-run green after that merge. When only `Patch: ` matches, the head moved: a Patch: match counts only with the checks re-run green on the merged head.
 
 On `VERDICT: FAIL`, send the findings back to the lead. Agents resolve conflicts, never the main thread.
 
@@ -291,8 +293,8 @@ A crew counts as merged when its branch is in the branch the next wave builds on
 
 **sequential**, one crew at a time, wave by wave and in the order of the plan within a wave, or the order the leads agreed between them. For each crew:
 
-1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch only if its patch id changed or the checks don't pass again on the rebased head (otherwise the PASS stands), and send your final report on its PASS." A lead that has ended is resumed by the message.
-2. Wait for its report. The newest judge file must pass the gate above against the rebased branch; a PASS on any other head, with no matching patch id, doesn't count. If either fails, send the failure back to the lead.
+1. Tell its lead: "Merge `<target>` into `<crew branch>` with `git merge <target>`; never rebase or cherry-pick. Resolve the conflicts, run the checks, have a fresh judge rule on the merged branch only if its patch id changed or the checks don't pass again on the merged head (otherwise the PASS stands), and send your final report on its PASS." A lead that has ended is resumed by the message.
+2. Wait for its report. The newest judge file must pass the gate above against the merged branch; a PASS on any other head, with no matching patch id, doesn't count. If either fails, send the failure back to the lead.
 3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch doesn't contain the target's head yet: go back to step 1.
 4. Set the crew's `status` to `"merged"` in `plan.json`, and start the next queued crew or wave (section 6).
 

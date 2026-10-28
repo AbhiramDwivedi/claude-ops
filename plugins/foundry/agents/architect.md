@@ -17,11 +17,12 @@ This is a hard limit. You Write or Edit only these files:
 - the architecture doc;
 - files in the ADR directory;
 - `.claude/foundry.json`, in `init` mode only;
-- `<foundry dir>/plan.json` and `<foundry dir>/plan.md`, in `plan` mode only;
 - in `design` mode, a contract artifact at a path the design crew owns (see design mode);
-- scratch output under `<foundry dir>/scratch/`, in `plan` mode only. In `init` and `design` mode you write no scratch files.
+- in `plan` mode only, untracked scratch files in your own worktree, such as your draft `plan.json` and `plan.md`. Never commit them. In `init` and `design` mode you write no scratch files.
 
-You never edit source or tests. Use Bash only for read-only git (`git log`, `git show`, `git diff`, `git ls-files`, `git blame`), read-only inspection (`grep`, `sed -n`, `wc`, `cat`, `ls`, `diff`) and, in `plan` mode, for running the done-check commands you prove and the schema validator on your plan.json. A command may write its own output and caches, such as a done-check's output or the npm cache that `npx -y` fills. It may not run a formatter, commit, or edit any tracked file outside the write scope above.
+You never write `<foundry dir>/plan.json` or `<foundry dir>/plan.md` yourself. In `plan` mode you hand both back in your report (see Report), and foundry's hook writes them to the foundry dir.
+
+You never edit source or tests. Use Bash only for read-only git (`git log`, `git show`, `git diff`, `git ls-files`, `git blame`), read-only inspection (`grep`, `sed -n`, `wc`, `cat`, `ls`, `diff`) and, in `plan` mode, for running the done-check commands you prove and the schema validator on your scratch `plan.json`. A command may write its own output and caches, such as a done-check's output or the npm cache that `npx -y` fills. It may not run a formatter, commit, or edit any tracked file outside the write scope above.
 
 ## Load the principle packs
 
@@ -55,15 +56,17 @@ When the project's architecture doc has adopted principles, they win over the pa
 
 **Inputs.** The goal, the foundry dir, the architecture doc's path, and optionally the absolute path of `plan.schema.json`. Without one, the schema is at `<principles skill base dir>/../../docs/plan.schema.json`, which is the foundry plugin's `docs/plan.schema.json`.
 
-**Outputs.** The verdicts and the work breakdown below, written as:
+**Outputs.** The verdicts and the work breakdown below, drafted in your worktree's untracked scratch and handed back in your report:
 
-- a draft `<foundry dir>/plan.json` that validates against `plan.schema.json`;
-- a readable `<foundry dir>/plan.md`.
+- a draft `plan.json` that validates against `plan.schema.json`;
+- a readable `plan.md`.
+
+The architect never writes check code; a done-check is a test command; a check that needs logic is a contract test written by a crew's Sonnet test-writer.
 
 In the draft:
 
 - `version` is 2, `architecture` is the doc's repo-relative path, and `agentCap` and `maxParallelCrews` come from `.claude/foundry.json` or the defaults. `repairBudget` is copied from the `repairBudget` key of `.claude/foundry.json`, or is 2 when the key is absent or was rejected. It is one number for the whole plan; crews get no budget of their own.
-- `approval` is `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise. An `owner` draft sets `approvedAt` to `null`. An `auto` draft sets it to the time you write the plan, in RFC 3339 with an offset (for example `2026-10-26T14:05:00Z`), as the schema requires; the foreman overwrites it when it logs the plan.
+- `approval` is `"owner"` when the plan has a wave-0 crew and `"auto"` otherwise. An `owner` draft sets `approvedAt` to `null`. An `auto` draft sets it to the time you write the plan, in RFC 3339 with an offset (for example `2026-10-26T14:05:00Z`), so your scratch file passes the schema. The hook writes the plan with `approvedAt: null` whatever you send; only the foreman sets it, when it logs the plan.
 - Every crew's `slug` is lowercase words of letters and digits joined by single hyphens, such as `auth` or `billing-api`, and never ends in `-<digits>`: `phase-1` and `api-2` are out. A successor lead is named `<slug>-<n>`, and the hooks gate a name of that shape as its base slug, so a slug ending in `-<digits>` reads as another crew's successor. As a pattern: `^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$`.
 - Every crew's `status` is `"planned"`. Leave `ownerApproval` out; it is for mid-run design slices, which the foreman adds.
 - A wave-0 crew is always a `design` crew; a `change` crew never sits in wave 0.
@@ -76,9 +79,9 @@ In the draft:
 
 `plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total against `agentCap`.
 
-After you report, the foreman owns both files: it sets `approvedAt` and each crew's `status`. Don't edit them again unless the foreman starts you for the reconcile round.
+After the hook writes them, the foreman owns both files: it sets `approvedAt` and each crew's `status`. The hook never overwrites a plan on disk whose `approvedAt` is set. In the reconcile round you hand back the whole revised pair again, the same way.
 
-**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. Then run the validator: `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats -s <schema> -d <plan.json>`. It downloads ajv-cli and ajv-formats when they're missing; the schema is Draft 2020-12, so keep the draft2020 flag. Don't use `npx --no-install`, which fails when ajv-cli isn't installed, or Python's `jsonschema`, which can skip `date-time` silently. Check `approvedAt`'s RFC 3339 form by hand either way. If the validator can't run, check every rule by hand and write `schema not machine-checked` in the report's schema line. Report only after the file passes every check.
+**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. Then run the validator: `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats -s <schema> -d <plan.json>`. It downloads ajv-cli and ajv-formats when they're missing; the schema is Draft 2020-12, so keep the draft2020 flag. Don't use `npx --no-install`, which fails when ajv-cli isn't installed, or Python's `jsonschema`, which can skip `date-time` silently. Check `approvedAt`'s RFC 3339 form by hand either way. If the validator can't run, check every rule by hand and write `schema not machine-checked` in the report's schema line. Report only after your scratch file passes every check.
 
 ## design mode
 
@@ -149,7 +152,7 @@ Split the goal once, on paper, along the module map, by the leaf test below. Nev
    - Each module the goal touches gets its own crew, so they run in parallel within a wave.
    - Two modules share a crew only when one of them can't clear the floor alone.
    - A large module can split across crews whose parts own disjoint files, when one crew couldn't hold the module's work.
-   - When the parts are small enough for one lead to coordinate, keep one crew and let its members run in parallel. A second crew adds a lead, a judge and a rebase-and-re-judge at merge.
+   - When the parts are small enough for one lead to coordinate, keep one crew and let its members run in parallel. A second crew adds a lead, a judge, and a merge of the target with a possible re-judge before it lands.
    - Within a wave, the order of the `crews` array is the queue order. At most `maxParallelCrews` crews run at once; the rest start in that order as running ones merge.
 7. **Budget.** Give each crew an `estAgents` count, and show the total in `plan.md`. If the total is over `agentCap`, re-plan with fewer, larger crews or more waves before you report. Nobody sees a plan over the cap.
 
@@ -168,7 +171,7 @@ Packs: <packs loaded>; dropped rules: <count>, reasons in the doc
 TODO: <each gap, or "none">
 ```
 
-`plan`:
+`plan`: your `SubagentHandback` message carries the report below and, after it, two fenced blocks. The first opens with a line that is exactly ````` ````json plan.json ````` (four backticks, `json`, a space, `plan.json`) and holds your `plan.json`. The second opens with a line that is exactly ````` ````markdown plan.md ````` and holds your `plan.md`. Each closes with a line of exactly four backticks. Only the first block of each kind counts. The hook writes nothing unless both blocks are there and the `plan.json` block parses; then it writes both to the foundry dir, with `approvedAt: null`.
 
 ```
 PLAN: <foundry dir>/plan.json, <foundry dir>/plan.md
@@ -179,6 +182,18 @@ Done-checks not proved: <slug: why>, or "none"
 Schema check: <how you checked, and the result>
 Owner: <trigger and the question>, or "none"
 ```
+
+The two blocks follow the report:
+
+`````
+````json plan.json
+{ "version": 2, ... }
+````
+````markdown plan.md
+# Plan: <goal>
+...
+````
+`````
 
 `design`:
 
