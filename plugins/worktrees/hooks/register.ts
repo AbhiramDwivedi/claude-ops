@@ -724,7 +724,7 @@ export type SelfCleanFacts = {
   inMain?: 'ancestor' | 'tree' | 'cherry'
   // another agent's meta in the session says this agent has a member still running
   membersRunning: boolean
-  // the main checkout's own branch
+  // the main checkout's own branch; undefined when it is detached or unreadable (ADR-0015 amendment 2026-10-28, e)
   mainBranch?: string
 }
 
@@ -741,6 +741,8 @@ export function decideSelfClean(f: SelfCleanFacts): SelfCleanPlan {
   if (f.dirty) return skip('uncommitted changes')
   if (f.membersRunning) return skip('a member of it is still running')
   if (f.inMain === undefined) return skip(`${f.branch} is not in the main checkout's HEAD yet`)
+  // a detached HEAD is not a ref: commits anchored only there are lost once it moves, so nothing counts as in main (amendment e)
+  if (f.mainBranch === undefined) return skip('the main checkout is on no branch (detached or unreadable)')
   if (f.inMain === 'ancestor') return { kind: 'remove', path: f.path, branch: f.branch, deleteFlag: '-d' }
   // tree and cherry proofs earn -D, but not while the main checkout sits on a crew branch
   if (f.mainBranch?.startsWith('worktree-')) return skip(`${f.branch} is not in the main checkout's HEAD yet`)
