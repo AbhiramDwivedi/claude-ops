@@ -160,7 +160,7 @@ Every plugin has `.claude-plugin/plugin.json` (name, version, `userConfig`) and 
 
 ### marketplace
 
-Owns the marketplace manifest and the root README. Seam: `marketplace.json` lists each plugin's `name`, `description`, `source` (`./plugins/<name>`) and `category`; versions live in each `plugin.json` (ADR-0009). Adding a plugin means a new `plugins/<name>/`, an entry here, and a README section; the README's "Develop" section lists the test commands for each plugin.
+Owns the marketplace manifest and the root README. Seam: `marketplace.json` lists each plugin's `name`, `description`, `source` (`./plugins/<name>`) and `category`; versions live in each `plugin.json` (ADR-0009). Adding a plugin means a new `plugins/<name>/`, an entry here, and a README section; the README's "Develop" section lists the test commands for each plugin. From foundry run 4 it also owns `tests/e2e/`, the cross-plugin end-to-end tests run with `node --test`: `tests/e2e/cleanup.e2e.ts` drives worktrees' hooks against a real git repo in a temp dir and runs foundry's `scripts/retro.py`, asserting no leftover agent branches, folders or `active` entries ([ADR-0015](adr/0015-agent-worktree-cleanup.md)). It imports `plugins/worktrees/tests/fixtures/run3.ts` and builds no fixtures of its own.
 
 ### usage-limits
 
@@ -182,7 +182,61 @@ Owns the marketplace manifest and the root README. Seam: `marketplace.json` list
 - `hooks/register.ts`: `classic.PreToolUse` on `Agent` adds `isolation: "worktree"` unless the type is in `READ_ONLY_AGENTS` (`Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `scout`, `reviewer`) or `noIsolateAgents`; `classic.WorktreeCreate` creates the worktree from the current HEAD, copies `.worktreeinclude` files and runs the setup script; `classic.SubagentStop` refuses a stop while the agent owns a background shell or monitor, and stops what it left running; `classic.PostToolUse`, after a `Bash` or `PowerShell` command containing `merge`, sweeps the worktrees this session made and removes an agent's worktree and branch once it is merged; `/tidy` removes other merged worktrees and branches. Settings: `noIsolateAgents`, `readOnlyAgents` (deprecated), `isolateNestedRepos`, `portBase`.
 - Seams: the worktree layout and setup-script contract (ADR-0005), and `<git common dir>/claude-worktrees/slots.json` (ADR-0006). Its contract is the README's "The `.claude/worktree-setup` contract" table.
 - 0.6.0 ([ADR-0014](adr/0014-worktrees-declared-read-only-agents.md)): before isolating an `Agent` call, it reads `<main checkout>/.claude/kit/manifest.json` and gives no worktree to a type whose full name a `readOnly: true` entry declares. Exact names only; an explicit `isolation` wins; a missing or unreadable manifest changes nothing. Its extension point is "read-only types, declared through kit's manifest".
-- 0.7.0 (ADR-0014 amendment, 2026-10-27; designed, not built): `declaredReadOnly` never returns a type on the refused list (`general-purpose` and the six editing agents, the literal line in ADR-0013 and ADR-0014), and reports what it ignored in `refused`; the handler logs `worktrees: kit manifest declares editing types read-only, ignoring them: <names>` to the debug log. An unset type is `general-purpose`, so it always gets a worktree. `noIsolateAgents` is untouched.
+- 0.7.0 (ADR-0014 amendment, 2026-10-27; built, `REFUSED_READ_ONLY_TYPES` at `register.ts:76`): `declaredReadOnly` never returns a type on the refused list (`general-purpose` and the six editing agents, the literal line in ADR-0013 and ADR-0014), and reports what it ignored in `refused`; the handler logs `worktrees: kit manifest declares editing types read-only, ignoring them: <names>` to the debug log. An unset type is `general-purpose`, so it always gets a worktree. `noIsolateAgents` is untouched.
+- 0.8.0 ([ADR-0015](adr/0015-agent-worktree-cleanup.md), from foundry run 4; ships in worktrees 0.8.0): the isolation decision and the sweep resolve the repo from the project dir (`CLAUDE_PROJECT_DIR`, else the event's `cwd`, else `$.session.cwd()`, each through `--git-common-dir`) and never cache a failure. Every early return in the isolation path logs a `worktrees: isolation skipped <type>: <reason>` line, and a throw is logged and toasted, not passed through silently. The sweep is durable: its candidates are every `.claude/worktrees/agent-<id>` in `git worktree list` plus `slots.json` `active`, native `isolation: "worktree"` ones included. It removes a clean, unlocked, not-live agent worktree whose branch is merged into a local HEAD (the merge checkout's or the main checkout's), by ancestry, by `mergesToSameTree`, or by an all-`-` `git cherry`. A finished `subagents/agent-<id>.meta.json`, found from the event's `transcript_path`, retires `active`; entries past `ACTIVE_FOR_MS` and entries whose folder is gone are dropped. Dirty and locked worktrees are kept and reported. It never fetches, pushes or moves a ref. Judges and cynics skip their worktree only through the owner's `noIsolateAgents`; the refused list doesn't change.
+
+```mermaid
+flowchart LR
+  cc["Claude Code<br/>[external system]<br/>Agent calls, hooks, subagent meta"]
+  pre["Isolation decision<br/>[hook: classic.PreToolUse on Agent]"]
+  wtc["WorktreeCreate<br/>[hook: classic.WorktreeCreate]"]
+  sweep["Sweep<br/>[hook: classic.PostToolUse, selfClean]"]
+  slots[("claude-worktrees/slots.json<br/>[git common dir]")]
+  meta[("subagents/agent-id.meta.json<br/>[Claude Code file, next to the transcript]")]
+  git[("Local git<br/>[worktrees, branches, HEADs]")]
+  lead["Crew lead<br/>[foundry:lead, in the crew worktree]"]
+  fore["Foreman<br/>[main session, foundry:run]"]
+  retro["scripts/retro.py<br/>[foundry script]<br/>leftovers count"]
+
+  cc -->|"Agent call without isolation"| pre
+  pre -->|"updatedInput: isolation worktree"| cc
+  cc -->|"WorktreeCreate"| wtc
+  wtc -->|"git worktree add; markActive"| slots
+  lead -->|"Bash: git merge --no-ff member"| cc
+  fore -->|"Bash: git merge --ff-only crew branch"| cc
+  cc -->|"PostToolUse: cwd, transcript_path"| sweep
+  sweep -->|"read: finished"| meta
+  sweep -->|"retire, prune active"| slots
+  sweep -->|"worktree list, is-ancestor, merge-tree, cherry, worktree remove, branch -d or -D"| git
+  retro -->|"reads branches and folders"| git
+```
+
+*worktrees 0.8.0's cleanup: who creates an agent worktree, what tells the sweep a merge ran, and what it reads and removes.*
+Traces to: `plugins/worktrees/hooks/register.ts` (`classic.PreToolUse` at 1298, `withWorktree` at 105, `classic.WorktreeCreate` at 1323 with `markActive` at 1350, `classic.PostToolUse` at 1456, `selfClean` at 966, `mergesToSameTree` at 933); ADR-0015 items 1, 2, 4, 5, 11 and 12 for the project dir, the meta read, the cherry fallback and the merges; `plugins/foundry/skills/run/SKILL.md:296` for the foreman's `--ff-only`; retro's `leftovers` key is foundry-retro's wave-1 work under ADR-0015.
+
+```mermaid
+sequenceDiagram
+  participant L as Crew lead (crew worktree)
+  participant CC as Claude Code
+  participant W as worktrees sweep
+  participant G as Local git
+  participant F as Foreman (main checkout)
+  participant R as retro.py
+  L->>CC: Bash "git merge --no-ff worktree-agent-member"
+  CC->>W: PostToolUse (cwd = crew worktree)
+  W->>G: worktree list; merge-base --is-ancestor member HEAD (in the crew worktree)
+  W->>G: worktree remove member; branch -d member
+  W->>W: retire member's active entry (finished meta)
+  F->>CC: Bash "git merge --ff-only crew branch"
+  CC->>W: PostToolUse (cwd = main checkout)
+  W->>G: merge-base --is-ancestor crew HEAD (in the main checkout)
+  W->>G: worktree remove crew; branch -d crew
+  R->>G: list worktree-agent-* branches, .claude/worktrees/agent-* folders
+  R-->>F: leftovers: count 0
+```
+
+*One crew's cleanup in run 4: the lead's member merge and the foreman's fast-forward each trigger a sweep, and retro then counts no leftovers.*
+Traces to: `classic.PostToolUse` (`register.ts:1456`) scheduling `sweep` (`register.ts:1027`) and `selfClean` (`register.ts:966`, its ancestry test at 987 and `git branch -d` at 1014); the merged-into refs and the meta retirement are ADR-0015 items 2 and 12; the lead's `--no-ff` merge is `plugins/foundry/docs/architecture.md`, lifecycle step 7; the foreman's `--ff-only` is `plugins/foundry/skills/run/SKILL.md:296`; retro's `leftovers` is pinned by `plugins/foundry/tests/test_contract_leftovers.py`.
 
 ### workflow-audit
 
@@ -231,7 +285,7 @@ kit is a set of prompts, four agents and one script. It has no hooks module of i
 
 **The manifest, 0.2.0** ([ADR-0013](adr/0013-kit-manifest.md)). After the owner approves, kit init calls `scripts/kit_manifest.py write`, which writes `.claude/kit/manifest.json`: `version`, `kit`, `checks`, `agents` (each with `readOnly` and `declaredBy`), `riskyPaths` and `setupScripts`. The contract is [`plugins/kit/docs/manifest.schema.json`](../plugins/kit/docs/manifest.schema.json). Another plugin adds its read-only types by running `kit:init` with `declare read-only: <type>, ...`; kit shows the owner the declaration and on approval calls `kit_manifest.py declare`. Both commands re-render the skip line between `# kit:read-only-agents:begin` and `# kit:read-only-agents:end` in the stop gates. Only the script writes the manifest; the stop gate, worktrees and foundry init read it.
 
-**The refused read-only types, 0.3.0** (ADR-0013 amendment, 2026-10-27; designed, not built). `write` and `declare` exit 2 with `READ_ONLY_EDITING_TYPE` when the input marks a type on the refused list `readOnly: true`. Reads stay tolerant: `read_manifest` doesn't apply the guard, so a 0.2.0 file that declares one is repaired by the next `write`. An entry a command carries over from the old file is dropped with `kit_manifest: warning: dropped <name> (declaredBy <declaredBy>): READ_ONLY_EDITING_TYPE`, and the stop gate's skip line never lists a refused type. worktrees refuses the same list on its side (ADR-0014 amendment); the list is fixed once, as one literal line in both ADRs, because the two plugins share no code (P1).
+**The refused read-only types, 0.3.0** (ADR-0013 amendment, 2026-10-27; built: kit 0.3.0, `READ_ONLY_EDITING_TYPE` in `scripts/kit_manifest.py`). `write` and `declare` exit 2 with `READ_ONLY_EDITING_TYPE` when the input marks a type on the refused list `readOnly: true`. Reads stay tolerant: `read_manifest` doesn't apply the guard, so a 0.2.0 file that declares one is repaired by the next `write`. An entry a command carries over from the old file is dropped with `kit_manifest: warning: dropped <name> (declaredBy <declaredBy>): READ_ONLY_EDITING_TYPE`, and the stop gate's skip line never lists a refused type. worktrees refuses the same list on its side (ADR-0014 amendment); the list is fixed once, as one literal line in both ADRs, because the two plugins share no code (P1).
 
 ```mermaid
 sequenceDiagram
@@ -284,8 +338,8 @@ foundry's internals are in its [module doc](../plugins/foundry/docs/architecture
 | --- | --- | --- |
 | `<repo>/.claude/foundry.json` | `foundry:init` via the architect (keys `architecture`, `adr`); the owner adds `agentCap`, `maxParallelCrews`, `merge`, `target` | the run skill and the architect. The hooks don't read it. |
 | the architecture doc and ADR directory it names | the architect (`init` and `design` modes) | the architect, leads, judges, cynic |
-| `<git common dir>/foundry/<session id>/` | foreman (`decisions.md`, `plan.md`, `goals/`), architect (draft `plan.json`, `plan.md`), hooks (`reports/`, `messages*.jsonl`) | foreman, hooks, `/foundry`; layout in the module doc, "On disk" (ADR-0006) |
-| `plan.json` | architect, then foreman | hooks (plan gates); contract `docs/plan.schema.json`, example `docs/plan.example.json`, rules in foundry ADR-0001 section 8 |
+| `<git common dir>/foundry/<session id>/` | foreman (`decisions.md`, `plan.md`, `goals/`), architect (draft `plan.json`, `plan.md`, until 0.5.1; from 0.6.0 the hooks write them from its hand-back), hooks (`reports/`, `messages*.jsonl`) | foreman, hooks, `/foundry`; layout in the module doc, "On disk" (ADR-0006) |
+| `plan.json` | architect (0.5.1), or the hooks from the plan-mode architect's hand-back with `approvedAt: null` (0.6.0, ADR-0015 item 9); then the foreman | hooks (plan gates); contract `docs/plan.schema.json`, example `docs/plan.example.json`, rules in foundry ADR-0001 section 8 |
 
 Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
 
@@ -303,11 +357,17 @@ Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
 - `.claude/foundry.json` gains `roles`, `deploy`, `writingSkill` and `promptOverrides`, under [`plugins/foundry/docs/foundry-config.schema.json`](../plugins/foundry/docs/foundry-config.schema.json). Prompt overrides name files under `.claude/foundry/prompts/`, which the briefs point roles at; they never replace a role's prompt.
 - The hooks append `<foundry dir>/events.jsonl` ([`events.schema.json`](../plugins/foundry/docs/events.schema.json)); `decisions.md` gets a grammar with a `## Run` heading per run; `scripts/retro.py` and the `foundry:retro` skill count both, and say `"not recorded"` for what an older log lacks.
 
+**Run 4: real merges and the plan-file route** (design in [ADR-0015](adr/0015-agent-worktree-cleanup.md) and the amendment of [foundry ADR-0004](../plugins/foundry/docs/adr/0004-scope-repair-and-head-gates.md); ships in foundry 0.6.0):
+
+- Leads consolidate with real merges only: `git merge --no-ff <member>` and, when the foreman asks for a ready branch, `git merge <target>` into the crew branch; never a rebase or cherry-pick. The foreman still runs `git merge --ff-only <crew branch>`. The Branch line's `<base>` is the target head last merged in, and the patch-id carry applies across that merge. Member branches stay ancestors of the crew branch and then of the target, which is what lets worktrees' sweep remove them.
+- The plan-mode architect, started by the foreman outside any crew, keeps its worktree and hands `plan.json` and `plan.md` back in two four-backtick blocks. foundry's hook validates the JSON with `parsePlan`, never overwrites a plan whose `approvedAt` is set, and writes both files to the foundry dir with `approvedAt: null`.
+- retro gains a top-level `leftovers` key: the run's `worktree-agent-<id>` branches and `.claude/worktrees/agent-<id>` folders still present, read from git and the file system, never from `slots.json`.
+
 ## Seams
 
 A row marked "Extension point" is one its base declares for other plugins to build on (ADR-0012, rule 2): the base owns its schema, and other plugins read it and never edit it. Every other row is a seam two modules share, not an invitation to extend.
 
-The container diagram draws the seams between kit, worktrees and foundry, with the stored files between them. Nodes marked 0.2.0 or 0.4.0 are designed, not built.
+The container diagram draws the seams between kit, worktrees and foundry, with the stored files between them. Nodes marked 0.2.0 or 0.4.0 name the version that added them; all are built (kit is at 0.3.0, foundry at 0.5.1, per their `plugin.json`).
 
 ```mermaid
 flowchart TB
@@ -352,8 +412,9 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 | `<foundry dir>/decisions.md` grammar, foundry 0.4.0 (foundry's own grammar, not an extension point) | foreman; the hooks stamp `HH:MM` | `scripts/retro.py` | module doc "decisions.md grammar (0.4.0)" | foundry 0003 |
 | `.claude/worktree-setup.sh` / `.ps1` and its env | kit (writes), project owner | worktrees (runs); from foundry 0.4.0, crews read `PORT_BASE` through what the script writes | `plugins/worktrees/README.md`, "The `.claude/worktree-setup` contract" | 0005 |
 | `.claude/worktrees/<name>`, branch `worktree-<name>` | worktrees | kit init (ignore entries), `kit_mine.py`, workflow-audit project mapping, foundry | worktrees README; `CONTRACT.md` metrics version 3 note | 0005 |
-| `<git common dir>/claude-worktrees/slots.json` | worktrees | worktrees in other sessions | type in `register.ts` | 0006 |
-| `<git common dir>/foundry/<session id>/`, `plan.json` | foundry architect, foreman, hooks | foundry hooks and roles | `plugins/foundry/docs/plan.schema.json`; module doc "On disk" | 0006, foundry 0001 |
+| `<git common dir>/claude-worktrees/slots.json` | worktrees (`WorktreeCreate` marks `active`; from 0.8.0 the sweep retires finished, pruned and gone entries) | worktrees in this and other sessions; the sweep reads `active` as its live test | type in `register.ts`; retirement rules in ADR-0015 item 12 | 0006, 0015 |
+| Input: `<session dir>/subagents/agent-<id>.meta.json`, worktrees 0.8.0 (found from the hook input's `transcript_path`; `finished: true` retires `active`; missing or reshaped fails open) | Claude Code | worktrees sweep | none from Claude Code; the shape worktrees relies on is in ADR-0015 item 12 and `plugins/worktrees/tests/fixtures/run3.ts` | 0015 |
+| `<git common dir>/foundry/<session id>/`, `plan.json` | foreman, hooks (from 0.6.0 the hook writes the plan-mode architect's `plan.json` and `plan.md` from its hand-back, ADR-0015 item 9) | foundry hooks and roles | `plugins/foundry/docs/plan.schema.json`; module doc "On disk" | 0006, foundry 0001 |
 | `.claude/foundry.json`, keys added in 0.4.0 (foundry's own config, not an extension point; unversioned, see foundry ADR-0002) | foundry init, owner | foundry run skill, architect | `plugins/foundry/docs/foundry-config.schema.json`; module doc config table | foundry 0001, foundry 0002 |
 | `.claude/kit/review-checklist.md`, `CLAUDE.md` section | kit init | kit agents; foundry lead and devops read `CLAUDE.md` | `skills/init/SKILL.md`, section 2 | 0001 |
 | `.claude/settings.json` gate hooks, `.claude/kit/*-gate.*` | kit init; from 0.2.0 `kit_manifest.py` re-renders the stop gate's skip line between its markers | Claude Code | `skills/init/hooks-reference.md` | 0008, 0013 |
