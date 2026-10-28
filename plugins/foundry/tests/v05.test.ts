@@ -466,8 +466,18 @@ test('fail open: listing the judge folder throws -> the stop goes through', asyn
   str('NO_PASS_REASON')
   const { w } = build($ as never, on as never, { listThrowsFor: '/reports/auth' })
   setPlan(w, 2, 2)
+  // a non-judge file makes the folder exist, so the list call is made and throws
+  w.files.set(`${REPORTS}/notes.txt`, 'x')
   await startSession($ as never)
   expect(await lead($ as never, report())).toBeUndefined()
+})
+
+test('s6: a v2 plan with no reports/<crew> folder at all has no judge file: NO_PASS_REASON', async ($, on) => {
+  const { w } = build($ as never, on as never, { git: gitAt(H1, P1) })
+  setPlan(w, 2, 2)
+  await startSession($ as never)
+  expect([...w.files.keys()].some(k => k.includes('/reports/auth/'))).toBe(false)
+  expect(await lead($ as never, report())).toBe(str('NO_PASS_REASON'))
 })
 
 test('fail open: reading the judge file throws -> the stop goes through', async ($, on) => {
