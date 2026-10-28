@@ -10,7 +10,7 @@ Since 0.3.0 an architect agent plans each run against your project's architectur
 
 ## What changed in 0.7.1
 
-- **Red teams aim at what matters, and stop after two rounds.** In run 4 one crew ran six red-team rounds: every finding reproduced, but only against mocked git, most were in code the previous fix had just added, and none caught the two failures that hit real use. A red team now asks first where the work, used the way its real callers use it, loses data or work, and where following the ADR as written would. It proves breaks against the real tool, not mocks, and sorts what it finds into breaks (reachable, reproduced, breaching the goal or an ADR), which get fixed, and notes, which are deferred. A second round checks the fixes and attacks only the fix diff; a break after that goes to the foreman as a `QUESTION:`, never a third round.
+- **Red teams aim at what matters.** In run 4 one crew ran six red-team rounds: every finding reproduced, but only against mocked git, most were in code the previous fix had just added, and none caught the two failures that hit real use. A red team now asks first where the work, used the way its real callers use it, loses data or work, and where following the ADR as written would. It proves breaks against the real tool, not mocks, and sorts what it finds into breaks (reachable, reproduced, breaching the goal or an ADR), which get fixed, and notes, which are deferred. Notes go in the lead's report under Open questions, and a question about the ADR goes to the foreman.
 
 ## What changed in 0.7.0
 
