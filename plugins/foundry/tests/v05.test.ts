@@ -876,3 +876,34 @@ test('regression C: a hung read of plan.json does not hold a main-session foundr
   expect(done).toBe(true)
   expect(deny).toBeUndefined()
 })
+
+test('regression D: judge names in other letter cases are gated by a spent budget, and log no spawn', async ($, on) => {
+  str('BUDGET_REFUSAL')
+  const { w } = build($ as never, on as never)
+  setPlan(w, 2, 0)
+  setJudge(w, 'auth-judge', 'VERDICT: FAIL\nx', SINCE + 1000)
+  await startSession($ as never)
+  const prefix = `${MARK} Refused: repair budget spent:`
+  const denied = async (name: string) => String((await spawnJudge(w, 'A1', name)).deny).startsWith(prefix)
+  // control: the exact lower-case names are refused, a builder is not
+  expect(await denied('auth-judge-2')).toBe(true)
+  expect((await w.agentCall('A1', { subagent_type: 'kit:builder', name: 'auth-builder', model: 'opus', effort: 'medium' })).deny).toBeUndefined()
+  const slipped: string[] = []
+  for (const name of ['AUTH-JUDGE', 'Auth-Judge-2']) if (!(await denied(name))) slipped.push(name)
+  expect(slipped).toEqual([])
+  await settle()
+  expect(eventLines(w).filter(e => e.event === 'spawn' && (e.agent === 'AUTH-JUDGE' || e.agent === 'Auth-Judge-2'))).toEqual([])
+})
+
+test('regression D: a judge named AUTH-JUDGE handing back a FAIL with budget 0 writes one budget-spent line for crew auth', async ($, on) => {
+  str('BUDGET_REFUSAL')
+  const { w } = build($ as never, on as never)
+  setPlan(w, 2, 0)
+  judgeAgent(w, 'J9', 'AUTH-JUDGE')
+  await startSession($ as never)
+  await handBack($ as never, 'J9', FAIL_BODY)
+  await settle()
+  const lines = budgetLines(w)
+  expect(lines.length).toBe(1)
+  expect([lines[0]?.agent, lines[0]?.crew]).toEqual(['AUTH-JUDGE', 'auth'])
+})
