@@ -872,8 +872,10 @@ async function routePlanFiles($: $, state: State, message: string): Promise<void
     return logRule($, 'plan-file route wrote nothing: the plan.json block is not JSON')
   }
   if (!isRecord(carried)) return logRule($, 'plan-file route wrote nothing: the plan.json block is not an object')
-  // checked, then checked again from a fresh read right before the write, so an approval that lands in between stays
-  const kept = (await keepReason($, dir)) ?? (await keepReason($, dir))
+  // Read inside the serialised route, right before the write, so an approval that lands while this route waits its turn
+  // is kept. An approval landing between this read and the write is still overwritten: the foreman's edit shares no
+  // lock with the hook.
+  const kept = await keepReason($, dir)
   if (kept !== undefined) return logRule($, `plan-file route kept the existing plan: ${kept}`)
   await $.fs.write(planPath(dir), JSON.stringify({ ...carried, approvedAt: null }, null, 2) + '\n')
   try {
