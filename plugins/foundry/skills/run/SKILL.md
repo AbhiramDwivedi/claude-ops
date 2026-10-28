@@ -282,8 +282,8 @@ Before you merge, give a cynic each crew's final report, with its open questions
 
 Merge a crew only on a judge file that passes this gate. Read the crew's newest judge file modified at or after `approvedAt`: `<foundry dir>/reports/<lead name>/<lead name>-judge*.md`, where `<lead name>` is the crew's newest lead, `<slug>` or its latest successor `<slug>-<n>` (for example `reports/auth-2/auth-2-judge.md`). Read the file yourself; a lead's summary of the verdict doesn't count. The gate holds when all of these are true:
 
-- It starts with `VERDICT: PASS` and has no `UNSCOPED` line. A PASS with an `UNSCOPED` line doesn't count.
-- Its `Head: ` value equals `git rev-parse <crew branch>`; or its `Patch: ` value equals the patch id of the branch, computed as `git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable`, and the lead's checks were re-run green after the rebase. When only `Patch: ` matches, the head moved: a Patch: match counts only with the checks re-run green on the rebased head.
+- It starts with `VERDICT: PASS` and has no `- UNSCOPED: ` line under `## Findings`. A PASS with such a line doesn't count.
+- Its `Head: ` value equals `git rev-parse <crew branch>`; or its `Patch: ` value equals the patch id of the branch, computed as `git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable`, where `<base>` is the base commit on the lead's `## Branch` line (after a rebase, the target head the branch was rebased onto) and `<head>` is the crew branch, and the lead's checks were re-run green after the rebase. When only `Patch: ` matches, the head moved: a Patch: match counts only with the checks re-run green on the rebased head.
 
 On `VERDICT: FAIL`, send the findings back to the lead. Agents resolve conflicts, never the main thread.
 
@@ -291,7 +291,7 @@ A crew counts as merged when its branch is in the branch the next wave builds on
 
 **sequential**, one crew at a time, wave by wave and in the order of the plan within a wave, or the order the leads agreed between them. For each crew:
 
-1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch if its head moved, and send your final report on its PASS." A lead that has ended is resumed by the message.
+1. Tell its lead: "Rebase `<crew branch>` onto `<target>`, resolve the conflicts, run the checks, have a fresh judge rule on the rebased branch only if its patch id changed or the checks don't pass again on the rebased head (otherwise the PASS stands), and send your final report on its PASS." A lead that has ended is resumed by the message.
 2. Wait for its report. The newest judge file must pass the gate above against the rebased branch; a PASS on any other head, with no matching patch id, doesn't count. If either fails, send the failure back to the lead.
 3. Fast-forward the target: `git switch <target>`, then `git merge --ff-only <crew branch>`. If that refuses, the branch doesn't contain the target's head yet: go back to step 1.
 4. Set the crew's `status` to `"merged"` in `plan.json`, and start the next queued crew or wave (section 6).
@@ -319,9 +319,9 @@ Agent({
   subagent_type: "foundry:judge",
   name: "integration-judge",
   model: "opus",
-  effort: "xhigh",
+  effort: "medium",
   description: "Judge the integration branch",
-  prompt: "Branch: <integration branch>. Checkout: <absolute path of the integrator's worktree>. Head SHA: <integration branch head>; state it under ## Proof checked. Plan: <foundry dir>/plan.md. Integrator report: <its hand-back, pasted>. High-impact paths: <all crews'>."
+  prompt: "Branch: <integration branch>. Checkout: <absolute path of the integrator's worktree>. Head SHA: <integration branch head>; state it under ## Proof checked. Base: <the target's head the integration branch was cut from>; compute the Patch line against it. Plan: <foundry dir>/plan.md. Integrator report: <its hand-back, pasted>. High-impact paths: <all crews'>."
 })
 ```
 
