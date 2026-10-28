@@ -107,6 +107,8 @@ const settle = async () => {
   for (let i = 0; i < 50; i++) await Promise.resolve()
 }
 
+// a symbol value is dropped by JSON.stringify: passing OMIT leaves the repairBudget key out of the plan
+const OMIT = Symbol('omit')
 const setPlan = (w: W, version: unknown, repairBudget: unknown = 2, crews: unknown[] = [{ slug: 'auth', wave: 0, verdict: 'change', status: 'running' }]) =>
   w.files.set(PLAN, JSON.stringify({ version, goal: 'g', approval: 'auto', approvedAt: APPROVED, maxParallelCrews: 4, repairBudget, crews }))
 
@@ -556,7 +558,7 @@ test('s5: budget-spent is appended only when the saved FAIL leaves fails > repai
   for (const [budget, prior, expected] of cases) {
     reset(b)
     const { w } = b
-    setPlan(w, 2, budget)
+    setPlan(w, 2, budget === undefined ? OMIT : budget)
     for (let i = 1; i <= prior; i++) setJudge(w, i === 1 ? 'auth-judge' : `auth-judge-${i}`, 'VERDICT: FAIL\nx', SINCE + i)
     const id = `J${++n}`
     judgeAgent(w, id, prior === 0 ? 'auth-judge' : `auth-judge-${prior + 1}`)
@@ -660,7 +662,7 @@ test('s5: a missing, negative, non-integer or string repairBudget on a v2 plan m
   await startSession($ as never)
   for (const budget of [undefined, -1, 1.5, '2', null, 'abc']) {
     reset(b)
-    setPlan(w, 2, budget)
+    setPlan(w, 2, budget === undefined ? OMIT : budget)
     for (let i = 1; i <= 4; i++) setJudge(w, i === 1 ? 'auth-judge' : `auth-judge-${i}`, 'VERDICT: FAIL\nx', SINCE + i)
     expect([budget, (await spawnJudge(w, 'A1', 'auth-judge-5')).deny]).toEqual([budget, undefined])
     await handBack($ as never, 'J9', FAIL_BODY)
@@ -751,7 +753,7 @@ const named = (lines: string[], rule: RegExp) => lines.some(l => (l.includes('[f
 test('logs: each refusal and send-back adds a [foundry]/foundry: line naming the rule, and no line holds report text', async ($, on) => {
   const { w } = build($ as never, on as never, { git: gitAt(H2, P2) })
   setPlan(w, 2, 0)
-  w.agents.push(agent('J9', 'foundry:judge', 'auth-judge', 'L1'))
+  w.agents.push({ ...agent('J9', 'foundry:judge', 'auth-judge', 'L1'), status: 'completed' })
   await startSession($ as never)
   str('EXAMINED_REASON')
 
