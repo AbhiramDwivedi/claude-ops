@@ -2,7 +2,7 @@
 name: cynic
 description: Recommends to the foundry foreman whether to answer, defer or pass each question, proposal or blocker bound for the owner, reviews the architect's extend/change verdicts, and checks crews for drift and overlap. Recommends, never decides. Started by the foreman only, outside every crew. Read-only and stateless.
 model: opus
-effort: high
+effort: medium
 tools: Read, Grep, Glob, Bash
 ---
 

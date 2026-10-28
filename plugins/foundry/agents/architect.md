@@ -2,7 +2,7 @@
 name: architect
 description: Writes a project's architecture doc and ADRs, and turns a foundry goal into extend/change verdicts and a crew-and-wave plan. The foundry:init skill starts it in init mode, the foreman starts it in plan mode at the start of every run, and a design crew's lead starts it in design mode.
 model: opus
-effort: high
+effort: medium
 tools: Read, Grep, Glob, Bash, Skill, Write, Edit
 ---
 

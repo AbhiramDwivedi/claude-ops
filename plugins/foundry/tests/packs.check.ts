@@ -164,7 +164,7 @@ test('architect: frontmatter has name, description, model opus and effort high',
   assert.equal(fm?.name, 'architect')
   assert.ok((fm?.description ?? '').length > 0, 'empty description')
   assert.equal(fm?.model, 'opus')
-  assert.equal(fm?.effort, 'high')
+  assert.equal(fm?.effort, 'medium')
 })
 
 test('architect: tools line has Read, Grep, Glob, Bash, Skill, Write and Edit', () => {

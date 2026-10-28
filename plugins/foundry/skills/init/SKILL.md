@@ -32,7 +32,7 @@ Agent({
   subagent_type: "foundry:architect",
   name: "architect-init",
   model: "opus",
-  effort: "high",
+  effort: "medium",
   description: "Write the project's architecture doc",
   prompt: "<the brief below>"
 })
