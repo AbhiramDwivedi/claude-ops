@@ -8,6 +8,10 @@ Since 0.3.0 an architect agent plans each run against your project's architectur
 
 [docs/architecture.md](docs/architecture.md) covers the internals: who talks to whom, the files on disk, each hook, and how a run recovers from failures. [ADR-0001](docs/adr/0001-design-phase.md) records the 0.3.0 design phase and why it exists. [ADR-0002](docs/adr/0002-kit-manifest-and-config.md) records the 0.4.0 changes to init, the config and ports, and [ADR-0003](docs/adr/0003-event-log-and-retro.md) the event log, the decision-log grammar and the retro.
 
+## What changed in 0.7.1
+
+- **Red teams aim at what matters, and stop after two rounds.** In run 4 one crew ran six red-team rounds: every finding reproduced, but only against mocked git, most were in code the previous fix had just added, and none caught the two failures that hit real use. A red team now asks first where the work, used the way its real callers use it, loses data or work, and where following the ADR as written would. It proves breaks against the real tool, not mocks, and sorts what it finds into breaks (reachable, reproduced, breaching the goal or an ADR), which get fixed, and notes, which are deferred. A second round checks the fixes and attacks only the fix diff; a break after that goes to the foreman as a `QUESTION:`, never a third round.
+
 ## What changed in 0.7.0
 
 - **`agentCap` is retired.** It capped the run's total agents, and it had no real basis: `maxParallelCrews` already limits load. In run 4 it was raised twice and never caught the one overrun, which an unbounded red-team loop caused. The architect no longer re-plans to fit under a total, the foreman never stops or asks you because of one, and the plan shows `estAgents` per crew and the total as information only. `plan.schema.json` and `foundry-config.schema.json` still accept the key so old plans and configs validate; it is ignored. Retro reports it only when an old `plan.json` has one.
