@@ -260,5 +260,178 @@ class ManifestContract(unittest.TestCase):
         self.assertEqual(gate_exit("kit:builder"), 2, "an editing agent is still tested (TEST_COMMAND is false)")
 
 
+    # ---------- 3. ADR-0013 amendment: refused read-only types ----------
+    # Names are listed literally (ADR-0013 "Seams added"). Error code: READ_ONLY_EDITING_TYPE.
+
+    REFUSED = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect",
+               "foundry:devops", "foundry:lead", "foundry:writer")
+    CODE = "READ_ONLY_EDITING_TYPE"
+
+    @staticmethod
+    def declarer(name):
+        """The declaredBy a name's prefix needs, or 'project' for a bare name."""
+        return name.split(":", 1)[0] if ":" in name else "project"
+
+    def facts_with(self, name, read_only, declared_by=None):
+        facts = facts_from_fixture()
+        facts["agents"] = [a for a in facts["agents"] if a["name"] != name]
+        facts["agents"].append({"name": name, "readOnly": read_only, "declaredBy": declared_by or self.declarer(name)})
+        return facts
+
+    def store(self, extra_agents):
+        """Write a good manifest, then add hand-written agents to it (bypassing the script's input guard)."""
+        self.ok_json(self.write())
+        m = load(self.manifest)
+        m["agents"] = sorted(m["agents"] + extra_agents, key=lambda a: a["name"])
+        with open(self.manifest, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(m, indent=2) + "\n")
+        return self.manifest_bytes()
+
+    def warning(self, name, declared_by):
+        return "kit_manifest: warning: dropped %s (declaredBy %s): READ_ONLY_EDITING_TYPE" % (name, declared_by)
+
+    def test_write_refuses_each_refused_type_read_only(self):
+        for name in self.REFUSED:
+            with self.subTest(name):
+                r = self.write(self.facts_with(name, True))
+                self.assert_error(r, self.CODE, 2)
+                self.assertIn(name, r.stderr)
+                self.assertFalse(os.path.exists(os.path.join(self.repo, ".claude")), "%s wrote something" % name)
+
+    def test_write_refusal_leaves_an_existing_manifest_untouched(self):
+        self.ok_json(self.write())
+        before = self.manifest_bytes()
+        r = self.write(self.facts_with("foundry:lead", True))
+        self.assert_error(r, self.CODE, 2)
+        self.assertEqual(self.manifest_bytes(), before)
+
+    def test_write_refuses_casing_variants(self):
+        # "Kit:Builder" cannot get past the declaredBy checks (its prefix must equal declaredBy, which the schema
+        # lowercases), so the schema code wins there (see the next test); kit:BUILDER is the reachable kit variant.
+        for name, by in (("kit:BUILDER", "kit"), ("General-Purpose", "project"), ("foundry:LEAD", "foundry"),
+                         ("GENERAL-PURPOSE", "project")):
+            with self.subTest(name):
+                r = self.write(self.facts_with(name, True, by))
+                self.assert_error(r, self.CODE, 2)
+                self.assertIn(name, r.stderr, "the detail names the refused name as given")
+
+    def test_kit_builder_mixed_case_is_never_accepted(self):
+        for by in ("Kit", "kit"):
+            with self.subTest(by):
+                r = self.write(self.facts_with("Kit:Builder", True, by))
+                self.assertEqual(r.returncode, 2, "stderr: %s" % r.stderr)
+                self.assertFalse(os.path.exists(os.path.join(self.repo, ".claude")))
+
+    def test_other_bad_input_codes_win_over_the_refusal(self):
+        facts = self.facts_with("foundry:lead", True, "kit")  # refused name AND declarer mismatch
+        self.assert_error(self.write(facts), "DECLARER_MISMATCH", 2)
+        facts = self.facts_with("foundry:lead", True)
+        facts["agents"][-1]["extra"] = 1  # unknown key: BAD_FIELD
+        self.assert_error(self.write(facts), "BAD_FIELD", 2)
+
+    def test_refused_types_at_read_only_false_write_fine(self):
+        for name in self.REFUSED:
+            with self.subTest(name):
+                self.ok_json(self.write(self.facts_with(name, False)))
+                entry = [a for a in load(self.manifest)["agents"] if a["name"] == name]
+                self.assertEqual(entry, [{"name": name, "readOnly": False, "declaredBy": self.declarer(name)}])
+
+    def test_lookalikes_at_read_only_true_write_fine(self):
+        for name, by in (("plugin:general-purpose", "plugin"), ("kit:builder2", "kit"), ("builder", "project")):
+            with self.subTest(name):
+                self.ok_json(self.write(self.facts_with(name, True, by)))
+                self.assertIn({"name": name, "readOnly": True, "declaredBy": by}, load(self.manifest)["agents"])
+
+    def test_declare_refuses_refused_names_with_and_without_a_manifest(self):
+        for by, name in (("foundry", "foundry:lead"), ("foundry", "foundry:LEAD"), ("foundry", "foundry:architect"),
+                         ("foundry", "foundry:devops"), ("foundry", "foundry:writer"),
+                         ("kit", "kit:builder"), ("kit", "kit:test-writer")):
+            with self.subTest("no manifest " + name):
+                r = self.declare(by, name)
+                self.assert_error(r, self.CODE, 2)
+                self.assertIn(name, r.stderr)
+                self.assertFalse(os.path.exists(self.manifest))
+        self.ok_json(self.write())
+        before = self.manifest_bytes()
+        for by, name in (("foundry", "foundry:lead"), ("foundry", "foundry:LEAD"), ("kit", "kit:test-writer"),
+                         ("foundry", "foundry:judge,foundry:lead")):
+            with self.subTest("manifest " + name):
+                self.assert_error(self.declare(by, name), self.CODE, 2)
+                self.assertEqual(self.manifest_bytes(), before)
+
+    def test_declare_qualified_prefix_mismatch_beats_the_refusal(self):
+        self.ok_json(self.write())
+        self.assert_error(self.declare("foundry", "Foundry:Lead"), "DECLARER_MISMATCH", 2)
+
+    def test_declare_non_refused_name_still_works(self):
+        self.ok_json(self.write())
+        self.ok_json(self.declare("foundry", "foundry:judge"))
+        self.assertIn("foundry:judge", [a["name"] for a in load(self.manifest)["agents"]])
+
+    def test_stored_refused_read_only_entry_reads_fine_and_plain_write_repairs_it(self):
+        self.store([{"name": "general-purpose", "readOnly": True, "declaredBy": "project"}])
+        r = self.write()
+        out = self.ok_json(r)  # not MANIFEST_CORRUPT (exit 3)
+        self.assertIs(out["changed"], True)
+        bad = [a for a in load(self.manifest)["agents"] if a["readOnly"] and a["name"].casefold() in self.REFUSED]
+        self.assertEqual(bad, [])
+        self.assertNotIn("dropped", r.stderr, "kit/project entries are replaced by the facts, not dropped")
+
+    def test_carried_over_refused_entry_is_dropped_by_write(self):
+        self.store([{"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"}])
+        r = self.write()
+        out = self.ok_json(r)
+        self.assertIs(out["changed"], True)
+        self.assertNotIn("foundry:lead", [a["name"] for a in load(self.manifest)["agents"]])
+        self.assertEqual(r.stderr.strip().splitlines(), [self.warning("foundry:lead", "foundry")])
+
+    def test_carried_over_refused_entry_is_dropped_by_declare(self):
+        self.store([{"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"}])
+        r = self.declare("foundry", "foundry:judge")
+        out = self.ok_json(r)
+        self.assertIs(out["changed"], True)
+        names = [a["name"] for a in load(self.manifest)["agents"]]
+        self.assertNotIn("foundry:lead", names)
+        self.assertIn("foundry:judge", names)
+        self.assertEqual(r.stderr.strip().splitlines(), [self.warning("foundry:lead", "foundry")])
+
+    def test_several_dropped_entries_warn_in_stored_order(self):
+        self.store([{"name": "foundry:writer", "readOnly": True, "declaredBy": "foundry"},
+                    {"name": "foundry:architect", "readOnly": True, "declaredBy": "foundry"}])
+        r = self.write()
+        self.ok_json(r)
+        self.assertEqual(r.stderr.strip().splitlines(),
+                         [self.warning("foundry:architect", "foundry"), self.warning("foundry:writer", "foundry")])
+
+    def test_carried_over_refused_name_at_read_only_false_is_kept(self):
+        self.store([{"name": "foundry:lead", "readOnly": False, "declaredBy": "foundry"}])
+        r = self.write()
+        self.ok_json(r)
+        self.assertIn({"name": "foundry:lead", "readOnly": False, "declaredBy": "foundry"}, load(self.manifest)["agents"])
+        self.assertNotIn("dropped", r.stderr)
+
+    def test_stop_gate_skip_line_never_names_a_refused_type(self):
+        subprocess.run(["git", "init", "-q", self.repo], check=True, capture_output=True)
+        self.store([{"name": "foundry:lead", "readOnly": True, "declaredBy": "foundry"},
+                    {"name": "foundry:writer", "readOnly": True, "declaredBy": "foundry"},
+                    {"name": "foundry:judge", "readOnly": True, "declaredBy": "foundry"}])
+        gate = os.path.join(self.repo, ".claude", "kit", "stop-gate.sh")
+        with open(gate, "w", encoding="utf-8", newline="\n") as f:
+            f.write(self.gate_template())
+        out = self.ok_json(self.write())
+        self.assertEqual(out["gates"]["stop-gate.sh"], "updated")
+        with open(gate, encoding="utf-8") as f:
+            rendered = f.read()
+        m = re.search(re.escape(BEGIN) + r"\n(.*?)\n" + re.escape(END), rendered, re.S)
+        self.assertIsNotNone(m, "markers missing in rendered gate")
+        for name in self.REFUSED:
+            self.assertNotIn(name, m.group(1), "skip line names %s" % name)
+        self.assertIn("foundry:judge", m.group(1), "a legitimate read-only type is still skipped")
+
+    def test_error_text_carries_the_code_literally(self):
+        r = self.write(self.facts_with("kit:builder", True))
+        self.assertTrue(r.stderr.startswith("kit_manifest: READ_ONLY_EDITING_TYPE: "), "stderr: %r" % r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
