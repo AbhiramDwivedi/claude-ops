@@ -30,7 +30,7 @@ Agent({
   subagent_type: "foundry:cynic",
   name: "cynic-<n>",
   model: "opus",
-  effort: "high",
+  effort: "medium",
   description: "Rule on items for the owner",
   prompt: "Items: <each item, with the crew that raised it>. Plan: <foundry dir>/plan.md. Decision log: <foundry dir>/decisions.md."
 })
@@ -95,7 +95,7 @@ Agent({
   subagent_type: "foundry:architect",
   name: "architect-plan",
   model: "opus",
-  effort: "high",
+  effort: "medium",
   description: "Draft the run's plan",
   prompt: "<the brief below>"
 })
@@ -138,7 +138,7 @@ The cynic's `Owner:` line says whether one of these applies. In an extend-only r
 The plan gives each crew its slug, wave, verdict, modules, owned paths, done-check and estimated agents. `plan.md` also proposes each crew's high-impact paths, red team and resource slice. Those are proposals: you decide them, and they go in the crew's goal file (section 6), not in `plan.json`. For each crew, decide:
 
 - **slug**: the plan's slug names the crew, its goal file and its first lead, and its members' names start with their lead's name.
-- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work; Opus builders start at `medium`. Every crew has a judge (`foundry:judge`), never the builder, at one effort level above the crew's strongest builder: at least Opus high, at most xhigh. The plan's judge effort is a starting value: the lead may raise it as its builders climb the ladder, up to xhigh. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline. A `design` crew's lead starts the architect in `design` mode as one of its members.
+- **members**: role, agent type, model and effort. Use the ladder Sonnet, then Opus at effort medium, high, xhigh: Sonnet for mechanical or well-specified work, Opus for judgment. Sonnet members run at effort `low` for lookups and mechanical edits and `medium` for well-specified work; Opus builders start at `medium`. Every crew has a judge (`foundry:judge`), never the builder, on Opus at effort `medium`. `high` and `xhigh` are escalations, never defaults: the lead raises a judge only when the goal file allows it or an Opus-high builder needs judging. Add a writer (`foundry:writer`, Opus, effort `medium` unless the lead escalates it) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline. A `design` crew's lead starts the architect in `design` mode as one of its members.
 - **high-impact paths**: files under auth, money, migrations, CI or lockfiles. Suggest a red team (an Opus member whose job is to break the crew's work) for every crew that has any.
 - **resources**: a database or temp directory of its own, so parallel end-to-end tests don't collide, and its ports as exactly one of two lines. When the repo has a `.claude/worktree-setup.*`, it is `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`: worktrees gives each worktree its own `PORT_BASE`, and the setup script passes it on, for example in `.env`. When the repo has none, it is `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`. Never invent a port range. A crew that needs a port in a repo without a setup script raises a `QUESTION:`.
 
@@ -165,7 +165,7 @@ Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, 
 
 | Crew | Wave | Verdict | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Est. agents | Resources (ports line; DB or temp dir) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `auth` | 1 | `extend` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, high), `foundry:judge` (opus, high) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | 6 | `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`; temp dir `.tmp/auth` |
+| `auth` | 1 | `extend` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, medium), `foundry:judge` (opus, medium) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | 6 | `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`; temp dir `.tmp/auth` |
 
 Ask the owner two more things:
 
@@ -296,7 +296,7 @@ Agent({
   subagent_type: "general-purpose",
   name: "integrator",
   model: "opus",
-  effort: "high",
+  effort: "medium",
   isolation: "worktree",
   description: "Integrate crew branches",
   prompt: "<the brief below>"
