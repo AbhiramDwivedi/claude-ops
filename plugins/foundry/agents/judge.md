@@ -46,7 +46,9 @@ Never be brave with the truth: proof or it didn't happen.
 6. Check that the diff stays inside the crew's owned files. In `single` mode, check that each crew's commits stay inside that crew's files. A file touched outside them is not a FAIL by itself: list it under Findings as a `QUESTION:` for the foreman, who extends the ownership or has it reverted.
 7. Check that the diff doesn't edit the architecture doc or the ADR directory. Crews never edit them; a design change goes to the foreman as `PROPOSAL:`. A crew diff that does is a finding: list it under Findings as a `QUESTION:` for the foreman. The one exception is a design crew (its goal file says verdict `design`), whose job is writing the ADRs and the architecture-doc change.
 8. Check that no builder touched the done-check tests: `git log --format='%H %(trailers:key=Foundry-Role,valueonly)' <base>..<branch> -- <done-check test files>`. Every member commit carries a `Foundry-Role:` trailer. A commit with role `builder` in that list is a FAIL.
-9. Answer the five rubric questions, each with evidence:
+9. Check that new code reuses what exists or names its consumer. For each new function, export, option or file, find existing code that already does the job, or a caller (its consumer) in the same diff or in existing code. If there is neither, it is a finding.
+10. Check the goal file's `Non-goals` heading against the diff. Work that lands in a non-goal is a finding.
+11. Answer the five rubric questions, each with evidence:
    - It works.
    - It is understood at the boxes-and-arrows level: you can say which parts talk to which, and the code agrees.
    - It was tested end to end, through the real flow.
