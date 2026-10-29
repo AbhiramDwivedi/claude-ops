@@ -97,9 +97,8 @@ export const parseBranches = (md: string): Branch[] => {
 const isCandidate = (b: Branch, state: InterviewState): boolean => {
   if (Object.hasOwn(state.visits, b.id)) return false
   if (state.opened.includes(b.id)) return true
-  // a large run asks everything a standard run does: contract-interview.check.ts pins this, ADR-0008 s5 says only "the size is in its Visit"
-  const sized = b.visit.includes(state.size) || (state.size === 'large' && b.visit.includes('standard'))
-  return sized && (b.pack === 'core' || state.packs.includes(b.pack))
+  // ADR-0008 s5: "the size is in its Visit", read literally (a standard-only branch is not asked at large)
+  return b.visit.includes(state.size) && (b.pack === 'core' || state.packs.includes(b.pack))
 }
 
 // every branch still to ask, in file order, whatever `stopped` says and with no cap
