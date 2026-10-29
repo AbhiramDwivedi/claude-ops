@@ -25,6 +25,18 @@ def spawn(agent_id):
                        "type": "foundry:lead", "model": "opus", "effort": "high", "by": "main"})
 
 
+def quarantined_merge_tree(repo, ref):
+    """Run the fixture's `merge-tree --write-tree` under its own quarantine so it writes nothing into the repo."""
+    q = tempfile.mkdtemp(prefix="probe-quarantine-")
+    try:
+        env = dict(os.environ, GIT_OBJECT_DIRECTORY=q,
+                   GIT_ALTERNATE_OBJECT_DIRECTORIES=os.path.abspath(os.path.join(repo, ".git", "objects")))
+        return subprocess.run(["git", "-C", repo, "merge-tree", "--write-tree", "--no-messages", "HEAD", ref],
+                              capture_output=True, text=True, env=env)
+    finally:
+        shutil.rmtree(q, onerror=_rm_onerror)
+
+
 class RetroLeftoverDetails(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="retro-details-edges-")
@@ -88,15 +100,14 @@ class RetroLeftoverDetails(unittest.TestCase):
         git(self.repo, "checkout", "-q", "-")
         self.commit("c.txt", "c\n", "main change")  # non-conflicting: the merged tree differs from HEAD^{tree}
         self.assertNotEqual(subprocess.run(["git", "-C", self.repo, "merge-base", "--is-ancestor", br(ID), "HEAD"]).returncode, 0)
-        merged = subprocess.run(["git", "-C", self.repo, "merge-tree", "--write-tree", "--no-messages", "HEAD", br(ID)],
-                                capture_output=True, text=True)
-        self.assertEqual(merged.returncode, 0, "fixture broken: the merge is not clean")
-        self.assertNotEqual(merged.stdout.splitlines()[0], git(self.repo, "rev-parse", "HEAD^{tree}").strip())
-        # the probe above wrote objects; settle the baseline after it
         def state():
             return (git(self.repo, "for-each-ref"), git(self.repo, "worktree", "list", "--porcelain"),
                     git(self.repo, "count-objects", "-v"))
-        before = state()
+        before = state()  # baseline taken before any fixture probe; the probe below is quarantined and must not move it
+        merged = quarantined_merge_tree(self.repo, br(ID))
+        self.assertEqual(merged.returncode, 0, "fixture broken: the merge is not clean")
+        self.assertNotEqual(merged.stdout.splitlines()[0], git(self.repo, "rev-parse", "HEAD^{tree}").strip())
+        self.assertEqual(state(), before, "fixture broken: the quarantined probe changed the repo")
         scratch = os.path.join(self.tmp, "scratch-tmp")
         os.mkdir(scratch)
         env = dict(os.environ, TMP=scratch, TEMP=scratch, TMPDIR=scratch)
@@ -107,6 +118,33 @@ class RetroLeftoverDetails(unittest.TestCase):
         self.assertIsNone(e["inMain"])
         self.assertEqual(state(), before, "retro changed refs, worktrees or the loose-object count")
         self.assertEqual(os.listdir(scratch), [], "retro left a temp dir behind")
+
+    def test_unregistered_branch_cherry_picked_into_main_is_cherry(self):
+        base = git(self.repo, "rev-parse", "HEAD").strip()
+        git(self.repo, "checkout", "-q", "-b", br(ID), base)
+        self.commit("b.txt", "b\n", "crew change")
+        git(self.repo, "checkout", "-q", "-")
+        self.commit("c.txt", "c\n", "main change")  # so the pick is a new commit, not the branch commit itself
+        git(self.repo, "cherry-pick", br(ID))
+        git(self.repo, "rm", "-q", "b.txt")  # main moves on: the merged tree now differs from HEAD^{tree}
+        git(self.repo, "commit", "-q", "-m", "drop b")
+        self.assertNotEqual(subprocess.run(["git", "-C", self.repo, "merge-base", "--is-ancestor", br(ID), "HEAD"]).returncode, 0)
+        before = git(self.repo, "count-objects", "-v")
+        merged = quarantined_merge_tree(self.repo, br(ID))
+        self.assertEqual(merged.returncode, 0, "fixture broken: the merge is not clean")
+        self.assertNotEqual(merged.stdout.splitlines()[0], git(self.repo, "rev-parse", "HEAD^{tree}").strip())
+        self.assertEqual(git(self.repo, "count-objects", "-v"), before, "fixture broken: the probe wrote objects")
+        cherry = git(self.repo, "cherry", "HEAD", br(ID)).splitlines()
+        self.assertTrue(cherry and all(l.startswith("- ") for l in cherry), cherry)
+        self.assertFalse(os.path.exists(self.wt))
+        out = self.run_retro()
+        self.assertEqual(len(out["leftoverDetails"]), 1)
+        e = out["leftoverDetails"][0]
+        self.assertEqual(e["branch"], br(ID))
+        self.assertIsNone(e["head"])
+        self.assertIsNone(e["dirty"])
+        self.assertEqual(e["inMain"], "cherry")
+        self.assertEqual(e["skip"], "no longer a registered worktree")
 
 
 if __name__ == "__main__":
