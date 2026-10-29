@@ -310,10 +310,18 @@ Edited:
 
 - plugins/foundry/hooks/register.ts (the `export` on `fencedBlock` at :848; `workflowRoleVerdict` and `workflowCallVerdict` next to `mainCallVerdict` at :567; one `on('tool.call', { tool: 'Workflow' })` handler after :1715)
 - plugins/foundry/skills/run/SKILL.md (sections 4, 5, 6 and 9 as Decision 7 names)
-- plugins/foundry/docs/architecture.md (module map: `bin/factory.ts`, `workflows/`, `agents/crew-planner.md`; the Workflow gate under Hooks; the two diagrams above)
 - .claude/foundry.json (adds `"merge": "sequential"`, `"target": "main"`)
 - plugins/foundry/README.md (the Workflow engine, one section)
 - plugins/foundry/.claude-plugin/plugin.json (version bump)
+
+Architecture-doc changes, made by the foreman's `arch-docs` design crew, not by any build crew below and not by this ADR (crews never edit the architecture doc, foundry ADR-0001 line 144). That crew runs once ADR-0008, ADR-0009 and ADR-0010 have all merged and applies all three in one pass. The sections ADR-0009 needs changed:
+
+- plugins/foundry/docs/architecture.md, "Roles and who talks to whom": the crew-planner role, and Workflow crews that have no lead.
+- plugins/foundry/docs/architecture.md, "The run lifecycle": the Workflow path of Decision 7 (plan.js, start, wave.js, finish), the lead path as the fallback, and merge mode and target read from config, never asked; with the two diagrams above.
+- plugins/foundry/docs/architecture.md, "On disk": `checks/<slug>-<n>.json`, the `by: "factory"` and `by: "workflow:<run id>"` spawn lines, and report files written by `finish`.
+- plugins/foundry/docs/architecture.md, "Hooks": a "Workflow calls" subsection next to "Agent calls" for the Workflow gate of Decision 6, and the `fencedBlock` export under its seams.
+- plugins/foundry/docs/architecture.md, "Failing open" and "Not verified yet": the gate's fail-open, and the four unverified Workflow facts in Probe.
+- docs/architecture.md, "Module map", the foundry table under `### foundry`: rows for `bin/factory.ts`, `workflows/` and `agents/crew-planner.md`, and the `.claude/foundry.json` row now carrying `merge` and `target` for this repo.
 
 Existing tests that pin behaviour this design removes: none. A grep of `plugins/foundry/tests/` for `Merge mode`, `merge mode`, `Target branch`, `two more things`, `plan-mark`, `architect-plan`, `-newer` and `run_in_background` finds no match. Tests that pin text this design keeps, and that must stay green in the crew that edits the file: `tests/gates.check.ts:68-83` (section 9's merge rule: `Head: `, `Patch: `, `git patch-id --stable`, "newest judge file ... approvedAt", `UNSCOPED`, the re-run tie) in `run-procedure`; `tests/gates.check.ts:190-205` (no sample domain in any `agents/*.md`) in `factory-scripts`.
 
@@ -322,7 +330,7 @@ Existing tests that pin behaviour this design removes: none. A grep of `plugins/
 - workflow-gate | owns: plugins/foundry/hooks/register.ts, plugins/foundry/tests/workflow-gate.check.ts | doneCheck: node --test plugins/foundry/tests/workflow-gate.check.ts && node -e "import('./plugins/foundry/hooks/register.ts').then(m=>process.exit(typeof m.workflowCallVerdict==='function'&&typeof m.workflowRoleVerdict==='function'&&typeof m.fencedBlock==='function'?0:1))" | after: none
 - factory-cli | owns: plugins/foundry/bin/factory.ts, plugins/foundry/workflows/roles.json, plugins/foundry/tests/factory.check.ts, plugins/foundry/tests/fixtures/workflow-run/** | doneCheck: node --test plugins/foundry/tests/factory.check.ts && node plugins/foundry/bin/factory.ts settings --repo . | grep -q '"merge":"sequential"' | after: workflow-gate
 - factory-scripts | owns: plugins/foundry/workflows/plan.js, plugins/foundry/workflows/wave.js, plugins/foundry/agents/crew-planner.md, plugins/foundry/tests/workflows.check.ts | doneCheck: node --test plugins/foundry/tests/workflows.check.ts && test -f plugins/foundry/agents/crew-planner.md | after: prompt-rules, workflow-gate
-- run-procedure | owns: plugins/foundry/skills/run/SKILL.md, plugins/foundry/docs/architecture.md, .claude/foundry.json, plugins/foundry/README.md, plugins/foundry/.claude-plugin/plugin.json, plugins/foundry/tests/run-procedure.check.ts | doneCheck: node --test plugins/foundry/tests/run-procedure.check.ts && node plugins/foundry/bin/factory.ts settings --repo . | grep -q '"target":"main","source":".claude/foundry.json"' | after: prompt-rules, workflow-gate, factory-cli, factory-scripts
+- run-procedure | owns: plugins/foundry/skills/run/SKILL.md, .claude/foundry.json, plugins/foundry/README.md, plugins/foundry/.claude-plugin/plugin.json, plugins/foundry/tests/run-procedure.check.ts | doneCheck: node --test plugins/foundry/tests/run-procedure.check.ts && node plugins/foundry/bin/factory.ts settings --repo . | grep -q '"target":"main","source":".claude/foundry.json"' | after: prompt-rules, workflow-gate, factory-cli, factory-scripts
 
 Crew notes:
 
