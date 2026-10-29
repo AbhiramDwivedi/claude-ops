@@ -10,6 +10,8 @@ Foundry 0.4.0 (designed in foundry run 2, ADRs accepted 2026-10-27) builds on ki
 
 Foundry 0.5.0 (designed in foundry run 3, [ADR-0004](adr/0004-scope-repair-and-head-gates.md), accepted 2026-10-28 with the owner's approval of the run-3 plan) makes the quality gates evidence-based for scope, repair and cost. Plan v2 carries a `repairBudget`. The lead's report gains Examined and Not examined sections, and the judge FAILs an absence claim that states no scope. The judge writes fixed head and patch lines, so a hook can tell which head a PASS belongs to, and a PASS survives a merge of the target (a rebase, before 0.6.0) that leaves the patch id unchanged. The hooks refuse the judge spawn that would exceed the budget, and record the spent budget in `events.jsonl`. They also refuse main-session `foundry:*` calls that set no model or effort. Every new rule applies only to plans with `version >= 2` and fails open on v1. The effort ladder itself is a repo-level principle, in the amendment to repo [ADR-0011](../../../docs/adr/0011-agents-pin-their-model.md). Run 3 merged as 0.5.0 and 0.5.1; the sections marked 0.5.0 describe the code.
 
+Foundry 0.8.0 ([ADR-0005](adr/0005-growth-model.md), accepted 2026-10-29) grows the project's architecture doc instead of the plugin. The plugin keeps the seven generic packs and ships no domain content. An architect that finds a domain no pack or doc section covers reports it, and an init-mode extend pass writes a domain section into the project's doc, committed on its own. The architect and the writer gain `WebFetch` and `WebSearch`. Every web fetch in the session passes one hook function, `fetchVerdict`, which allows every call today and logs a `fetch` line to `events.jsonl`, so a guardrail added later changes that function alone. The sections marked 0.8.0 are the design; wave 1 of the 0.8.0 run builds them.
+
 The container view below shows which part writes and which reads each stored file. Nodes marked 0.4.0 name the version that added them, and are built.
 
 ```mermaid
@@ -122,11 +124,41 @@ Only the foreman talks to the owner. Only leads message the foreman, so a member
 
 The architect (0.3.0) is `agents/architect.md`. It loads the principle packs the work touches from the `skills/principles/` skill and runs in three modes ([ADR-0001](adr/0001-design-phase.md), sections 2 and 3):
 
-- `init`: started by the `foundry:init` skill. Writes the project's architecture doc (principles, module map, ADRs for decisions already in the code) and `.claude/foundry.json`.
+- `init`: started by the `foundry:init` skill. Writes the project's architecture doc (principles, module map, ADRs for decisions already in the code) and `.claude/foundry.json`. From 0.8.0 the foreman also starts it in `init` mode with an extend brief, to add domain sections to an existing doc (the extend pass, below).
 - `plan`: started by the foreman at the start of every run, outside every crew, like the cynic. For a goal, gives each touched module an `extend` or `change` verdict and splits the work into crews and waves by the leaf test, as a draft `plan.json` plus a readable `plan.md`. The foreman owns both files after that.
 - `design`: a member of a design crew, in wave 0 or a mid-run slice, started by that crew's lead. Writes the ADR and architecture-doc change for each `change` verdict, and names the seams the crew's test-writer must pin with contract tests.
 
-Its tools are Read, Grep, Glob, Bash (read-only git and read-only inspection, plus the done-check commands it proves and a schema validator fetched by `npx -y`, both in `plan` mode), Skill, and Write and Edit for the files in the table above. Crews never edit the architecture doc or ADRs; a design change they need goes to the foreman as `PROPOSAL:`, which the foreman can take up as a mid-run design slice (lifecycle step 8).
+Its tools are Read, Grep, Glob, Bash (read-only git and read-only inspection, plus the done-check commands it proves and a schema validator fetched by `npx -y`, both in `plan` mode), Skill, and Write and Edit for the files in the table above. From 0.8.0 it also has `WebFetch` and `WebSearch`, and so does the writer ([ADR-0005](adr/0005-growth-model.md), section 3). Leads and members already have every tool, and devops keeps `WebFetch`. The judge and the cynic get no web tools: a judge that needs an outside fact to rule has found a gap in the doc and reports it as a finding. Every agent prompt, and the foreman's, carries ADR-0005's fetch rule word for word, and the lead puts it in every member brief (section 2). Crews never edit the architecture doc or ADRs; a design change they need goes to the foreman as `PROPOSAL:`, which the foreman can take up as a mid-run design slice (lifecycle step 8).
+
+**The extend pass (0.8.0).** Foundry extends a project's doc only on evidence from the work ([ADR-0005](adr/0005-growth-model.md), section 4):
+
+- At init, a goal given with `/foundry:init` is passed to the architect, which covers the domains the goal names as well as the code, so a greenfield repo gets a doc.
+- At plan time, a domain is uncovered when the goal touches a platform, product type or tool that neither a loaded pack nor a section of the doc covers. The plan-mode architect stays read-only: it hands back one `UNCOVERED: <domain> | <why the goal touches it>` line per domain and no plan blocks, so the plan-file route writes nothing. The foreman then starts the architect in `init` mode with an extend brief naming those domains.
+- At run end, when a lead's report has a `## Learned` section, the foreman starts the same pass with those items. The lead stop gate doesn't require the section.
+
+An extend pass adds one domain section under the doc's Principles, plus ADRs (section 5). Rules go in the section, at most 15, each in pack form with a test and tagged `from knowledge` or `checked: <url>`. Each fork gets an ADR with its alternatives and the line `Decided by: default`. Each bootstrap exception gets an ADR naming the rule it bends. Owner actions go in the section's `Owner actions` list, where `- [ ] ` marks an open action and `- [x] ` a done one; a crew whose work depends on an open one raises `BLOCKED:` at start. Before committing, the foreman starts the cynic on the new section with a narrow brief: rules whose test can't be run or checked against a diff, rules that are really forks, forks with no alternative named. The foreman then commits the pass on its own, on the run's target, as `docs(arch): extend <domain>` or `docs(arch): adopt learned items`, never mixed into crew work (section 8). Extend passes write without owner approval (section 6); `Decided by: default` marks what a later review step will read.
+
+```mermaid
+sequenceDiagram
+  participant P as Architect, plan mode
+  participant F as Foreman
+  participant A as Architect, init mode
+  participant C as Cynic
+  participant T as Target branch
+  F->>P: goal, plan brief
+  P-->>F: UNCOVERED: domain | why, no plan blocks
+  F->>A: extend brief naming the domains
+  A->>A: domain section, fork and exception ADRs (fetch only for a fact it isn't sure of)
+  A-->>F: INIT report
+  F->>C: narrow brief on the new section
+  C-->>F: RECOMMEND lines
+  F->>T: commit docs(arch): extend domain
+  F->>P: fresh plan architect, same goal
+  P-->>F: plan.json and plan.md blocks
+```
+
+*The plan-time extend flow, 0.8.0, as designed; it runs once, on the first run that touches the domain.*
+Traces to: `plugins/foundry/docs/adr/0005-growth-model.md` (sections 4, 5 and 8, and its literals table), `plugins/foundry/hooks/register.ts:861-864` (`routePlanFiles` writes nothing for a hand-back with no fenced blocks).
 
 A crew, as the hooks see it, is a `foundry:lead` with no parent (the main thread started it) and every agent whose parent chain reaches it. A `foundry:lead` started by some other agent is not a crew.
 
@@ -193,6 +225,7 @@ Everything for a session lives under one folder:
   decisions.md               foreman: one line per decision, `- HH:MM | decision | reason | cynic | followed`
                              (0.4.0: a `## Run <start> | <goal>` heading per run; grammar below)
   events.jsonl               0.4.0, plugin: one line per spawn, stall, tag and final report
+                             (0.8.0: and one per WebFetch or WebSearch call, while plan.json exists)
   events.<n>.jsonl           0.4.0, plugin: the event log rolled over, past 3 MiB
   plan.md                    foreman: the approved plan, written once the owner approves
                              (0.3.0: the architect drafts it with plan.json; the foreman owns it after that.
@@ -222,6 +255,15 @@ Each line of `messages.jsonl` is `{ "ts", "from", "to", "summary" }`, where `fro
 Each line is one JSON object under [`events.schema.json`](events.schema.json): `{ "v": 1, "ts", "event", "crew", "agent" }` plus the event's own fields. `spawn` (a crew agent's or a lead's `Agent` call that went through) adds `agentId`, `type`, `model`, `effort` and `by`; `stall` (a stall or idle-lead wake) adds `kind` and `minutes`; `tag` (a lead's tagged message to `main`) adds `tag`; `report` (a final report saved) adds `marker`, the report's leading marker or null. No line holds message, prompt or report text. Appends are serialized like the message log's and roll at 3 MiB the same way; a failed append is logged and changes nothing else ([ADR-0003](adr/0003-event-log-and-retro.md), section 1).
 
 From 0.5.0 one more event kind records a spent repair budget: `{ "v": 1, "ts", "event", "crew", "agent" }` and nothing else, with `agent` the judge whose FAIL spent it. It is appended after that judge's `report` line, on a v2 or later plan, whenever a saved judge FAIL leaves the crew's this-run FAIL count above `repairBudget`. `v` stays 1, because a new event kind isn't a renamed or retyped field. A crew can get the line more than once, so readers count distinct crews. The event name is fixed in [ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 3. Spawn lines gain no keys.
+
+From 0.8.0 the `fetch` event records one `WebFetch` or `WebSearch` call ([ADR-0005](adr/0005-growth-model.md), section 11): `{ "v": 1, "ts", "event": "fetch", "crew", "agent", "tool" }` plus `url` when `tool` is `"WebFetch"` or `query` when it is `"WebSearch"`, never both. `crew` is the caller's crew slug, or `"main"` for a caller outside every crew (a `foundry:*` agent the foreman started, or the main session). `agent` is the agent's name, or `"main"` for the main session. The `url` keeps scheme, host, port and path; userinfo is removed, each query value becomes an empty string with its key kept, and the fragment is dropped (P8). The `query` is cut to its first 200 characters. The line is written only when the foundry dir resolves and holds `plan.json`, so a session that never ran foundry gets no event log from its fetches. `v` stays 1, as for the spent-budget line. The schema branch is in [`events.schema.json`](events.schema.json). Examples:
+
+```json
+{"v":1,"ts":"2026-10-29T08:12:03.512Z","event":"fetch","crew":"growth-contract","agent":"growth-contract-architect","tool":"WebFetch","url":"https://example.com:8443/docs/api?version=&lang="}
+{"v":1,"ts":"2026-10-29T08:12:41.090Z","event":"fetch","crew":"main","agent":"main","tool":"WebSearch","query":"example-cli export command flags"}
+```
+
+The first came from `https://user:secret@example.com:8443/docs/api?version=2&lang=en#auth`.
 
 ### `decisions.md` grammar (0.4.0)
 
@@ -336,6 +378,7 @@ All of these are in `hooks/register.ts`.
 | `tool.call` on `Agent` | Refuses crew agents' calls without `model` or `effort`, or with `effort: "max"`. Adds the report-path note to calls that start a lead or a crew member. |
 | `tool.call` on `Agent`, 0.3.0 | Refuses starting a lead that `plan.json` holds back: the run-level and crew-level approval gates, the wave gate and the parallel cap (see [Plan gates](#plan-gates-030)). |
 | `tool.call` on `Agent`, 0.5.0 | On a v2 or later plan: refuses a main-session `foundry:*` call with no `model` or a missing or unknown `effort`, and refuses a crew's judge-named spawn once its repair budget is spent (see [Repair budget and head guard](#repair-budget-and-head-guard-050)). |
+| `tool.call` on `WebFetch`, `WebSearch`, 0.8.0 | The fetch gate: runs `fetchVerdict` on every call in the session, whoever makes it, and appends its `fetch` line to `events.jsonl` when there is one. Allows every call today (see [Fetch gate](#fetch-gate-080)). |
 | `tool.call` on `Write`, `Edit` | Stamps the clock's time on new lines of this session's `decisions.md`; from 0.4.0, on every literal `HH:MM` too. |
 | `tool.call`, any tool | Records activity, the main session's too. On `SubagentHandback`, refuses an empty hand-back from a crew agent and captures the report. |
 | `turn.step` | Records activity for each model request, the main session's too. |
@@ -463,6 +506,59 @@ Each row is a seam inside foundry that ADR-0004 adds or changes. The contract te
 | Spent-budget record: the `events.jsonl` line, and the lead's budget-blocked message | hooks (line); lead (message) | retro (`budgetsSpent`, from the line only); foreman (message) | `events.schema.json`; ADR-0004 sections 3 and 5 | `tests/contract-gates.test.ts`, `tests/test_contract_retro_050.py` |
 | retro's per-run `budgetsSpent` | `scripts/retro.py` | the `foundry:retro` skill | ADR-0004 section 8 (`retro` stays 1) | `tests/test_contract_retro.py` `RUN_KEYS`, `tests/test_contract_retro_050.py` |
 | Main-session `foundry:*` calls on a v2 plan | foreman | hooks (`mainCallVerdict`) | ADR-0004 section 7 | `tests/contract-gates.test.ts` |
+
+### Fetch gate (0.8.0)
+
+Designed in [ADR-0005](adr/0005-growth-model.md), section 11. Every `WebFetch` and `WebSearch` call in the session, whoever makes it, passes one exported pure function. A guardrail added later (an allowlist, a deny list, an owner prompt, a size or count cap) is a change to this function and its tests alone; no prompt names a source, a domain or a limit.
+
+```ts
+export type FetchEvent =
+  | { event: 'fetch'; crew: string; agent: string; tool: 'WebFetch'; url: string }
+  | { event: 'fetch'; crew: string; agent: string; tool: 'WebSearch'; query: string }
+export type FetchVerdict = { kind: 'allow'; line: FetchEvent | null }
+export function fetchVerdict(tool: 'WebFetch' | 'WebSearch', input: { readonly url?: unknown; readonly query?: unknown }, crew: string, agent: string, hasPlan: boolean): FetchVerdict
+```
+
+- **Pure (P3).** It takes plain values and touches neither `$` nor the file system. `FetchEvent` joins the `FoundryEvent` union; `appendEvent` adds `v` and `ts` as for every line.
+- **Inputs.** `tool` is the call's tool name and `input` the call's input (`e as unknown as { url?: unknown; query?: unknown }`, as the `SendMessage` handler reads its input). The handler resolves `crew` and `agent` before the call: `crew` is the caller's crew slug from `crewOf`, or `"main"` for a caller outside every crew (a `foundry:*` agent the foreman started, or the main session); `agent` is the agent's name, or `"main"` for the main session. `hasPlan` is true when the foundry dir resolves and `plan.json` exists in it.
+- **Decision.** `kind` is `'allow'` for every call today.
+- **Line.** `line` is `null` when `hasPlan` is false. Otherwise it is the `fetch` event for the call, with `crew`, `agent` and `tool` as passed. For `WebFetch`, `url` is `input.url` with userinfo removed, each query value replaced by an empty string (keys kept, in order, duplicates kept), and the fragment dropped; scheme, host, port and path stay as the WHATWG `URL` parser gives them, so a default port is dropped. `https://user:secret@example.com:8443/docs/api?version=2&lang=en#auth` gives `https://example.com:8443/docs/api?version=&lang=`. A `url` that isn't a string, or doesn't parse, is logged as `""`. For `WebSearch`, `query` is `input.query` cut to its first 200 characters (`slice(0, 200)`); a non-string is logged as `""`.
+- **The handler.** `on('tool.call', { tool: ['WebFetch', 'WebSearch'] }, ...)`, ending in `.catch(failOpen)` (P5), like the `Write`/`Edit` handler. It calls `fetchVerdict`, awaits `logEvent` with a non-null `line`, and calls `next(e)`. `logEvent` queues the append like every event line, waits at most `EVENT_WAIT_MS` and never rejects, as for `spawn` lines; a failed append, a throwing `$.fs.write` included, is logged and never blocks the call.
+
+```mermaid
+sequenceDiagram
+  participant C as Caller (member, lead, foundry agent or main session)
+  participant H as tool.call handler (register.ts)
+  participant V as fetchVerdict
+  participant Q as event queue (logEvent)
+  participant E as events.jsonl
+  participant T as WebFetch or WebSearch
+  C->>H: WebFetch url, or WebSearch query
+  H->>H: crew and agent (crewOf, or "main"); hasPlan (dir resolves, plan.json exists)
+  H->>V: tool, input, crew, agent, hasPlan
+  V-->>H: kind allow, line or null
+  opt line is not null
+    H->>Q: logEvent(line), waits at most EVENT_WAIT_MS
+    Q->>E: append v, ts and the line (a failure is logged only)
+  end
+  H->>T: next(e), the call goes through
+```
+
+*The fetch gate, 0.8.0, as designed: every call is allowed, and a line is logged while a plan exists.*
+Traces to: `plugins/foundry/docs/adr/0005-growth-model.md` (section 11), `plugins/foundry/hooks/register.ts:166-171` (`FoundryEvent`), `:1027-1033` (`appendEvent`, which adds `v` and `ts`), `:1064-1083` (`logEvent`'s queue, wait cap and failure log), `:1694` (the awaited `spawn` line), `:1587-1588` (how a handler reads its input), `:1768-1779` (the `Write`/`Edit` handler the fetch handler follows).
+
+### Seams (0.8.0)
+
+Each row is a seam inside foundry that ADR-0005 adds or changes. The contract tests read only `tests/fixtures/contract-080/**` or inline data.
+
+| Seam | Producer | Consumer | Contract | Pinned by |
+| --- | --- | --- | --- | --- |
+| `fetchVerdict` and the fetch handler | hooks | the session's `WebFetch` and `WebSearch` calls; `appendEvent` | the signature and rules above; ADR-0005 section 11 | `tests/contract-fetch.test.ts` |
+| The `fetch` line in `events.jsonl` | hooks | retro (`fetches`) | `events.schema.json` `fetch` branch; "On disk" above | `tests/contract-fetch.check.ts`, `tests/test_contract_retro_080.py` |
+| retro's per-run `fetches`, `extendPasses`, `defaultDecisions`, `openOwnerActions` | `scripts/retro.py` | the `foundry:retro` skill; retro's JSON stays internal (P15) | `fetches` is `{total, perAgent: {<agent>: n}}`; `extendPasses` counts commits in the run's window whose subject starts `docs(arch): extend ` or is `docs(arch): adopt learned items`; `defaultDecisions` counts ADRs in the adr dir holding the line `Decided by: default`; `openOwnerActions` counts `- [ ] ` lines under an `Owner actions` heading; each is `"not recorded"` where its source is absent, as ADR-0003 does | `tests/test_contract_retro_080.py` |
+| The plan-mode `UNCOVERED: ` hand-back | architect | foreman; `routePlanFiles`, which writes nothing for it | ADR-0005 section 4 and its literals table | `tests/contract-fetch.test.ts` (regression guard), `tests/gates.check.ts` |
+| A lead report's optional `## Learned` section | lead | foreman's run-end extend pass; `leadStopPasses`, which neither needs nor refuses it | ADR-0005 section 7 | `tests/contract-fetch.test.ts` (regression guard), `tests/gates.check.ts` |
+| The fetch rule, the literals and the web tools in the prompts | `agents/*.md`, `skills/run/SKILL.md` | every agent and the foreman | ADR-0005 sections 2, 3 and the literals table | `tests/gates.check.ts` |
 
 ### Heartbeat and stalls
 
