@@ -515,15 +515,15 @@ Designed in [ADR-0005](adr/0005-growth-model.md), section 11. Every `WebFetch` a
 export type FetchEvent =
   | { event: 'fetch'; crew: string; agent: string; tool: 'WebFetch'; url: string }
   | { event: 'fetch'; crew: string; agent: string; tool: 'WebSearch'; query: string }
-export type FetchVerdict = { kind: 'allow'; line: FetchEvent | null }
+export type FetchVerdict = { kind: 'allow'; line: FetchEvent | null } | { kind: 'deny'; line: FetchEvent | null; reason: string }
 export function fetchVerdict(tool: 'WebFetch' | 'WebSearch', input: { readonly url?: unknown; readonly query?: unknown }, crew: string, agent: string, hasPlan: boolean): FetchVerdict
 ```
 
 - **Pure (P3).** It takes plain values and touches neither `$` nor the file system. `FetchEvent` joins the `FoundryEvent` union; `appendEvent` adds `v` and `ts` as for every line.
 - **Inputs.** `tool` is the call's tool name and `input` the call's input (`e as unknown as { url?: unknown; query?: unknown }`, as the `SendMessage` handler reads its input). The handler resolves `crew` and `agent` before the call: `crew` is the caller's crew slug from `crewOf`, or `"main"` for a caller outside every crew (a `foundry:*` agent the foreman started, or the main session); `agent` is the agent's name, or `"main"` for the main session. `hasPlan` is true when the foundry dir resolves and `plan.json` exists in it.
-- **Decision.** `kind` is `'allow'` for every call today.
+- **Decision.** `kind` is `'allow'` for every call today. A later guardrail returns `{ kind: 'deny', line, reason }`; `reason` is the refusal text the caller sees.
 - **Line.** `line` is `null` when `hasPlan` is false. Otherwise it is the `fetch` event for the call, with `crew`, `agent` and `tool` as passed. For `WebFetch`, `url` is `input.url` with userinfo removed, each query value replaced by an empty string (keys kept, in order, duplicates kept), and the fragment dropped; scheme, host, port and path stay as the WHATWG `URL` parser gives them, so a default port is dropped. `https://user:secret@example.com:8443/docs/api?version=2&lang=en#auth` gives `https://example.com:8443/docs/api?version=&lang=`. A `url` that isn't a string, or doesn't parse, is logged as `""`. For `WebSearch`, `query` is `input.query` cut to its first 200 characters (`slice(0, 200)`); a non-string is logged as `""`.
-- **The handler.** `on('tool.call', { tool: ['WebFetch', 'WebSearch'] }, ...)`, ending in `.catch(failOpen)` (P5), like the `Write`/`Edit` handler. It calls `fetchVerdict`, awaits `logEvent` with a non-null `line`, and calls `next(e)`. `logEvent` queues the append like every event line, waits at most `EVENT_WAIT_MS` and never rejects, as for `spawn` lines; a failed append, a throwing `$.fs.write` included, is logged and never blocks the call.
+- **The handler.** `on('tool.call', { tool: ['WebFetch', 'WebSearch'] }, ...)`, ending in `.catch(failOpen)` (P5), like the `Write`/`Edit` handler. It calls `fetchVerdict`, awaits `logEvent` with a non-null `line`, then returns `{ deny: reason }` when `kind` is `'deny'` (the refusal shape `agentVerdict` uses) and calls `next(e)` when it is `'allow'`. `logEvent` queues the append like every event line, waits at most `EVENT_WAIT_MS` and never rejects, as for `spawn` lines; a failed append, a throwing `$.fs.write` included, is logged and never blocks the call.
 
 ```mermaid
 sequenceDiagram

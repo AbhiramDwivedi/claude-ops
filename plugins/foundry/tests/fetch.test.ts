@@ -100,3 +100,16 @@ test('fetch: a 10,000-character query is logged as its first 200 characters', as
   await settle()
   expect(fetches(w).map(e => e.query)).toEqual(['z'.repeat(200)])
 })
+
+test('fetch: a failing agent list with an agentId set logs the raw id as agent and "main" as crew', async ($, on) => {
+  const w = world($, on, { listFails: true })
+  await startSession($)
+  withPlan(w)
+  const r = (await $.tool.call({ tool: 'WebFetch', url: 'https://example.com/a', agentId: 'ghost-1' } as never)) as { deny?: unknown }
+  await settle()
+  expect(r.deny).toBeUndefined()
+  const got = fetches(w)
+  expect(got).toHaveLength(1)
+  expect(got[0]?.agent).toBe('ghost-1')
+  expect(got[0]?.crew).toBe('main')
+})

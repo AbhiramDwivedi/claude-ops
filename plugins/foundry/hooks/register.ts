@@ -177,7 +177,7 @@ export type FoundryEvent =
 export type FetchEvent =
   | { event: 'fetch'; crew: string; agent: string; tool: 'WebFetch'; url: string }
   | { event: 'fetch'; crew: string; agent: string; tool: 'WebSearch'; query: string }
-export type FetchVerdict = { kind: 'allow'; line: FetchEvent | null }
+export type FetchVerdict = { kind: 'allow'; line: FetchEvent | null } | { kind: 'deny'; line: FetchEvent | null; reason: string }
 
 // the url as logged: userinfo and fragment dropped, each query value emptied (keys kept, in order); "" when it isn't a url
 function loggedUrl(raw: unknown): string {
@@ -1828,8 +1828,9 @@ export const register: Register = on => {
           return dir !== undefined && (await $.fs.exists(planPath(dir)))
         }),
       )) === true
-    const verdict = fetchVerdict(e.tool as 'WebFetch' | 'WebSearch', input, caller?.crew ?? 'main', caller?.agent ?? 'main', hasPlan)
+    const verdict = fetchVerdict(e.tool as 'WebFetch' | 'WebSearch', input, caller?.crew ?? 'main', caller?.agent ?? e.agentId ?? 'main', hasPlan)
     if (verdict.line !== null) await logEvent($, state, verdict.line)
+    if (verdict.kind === 'deny') return { deny: verdict.reason }
     return next(e)
   }).catch(failOpen)
 
