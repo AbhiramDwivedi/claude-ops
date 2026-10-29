@@ -297,7 +297,10 @@ describe('Seam 3: nextBranches and remainingBranches (section 5 candidate and ba
     assert.deepEqual(ids(remainingBranches(bs, state({ packs: ['service'] }))), ['outcome', 'hosting', 'integrations', 'secrets', 'authz'])
     // browsers is large-only: absent at standard even with its pack
     assert.ok(!ids(remainingBranches(bs, state({ packs: ['frontend'] }))).includes('browsers'))
-    assert.deepEqual(ids(remainingBranches(bs, state({ size: 'large', packs: ['frontend'] }))), ['outcome', 'hosting', 'cost', 'integrations', 'secrets', 'browsers'])
+    assert.deepEqual(ids(remainingBranches(bs, state({ size: 'large', packs: ['frontend'] }))), ['outcome', 'hosting', 'cost', 'integrations', 'browsers'])
+    // secrets is standard-only: not a candidate at large unless its id is in opened
+    assert.ok(!ids(remainingBranches(bs, state({ size: 'large', packs: ['frontend'] }))).includes('secrets'))
+    assert.ok(ids(remainingBranches(bs, state({ size: 'large', packs: ['frontend'], opened: ['secrets'] }))).includes('secrets'))
   })
 
   test('remainingBranches ignores stopped, the max cap and the Opens stop', async () => {
