@@ -202,7 +202,7 @@ sequenceDiagram
 
 Wave 2 (`prompt-rules`) deletes the wording checks in `## Checks replaced`; `tests/contract-replaced.check.ts` pins that. `tests/packs.check.ts` stays: it checks the packs' form, which is not judge or cynic behaviour, so P12 and the entry-points table keep naming it.
 
-A check moves only when a snippet or a case covers what it asserts. Three do. The judge.md and SKILL.md patch-command checks assert `git patch-id --stable` is in the file; the snippet check runs that command and compares its id with `PATCH_COMMAND`'s (`register.ts:422`). The cynic Items check asserts the cynic recommends only `answer`, `defer` or `pass`; the cynic cases score exactly those kinds, and the scorer gives `undefined` for any other. Most wording checks pin a report literal or a section's order, which no case scores, so they stay.
+A check moves only when a suite check covers what it asserts. Two do. The judge.md and SKILL.md patch-command checks assert `git patch-id --stable` is in the file; the snippet check runs that command and compares its id with `PATCH_COMMAND`'s (`register.ts:422`). The cynic Items check in `deferred-sweep.check.ts` stays: in the suite the cynic cases only score their own recorded `expected` lines and nothing reads `cynic.md`, so no suite check covers it. Most wording checks pin a report literal or a section's order, which no case scores, so they stay too.
 
 ## Snippets
 
@@ -218,7 +218,6 @@ Each line: `- <test file>: <test name> (covered by <ref>)`. `<ref>` is `case <id
 
 - plugins/foundry/tests/gates.check.ts: judge.md names the patch command (covered by snippet plugins/foundry/agents/judge.md: `git diff --no-color`)
 - plugins/foundry/tests/gates.check.ts: run skill merge rule names the patch command (covered by snippet plugins/foundry/skills/run/SKILL.md: `git diff --no-color`)
-- plugins/foundry/tests/deferred-sweep.check.ts: cynic.md Items section still recommends only answer, defer, pass (covered by case cynic-answer-case-fold, cynic-defer-log-promise, cynic-pass-seam-route)
 
 ## Seams
 
@@ -243,7 +242,7 @@ The contract tests pin these. Wave 0's test-writer writes them; wave 1's `evals-
 ## Consequences
 
 - A broken snippet in a listed prompt now fails `node --test plugins/foundry/tests/contract-evals.check.ts plugins/foundry/tests/evals*.check.ts`, which a wording check could not do. Moving or rewording a listed snippet's opening words means editing its `## Snippets` line in the same change.
-- Judge and cynic behaviour is measured only when the owner runs `run-model.ts`. No rule requires an eval run when a prompt changes, so a prompt change can lower the score unseen until the next owner run. The cynic Items check moves from a gate to that measurement: its wording guard leaves the suite in wave 2. That is the trade the owner's ruling accepts.
+- Judge and cynic behaviour is measured only when the owner runs `run-model.ts`. No rule requires an eval run when a prompt changes, so a prompt change can lower the score unseen until the next owner run. That is the trade the owner's ruling accepts. The cynic Items check in `deferred-sweep.check.ts` stays in the suite, because no suite eval reads `cynic.md`; the three required cynic cases measure the same rule only when the owner runs the model.
 - `expected` is the ruling a run recorded, so the set measures drift from accepted rulings. A ruling later shown wrong (such as `judge-redteam-reset`) stays as recorded until a fix adds a case whose source records the right one.
 - A judge case names commits from past runs. On a clone where a FAIL head was never merged and has been garbage-collected, the judge can't read that diff; the owner reads that case's result as noise.
 - `snippets.ts` spawns `bash` from `PATH`. On Windows that is Git Bash in this repo's setup (`where bash` prints `C:\Program Files\Git\usr\bin\bash.exe` only); a machine where WSL's `bash.exe` comes first on `PATH` would run the snippet in WSL. TODO: not handled; no override is added until a caller needs one (P11).
