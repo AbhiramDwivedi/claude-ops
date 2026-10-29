@@ -73,6 +73,8 @@ Propose a change only when a count or a section 3 `CAUSE:` line supports it, and
 - `.claude/foundry.json`: `roles` (a job's agent type, for example a job whose judge rejections or stalls cluster on one model), `deploy`, `writingSkill`, `promptOverrides`. Keep to keys the schema declares (`foundry-config.schema.json`).
 - `.claude/foundry/prompts/<role>.md` for the roles `lead`, `judge`, `cynic`, `writer`, `devops`, `architect`: a line a role keeps missing, and the `promptOverrides` entry that points to the file. A prompt file adds to the role's prompt; it never replaces it.
 
+Retro may propose removing a rule, and each proposed rule names the rule it replaces, or says `none`. A removal needs a count or `CAUSE:` line like any other proposal.
+
 If the counts support nothing, say so and stop. Don't invent changes.
 
 ## 5. Write only what the owner approves
