@@ -370,13 +370,6 @@ export function reportNote(who: string, path: string): string {
   return `${MARK} If ${who}'s report does not reach you, read ${path} once it stops.`
 }
 
-// the first line of a lead's question to the person, or undefined when the text is not one
-export function questionOf(text: string): string | undefined {
-  const trimmed = text.trimStart()
-  if (!trimmed.startsWith(QUESTION)) return undefined
-  return trimmed.slice(QUESTION.length).split('\n')[0]?.trim() ?? ''
-}
-
 // The tags a lead's message to main, or its report, can start with, and what /foundry shows for each.
 export type Tag = { kind: 'waiting on you' | 'blocked' | 'proposal'; text: string }
 
@@ -665,12 +658,6 @@ export function isDecisionLog(path: string, sessionId: string): boolean {
 
 export function limitResetText(resetsAt: string): string {
   return `${LIMIT_RESET} the five-hour usage window reset at ${resetsAt}. Check /foundry and message each lead whose crew isn't done to resume.`
-}
-
-// the first line of a judge's report past VERDICT:, or undefined when it has none
-export function verdictOf(text: string): string | undefined {
-  const first = text.trimStart().split('\n')[0] ?? ''
-  return first.startsWith('VERDICT:') ? first.slice('VERDICT:'.length).trim() : undefined
 }
 
 // a crew's judge report files: <crew>-judge.md and <crew>-judge-<n>.md
@@ -1146,18 +1133,6 @@ async function lastModified($: $, dir: string): Promise<number | undefined> {
   return last
 }
 
-// the verdict on the first line of the crew's latest judge report (highest k in -judge-<k>.md; bare -judge.md is k=1), if it has one
-async function judgeOf($: $, dir: string, crew: string): Promise<string | undefined> {
-  if (!(await $.fs.exists(dir))) return undefined
-  let latest: { name: string; k: number } | undefined
-  for (const f of await $.fs.list(dir)) {
-    if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew, f.name)) continue
-    const k = Number(/-(\d+)\.md$/.exec(f.name)?.[1] ?? 1)
-    if (latest === undefined || k > latest.k) latest = { name: f.name, k }
-  }
-  return latest === undefined ? undefined : verdictOf(String(await $.fs.read(`${dir}/${latest.name}`)))
-}
-
 // One debug line naming the rule that refused or sent back, and whom; never report text (P7, P8). Waited for, so
 // the line lands before the call it explains returns, but at most EVENT_WAIT_MS: a hung log never holds a call.
 async function logRule($: $, line: string): Promise<void> {
@@ -1290,6 +1265,8 @@ async function statusOf($: $, state: State): Promise<string> {
   const dir = await rootOf($, state)
   const now = await $.clock.now()
   const crews: CrewStatus[] = []
+  const plan = await safely($, 'plan lines', () => planOf($, state))
+  const since = runStart(plan) ?? 0
   for (const lead of all.filter(isLead)) {
     const crew = crewName(lead)
     const counts: Record<string, number> = {}
@@ -1309,7 +1286,10 @@ async function statusOf($: $, state: State): Promise<string> {
     }
     const reports = dir === undefined ? undefined : reportDir(dir, crew)
     const lastReportMs = reports === undefined ? undefined : await lastModified($, reports)
-    const judge = reports === undefined ? undefined : await safely($, 'judge verdict', () => judgeOf($, reports, crew))
+    const judge = reports === undefined ? undefined : await safely($, 'judge verdict', async () => {
+      const latest = latestJudge(crew.toLowerCase(), await judgeFilesOf($, reports, crew, since, false), since)
+      return latest === undefined ? undefined : judgeRuling(String(await $.fs.read(latest.path))).verdict
+    })
     crews.push({
       crew,
       status: listedIds.has(lead.id) ? lead.status : 'ended',
@@ -1327,7 +1307,6 @@ async function statusOf($: $, state: State): Promise<string> {
   const log = dir === undefined ? undefined : messagesPath(dir)
   const text = statusText(crews, now, log !== undefined && (await $.fs.exists(log)) ? log : undefined, dir)
   // the plan's crews go above the 0.2.1 lines; with no readable plan the output is exactly 0.2.1's
-  const plan = await safely($, 'plan lines', () => planOf($, state))
   return plan === undefined ? text : [...planLines(plan), text].join('\n')
 }
 
