@@ -646,7 +646,7 @@ test('shows a judge line from <crew>-judge.md under the crew line, before report
 
 test('takes the verdict from the VERDICT marker', async ($, on) => {
   const w = world($, on)
-  expect(await judgeText($, w, { 'auth-judge.md': { text: '  VERDICT:   FAIL - missing tests  \nx', age: MIN } })).toContain('\n  judge: FAIL\n')
+  expect(await judgeText($, w, { 'auth-judge.md': { text: '  VERDICT: FAIL - missing tests  \nx', age: MIN } })).toContain('\n  judge: FAIL\n')
 })
 
 test('takes the highest-numbered of several judge files', async ($, on) => {
