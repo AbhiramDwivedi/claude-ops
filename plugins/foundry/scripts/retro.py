@@ -171,6 +171,7 @@ def new_run(started, goal, start_dt):
         "_esc": {"QUESTION": 0, "BLOCKED": 0, "PROPOSAL": 0},
         "_judges": {"pass": 0, "fail": 0},
         "_budget_crews": set(),
+        "_fetches": {"total": 0, "perAgent": {}},
     }
 
 
@@ -255,9 +256,11 @@ def valid_event(line):
 
 def process_events(files, runs):
     """Fill the runs' event counters. Return (skipped, outside). With no runs, every valid event is
-    outside: a dir without headings cannot be split."""
+    outside: a dir without headings cannot be split. The third value says whether the log holds any
+    valid fetch line."""
     skipped = 0
     outside = 0
+    fetch_seen = False
     for path in files:
         for line in read_lines(path):
             if line is None:
@@ -270,6 +273,8 @@ def process_events(files, runs):
                 skipped += 1
                 continue
             ev, ts = got
+            if ev.get("event") == "fetch":
+                fetch_seen = True
             run = assign(runs, ts)
             if run is None:
                 outside += 1
@@ -283,6 +288,12 @@ def process_events(files, runs):
                 s = run["_spawns"]
                 s["total"] += 1
                 s["byModelEffort"][key] = s["byModelEffort"].get(key, 0) + 1
+            elif kind == "fetch":
+                agent = ev.get("agent")
+                name = agent if isinstance(agent, str) and agent else "unset"
+                f = run["_fetches"]
+                f["total"] += 1
+                f["perAgent"][name] = f["perAgent"].get(name, 0) + 1
             elif kind == "stall":
                 if ev.get("kind") == "agent":
                     run["_stalls"]["agent"] += 1
@@ -304,7 +315,7 @@ def process_events(files, runs):
                         run["_judges"]["pass"] += 1
                     elif ev.get("marker") == "VERDICT: FAIL":
                         run["_judges"]["fail"] += 1
-    return skipped, outside
+    return skipped, outside, fetch_seen
 
 
 def process_messages(files, runs, pre):
@@ -427,17 +438,24 @@ def spawned_ids(files):
     return ids
 
 
+def repo_root(directory):
+    """The repo root for a dir shaped <repo>/.git/foundry/<session>, or None when it is not."""
+    common = os.path.dirname(os.path.dirname(directory))
+    if os.path.basename(os.path.dirname(directory)) != "foundry" or os.path.basename(common) != ".git":
+        return None
+    top = git_out(common, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if top is None or not same_path(top.strip(), common):
+        return None
+    return os.path.dirname(common)
+
+
 def leftovers(directory, event_files):
     """Branches and folders still left by this dir's spawned agents, or NR when it cannot be told."""
     if not event_files:
         return NR
-    common = os.path.dirname(os.path.dirname(directory))
-    if os.path.basename(os.path.dirname(directory)) != "foundry" or os.path.basename(common) != ".git":
+    main = repo_root(directory)
+    if main is None:
         return NR
-    top = git_out(common, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if top is None or not same_path(top.strip(), common):
-        return NR
-    main = os.path.dirname(common)
     refs = git_out(main, "for-each-ref", "--format=%(refname)", "refs/heads/")
     if refs is None:
         return NR
@@ -454,6 +472,78 @@ def leftovers(directory, event_files):
     return {"branches": sorted(branches), "folders": sorted(folders), "count": len(agents)}
 
 
+def read_config_path(root, key):
+    """The absolute path foundry.json's string `key` names under root, or None."""
+    try:
+        with open(os.path.join(root, ".claude", "foundry.json"), encoding="utf-8-sig") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return None
+    val = cfg.get(key) if isinstance(cfg, dict) else None
+    if not isinstance(val, str) or not val:
+        return None
+    return os.path.join(root, val)
+
+
+def commit_log(root):
+    """[(committer datetime, subject)] from HEAD, or None when git cannot be read."""
+    if root is None:
+        return None
+    out = git_out(root, "log", "--format=%cI%x09%s", "HEAD")
+    if out is None:
+        return None
+    log = []
+    for line in out.splitlines():
+        when, _, subject = line.partition("	")
+        dt = parse_rfc3339(when.strip())
+        if dt is not None:
+            log.append((dt, subject))
+    return log
+
+
+def is_extend_pass(subject):
+    return subject.startswith("docs(arch): extend ") or subject == "docs(arch): adopt learned items"
+
+
+def count_default_decisions(root):
+    if root is None:
+        return NR
+    adr = read_config_path(root, "adr")
+    if adr is None or not os.path.isdir(adr):
+        return NR
+    n = 0
+    try:
+        names = sorted(os.listdir(adr))
+    except OSError:
+        return NR
+    for name in names:
+        path = os.path.join(adr, name)
+        if not name.endswith(".md") or not os.path.isfile(path):
+            continue
+        if any(l.rstrip() == "Decided by: default" for l in read_lines(path) if l is not None):
+            n += 1
+    return n
+
+
+def count_open_owner_actions(root):
+    if root is None:
+        return NR
+    path = read_config_path(root, "architecture")
+    if path is None or not os.path.isfile(path):
+        return NR
+    n = 0
+    under = False
+    for line in read_lines(path):
+        if line is None:
+            continue
+        h = re.match(r"^#{1,6}[ 	]+(.*?)[ 	#]*$", line)
+        if h:
+            under = h.group(1).strip() == "Owner actions"
+        elif under and line.startswith("- [ ] "):
+            n += 1
+    return n
+
+
 def retro(directory):
     runs, pre, pre_used = read_decisions(os.path.join(directory, "decisions.md"))
     has_headings = bool(runs)
@@ -461,12 +551,24 @@ def retro(directory):
     message_files = drop_duplicate_files(list_files(directory, "messages*.jsonl"))
 
     pre_msgs = process_messages(message_files, runs, pre)
-    skipped, outside = process_events(event_files, runs)
+    skipped, outside, fetch_seen = process_events(event_files, runs)
+    root = repo_root(directory)
+    log = commit_log(root)
+    defaults = count_default_decisions(root)
+    owner_open = count_open_owner_actions(root)
+    starts = sorted(r["_dt"] for r in runs if r["_dt"] is not None)
 
     ordered = ([pre] if pre_used or pre_msgs else []) + runs if has_headings else [pre]
     out_runs = []
     for r in ordered:
         placed = bool(event_files) and r["_dt"] is not None
+        if log is None or r["_dt"] is None:
+            extend = NR
+        else:
+            later = [d for d in starts if d > r["_dt"]]
+            end = later[0] if later else None
+            extend = sum(1 for d, subj in log
+                         if d >= r["_dt"] and (end is None or d < end) and is_extend_pass(subj))
         out_runs.append({
             "started": r["started"], "goal": r["goal"],
             "decisions": r["decisions"], "freeform": r["freeform"],
@@ -476,6 +578,10 @@ def retro(directory):
             "escalations": r["_esc"] if placed else NR,
             "judges": r["_judges"] if placed else NR,
             "budgetsSpent": len(r["_budget_crews"]) if placed and r["_budget_crews"] else NR,
+            "fetches": r["_fetches"] if placed and fetch_seen else NR,
+            "extendPasses": extend,
+            "defaultDecisions": defaults,
+            "openOwnerActions": owner_open,
         })
     return {
         "retro": 1,
