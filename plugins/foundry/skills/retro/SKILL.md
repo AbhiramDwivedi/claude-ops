@@ -5,7 +5,7 @@ description: Counts what a foundry session recorded (escalations, cynic recommen
 
 # foundry retro
 
-You report what a foundry session dir recorded and propose setup changes from it. A script does the counting; you judge. You never read the raw logs (P24) and you never print message, prompt or report text.
+You report what a foundry session dir recorded and propose setup changes from it. A script does the counting; you judge. You never read the raw logs (P24) and you never print message, prompt or report text, except the judge files' `VERDICT:` and finding lines that section 3 quotes as evidence.
 
 The person who ran `/foundry:retro` is the owner.
 
@@ -21,7 +21,7 @@ python <plugin root>/scripts/retro.py <foundry dir>
 
 Exit 2 with `retro: NO_FOUNDRY_DIR:` means the dir is wrong: say so, show the path, ask the owner for the right one, and stop. Any other failure: show the error and stop.
 
-Read only the JSON it prints.
+For the counts, read only the JSON it prints. Section 3 adds a few bounded reads of its own.
 
 ## 2. Report the counts
 
@@ -41,20 +41,41 @@ Per run (`runs`), then the dir-wide keys. Be brief; a table or short list per ru
 - **Opus-high share**: the share of the run's spawns on Opus at `high` or `xhigh`. The numerator is the sum of the `byModelEffort` counts whose model contains `opus` (case-folded) and whose effort is `high` or `xhigh`; the denominator is `spawns.total`. The target is 0, unless a line in `decisions.md` records the owner's call for `high` or `xhigh`. Report any other non-zero share as over target. The script prints no key for it; you compute it.
 - **Decision timing** (`decisions`): `clock`, `dateOnly`, `notRecorded`. Also `freeform` lines the script couldn't read as decisions.
 - **Leftovers** (`leftovers`): this session's agents whose `worktree-agent-<id>` branch or `.claude/worktrees/agent-<id>` folder is still present, read from git and the disk. Report `count` and the names. `"not recorded"` means the dir isn't `<git common dir>/foundry/<session>`, there's no event log, or git couldn't run; say so and never write 0.
+- **Leftover details** (`leftoverDetails`): one entry per leftover. Per entry, report its `id`, `head`, `dirty`, `inMain` and `skip`; write a `null` value as none. When the key is `"not recorded"`, say "not recorded".
 - **Plan** (`plan`): crews, waves, the `estAgents` total, and `status` counts. `agentCap` is retired (0.7.0); an old plan.json may still carry it, and when it does not the script says "not recorded". Mention it only if it is a number. It describes the last run only.
 
 Wherever the JSON says `"not recorded"`, write "not recorded". Never turn it into zero, and never guess a number. If `split` is `"not recorded"`, say the dir couldn't be split into runs: the counts are for the whole dir, and the event-derived ones (spawns, stalls, escalations, judges) weren't recorded. If `eventsSkipped` is above 0, say how many event lines were skipped; `eventsOutsideRuns` events fell before the first run heading.
 
-## 3. Propose changes
+## 3. Find the causes
 
-Propose a change only when a count supports it, and say which count. Each proposal names a file and a key or path, the current value (read the file; it is the owner's config, not a log), the new value, and why.
+Give each anomaly one line, exactly `CAUSE: <anomaly> | <evidence> | <fix location>`. There are five kinds. `<anomaly>` starts with the kind's name, then names the item, for example `leftover a0123456789abcdef` or `judge fail auth-judge-2`.
+
+- `leftover`: each `leftoverDetails` entry.
+- `judge fail`: each judge file (`reports/<crew>/<name>-judge.md` or `<name>-judge-<n>.md` in the foundry dir) whose first line starts `VERDICT: FAIL`.
+- `stall`: per run, a non-zero `stalls.agent` or `stalls.idleLead`.
+- `overrule`: per run, a non-zero `decisions.overruled`.
+- `spent budget`: per run, a non-zero `budgetsSpent`.
+
+Spawns over estAgents are not an anomaly; give them no CAUSE line.
+
+`<evidence>` is a fact from an allowed source, such as the entry's `skip` string or a judge finding line (a line under the judge file's `## Findings` heading that starts `- `). `<fix location>` is a file and a key, line or section. When the allowed sources don't show a cause, write `CAUSE: <anomaly> | not found | none`. Don't guess.
+
+Its only sources are git, the disk, decisions.md, the judge files' VERDICT: and finding lines, and the plugin's own files. It never reads message, prompt or report bodies (P24). The judge files' `VERDICT:` and finding lines are the only report text it reads. Use at most 3 reads per anomaly; a git command, a file read and a grep each count as one.
+
+A leftover whose `skip` is `passes every check retro can see` may still be kept by a check retro can't see: the session's own checkout, an agent that hasn't stopped, a crew member still running, or the checkout the last merge ran in. Say so in the evidence; don't pick one.
+
+When the fix belongs in a file of the foundry plugin, not of the project, start `<fix location>` with `plugin: `. Plugin-level causes go to the owner as plugin findings and are never written (ADR-0005 section 1). Only project files (`.claude/foundry.json`, prompt-override files) can become section 4 proposals.
+
+## 4. Propose changes
+
+Propose a change only when a count or a section 3 `CAUSE:` line supports it, and say which. Each proposal names a file and a key or path, the current value (read the file; it is the owner's config, not a log), the new value, and why.
 
 - `.claude/foundry.json`: `roles` (a job's agent type, for example a job whose judge rejections or stalls cluster on one model), `deploy`, `writingSkill`, `promptOverrides`. Keep to keys the schema declares (`foundry-config.schema.json`).
 - `.claude/foundry/prompts/<role>.md` for the roles `lead`, `judge`, `cynic`, `writer`, `devops`, `architect`: a line a role keeps missing, and the `promptOverrides` entry that points to the file. A prompt file adds to the role's prompt; it never replaces it.
 
 If the counts support nothing, say so and stop. Don't invent changes.
 
-## 4. Write only what the owner approves
+## 5. Write only what the owner approves
 
 Show the proposals as a list. Write only the ones the owner approves, keep every key and value already in the file, and don't edit anything else. Then show what changed.
 
