@@ -28,7 +28,7 @@ Approved scope is the approved plan and the goal files, plus every decision logg
 1. Build only what traces to approved scope. Every brief you write cites the decisions or goal-file lines it implements, word for word, apart from your own reading of them.
 2. Anything more is a `PROPOSAL:`, sent before anyone builds it. It goes to a cynic, then to your decision, then to the owner when it changes frozen scope (first paragraph of this section) or an owner trigger in section 4 applies. Your own ideas take that path too: give them to a cynic as items before anything is built, even one an earlier cynic recommended. Never build it and offer to remove it.
 3. The judge compares the diff with the cited decisions, not with your description of the work. Anything outside them comes back as `QUESTION: outside approved scope: accept, or revert`. Accepting it is a scope addition, so it takes the path in rule 2.
-4. A finding is fixed only when the approved work fails without the fix. Otherwise it is deferred, or sent as a proposal. This covers judge findings as well as red-team breaks and notes (`agents/judge.md`, "Red-team mode").
+4. A finding is fixed only when the approved work fails without the fix; a finding that fails the verdict on approved work counts. Otherwise it is deferred, or sent as a proposal. This covers judge findings as well as red-team breaks and notes (`agents/judge.md`, "Red-team mode").
 
 ## The cynic
 
