@@ -170,6 +170,37 @@ export type FoundryEvent =
   | { event: 'tag'; crew: string; agent: string; tag: 'QUESTION' | 'BLOCKED' | 'PROPOSAL' }
   | { event: 'report'; crew: string; agent: string; marker: ReportMarker | null }
   | { event: typeof BUDGET_SPENT_EVENT; crew: string; agent: string }
+  | FetchEvent
+
+// The fetch gate (ADR-0005 s11): every WebFetch and WebSearch call passes this one pure function. It allows every call
+// today; a guardrail added later is a change here and its tests alone.
+export type FetchEvent =
+  | { event: 'fetch'; crew: string; agent: string; tool: 'WebFetch'; url: string }
+  | { event: 'fetch'; crew: string; agent: string; tool: 'WebSearch'; query: string }
+export type FetchVerdict = { kind: 'allow'; line: FetchEvent | null }
+
+// the url as logged: userinfo and fragment dropped, each query value emptied (keys kept, in order); "" when it isn't a url
+function loggedUrl(raw: unknown): string {
+  if (typeof raw !== 'string') return ''
+  try {
+    const url = new URL(raw)
+    url.username = ''
+    url.password = ''
+    url.hash = ''
+    const emptied = new URLSearchParams()
+    for (const key of new URLSearchParams(url.search).keys()) emptied.append(key, '')
+    url.search = emptied.toString()
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+export function fetchVerdict(tool: 'WebFetch' | 'WebSearch', input: { readonly url?: unknown; readonly query?: unknown }, crew: string, agent: string, hasPlan: boolean): FetchVerdict {
+  if (!hasPlan) return { kind: 'allow', line: null }
+  if (tool === 'WebFetch') return { kind: 'allow', line: { event: 'fetch', crew, agent, tool, url: loggedUrl(input.url) } }
+  return { kind: 'allow', line: { event: 'fetch', crew, agent, tool, query: typeof input.query === 'string' ? input.query.slice(0, 200) : '' } }
+}
 
 const MARKERS = ['VERDICT: PASS', 'VERDICT: FAIL', 'REDTEAM', 'CHECKPOINT', 'BLOCKED', 'QUESTION', 'PROPOSAL'] as const
 export type ReportMarker = (typeof MARKERS)[number]
@@ -1776,6 +1807,30 @@ export const register: Register = on => {
     })
     if (stamped === undefined) return next(e)
     return e.tool === 'Write' ? next({ ...e, content: stamped }) : next({ ...e, new_string: stamped })
+  }).catch(failOpen)
+
+  // The fetch gate (ADR-0005 s11): allows every call and logs one line when the session has a plan. The caller and the
+  // plan check each wait at most EVENT_WAIT_MS and count as "main" and "no plan" when they fail or overrun.
+  on('tool.call', { tool: ['WebFetch', 'WebSearch'] }, async ($, e, next) => {
+    const input = e as unknown as { url?: unknown; query?: unknown }
+    const caller = await safely($, 'fetch caller', () =>
+      within($, EVENT_WAIT_MS, async () => {
+        if (e.agentId === undefined) return { crew: 'main', agent: 'main' }
+        const all = (await agentsOf($, state)).all
+        const self = all.find(a => a.id === e.agentId)
+        return { crew: crewOf(e.agentId, all)?.crew ?? 'main', agent: self === undefined ? e.agentId : labelOf(self) }
+      }),
+    )
+    const hasPlan =
+      (await safely($, 'fetch plan check', () =>
+        within($, EVENT_WAIT_MS, async () => {
+          const dir = await rootOf($, state)
+          return dir !== undefined && (await $.fs.exists(planPath(dir)))
+        }),
+      )) === true
+    const verdict = fetchVerdict(e.tool as 'WebFetch' | 'WebSearch', input, caller?.crew ?? 'main', caller?.agent ?? 'main', hasPlan)
+    if (verdict.line !== null) await logEvent($, state, verdict.line)
+    return next(e)
   }).catch(failOpen)
 
   on('classic.SubagentStop', async ($, e, next) => {
