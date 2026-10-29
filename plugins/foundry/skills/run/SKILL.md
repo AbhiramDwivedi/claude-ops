@@ -372,7 +372,7 @@ Before anything leaves the machine, report:
 - each crew's summary, and what merged where;
 - the checks and their results, and each judge's verdict;
 - the decisions you made (from the log), and every cynic overrule with its reason;
-- the items the sweep kept, each with its failure, and how many it dropped. Dropped items stay in `decisions.md`; never list one as work to do, in the report, the PR or anywhere else;
+- the items the sweep kept, each with its failure, and only the number it dropped. Dropped items stay in `decisions.md`; never name or list one, not even for information, in the report, the PR or anywhere else;
 - the high-impact files that changed, for the owner to read. List only those;
 - each agent type the work needed and the session didn't have (section 3). Point the owner to `kit:revise` to add it; foundry never writes agents or skills.
 

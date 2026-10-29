@@ -59,6 +59,7 @@ test('run SKILL.md section 10 starts with the sweep and bans listing dropped ite
   const a = s.indexOf('End-of-run sweep.')
   const b = s.indexOf('Before anything leaves the machine, report:')
   assert.ok(a >= 0 && b >= 0 && a < b, 'producer missing: the sweep paragraph must come before "Before anything leaves the machine, report:"')
-  has(s, 'never list one as work to do', 'run SKILL.md section 10')
+  has(s, 'only the number it dropped', 'run SKILL.md section 10')
+  has(s, 'never name or list one, not even for information', 'run SKILL.md section 10')
   assert.ok(!s.includes('- the deferred items;'), 'producer missing: section 10 still lists "- the deferred items;"')
 })
