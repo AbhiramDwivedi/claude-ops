@@ -94,6 +94,7 @@ No line holds message, prompt or report text (P8). Appends go through one in-mod
 - `judgeFiles` covers the whole dir: every `reports/*/*-judge.md` and `*-judge-<n>.md` (not `.interim.md`), sorted by its first non-empty line (after the BOM and `\r` are stripped, the same line the `report` event's `marker` reads) into `pass` when it starts `VERDICT: PASS`, `fail` when it starts `VERDICT: FAIL`, or `other`. Report files are overwritten by name, so they can't be split by run.
 - `plan` describes `plan.json`, which only the last run's plan survives in. `crews` is the length of its `crews` array; `waves` is the number of distinct `wave` values among the crews (waves 1 and 2 with three crews give 2); `estAgents` is the sum of the crews' `estAgents`; `agentCap` is copied; `status` counts crews per `status` value. It is `"not recorded"` when `plan.json` is absent or isn't JSON. *Retired in 0.7.0, see [ADR-0001](0001-design-phase.md): `agentCap` is copied only when an old `plan.json` has one, and is `"not recorded"` otherwise.*
 - `eventsSkipped` counts lines that aren't JSON or have a `v` other than 1.
+- *Later top-level keys, not in the block above:* `leftovers` (repo ADR-0015, foundry 0.6.0) and, from foundry 0.9.0, `leftoverDetails`: one entry per leftover with its `head`, `dirty`, `inMain` and the `skip` reason self-clean would give. Its shape and rules are in [ADR-0006](0006-leftover-causes.md), section 1. Neither changes a key above.
 
 ### 4. The `foundry:retro` skill
 
