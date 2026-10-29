@@ -53,6 +53,21 @@ for (const lit of [
   test(`judge.md red-team section carries ${JSON.stringify(lit)}`, () => present(lit))
 }
 
+const GIT_DIR = 'git rev-parse --path-format=absolute --git-dir'
+for (const lit of [GIT_DIR, 'git rev-parse --path-format=absolute --git-common-dir', 'git branch --show-current', 'worktree-agent-']) {
+  test(`judge.md red-team section carries ${JSON.stringify(lit)}`, () => present(lit))
+}
+
+test('judge.md red-team section checks the worktree before the first reset', () => {
+  const s = redTeam()
+  const reset = s.indexOf(RESET)
+  for (const lit of [GIT_DIR, 'git branch --show-current']) {
+    const at = s.indexOf(lit)
+    assert.ok(at >= 0, `producer missing: judge.md red-team section has no ${JSON.stringify(lit)}`)
+    assert.ok(reset >= 0 && at < reset, `producer missing: ${JSON.stringify(lit)} does not come before the first ${JSON.stringify(RESET)}`)
+  }
+})
+
 test('judge.md no longer says "git checkout --detach" anywhere', () => {
   assert.ok(JUDGE.length > 0, 'producer missing: judge.md not readable')
   assert.ok(!JUDGE.includes('git checkout --detach'), 'producer missing: judge.md still carries "git checkout --detach"')
