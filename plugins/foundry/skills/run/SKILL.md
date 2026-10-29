@@ -362,6 +362,8 @@ When the run's last crew has merged and any lead's report carried a `## Learned`
 
 ## 10. Report to the owner
 
+First, sweep the end-of-run list. Start a fresh cynic, as in "The cynic", whose brief opens with the line `End-of-run sweep.` and gives every deferred item and every `Deferred` and open-question line from the leads' final reports and the judges' and red teams' reports, each with where it came from, plus the decision log's path. For each item it returns `SWEEP: keep | drop`. Log each as one line, `- HH:MM | sweep <keep|drop>: <item> | <reason> | cynic-<n> | <outcome>`, where `<outcome>` is `followed` or `overruled: <reason>`. Follow it by default; to keep an item the cynic dropped, log why.
+
 Before anything leaves the machine, report:
 
 - the plan: each crew's wave, verdict and status, the `estAgents` total, the ADRs the run wrote, and whether the run started on `approval: "auto"` or the owner's approval;
@@ -370,7 +372,7 @@ Before anything leaves the machine, report:
 - each crew's summary, and what merged where;
 - the checks and their results, and each judge's verdict;
 - the decisions you made (from the log), and every cynic overrule with its reason;
-- the deferred items;
+- the items the sweep kept, each with its failure, and how many it dropped. Dropped items stay in `decisions.md`; never list one as work to do, in the report, the PR or anywhere else;
 - the high-impact files that changed, for the owner to read. List only those;
 - each agent type the work needed and the session didn't have (section 3). Point the owner to `kit:revise` to add it; foundry never writes agents or skills.
 

@@ -8,6 +8,10 @@ Since 0.3.0 an architect agent plans each run against your project's architectur
 
 [docs/architecture.md](docs/architecture.md) covers the internals: who talks to whom, the files on disk, each hook, and how a run recovers from failures. [ADR-0001](docs/adr/0001-design-phase.md) records the 0.3.0 design phase and why it exists. [ADR-0002](docs/adr/0002-kit-manifest-and-config.md) records the 0.4.0 changes to init, the config and ports, and [ADR-0003](docs/adr/0003-event-log-and-retro.md) the event log, the decision-log grammar and the retro. [ADR-0005](docs/adr/0005-growth-model.md) records the 0.8.0 growth model, and [ADR-0006](docs/adr/0006-leftover-causes.md) the 0.9.0 red-team end state, retro's `leftoverDetails` key and its root-cause step.
 
+## What changed in 0.9.2
+
+- **Deferred items that don't matter no longer reach the owner.** Before the end-of-run report a fresh cynic sorts every deferred item and every judge, red-team and lead `Deferred` line into keep or drop. It keeps only an item that names a concrete failure, or a gap the run proved; the report lists those and says how many it dropped. The dropped ones stay in `decisions.md`. In-run recommendations are unchanged: scope requests are still deferred, so nothing extra gets built.
+
 ## What changed in 0.9.1
 
 - **The red team checks it is in its own worktree before it resets.** It confirms that `git rev-parse --path-format=absolute --git-dir` differs from `git rev-parse --path-format=absolute --git-common-dir` and that its branch starts with `worktree-agent-`. If either fails, it runs nothing else and reports `REDTEAM: not run`. The check proves a linked worktree on a `worktree-agent-` branch, which keeps reset and clean out of the main checkout; it does not prove the worktree is the red team's own. Without it, `git reset --hard` and `git clean -fd` would destroy work if the red team were ever started without its own worktree, for example by a lead that left out `isolation: "worktree"` while `foundry:judge` is in worktrees' `noIsolateAgents`.
@@ -178,7 +182,7 @@ Conflicts are always resolved by an agent, never in the main thread. With more t
 
 ## The end-of-run report
 
-Before anything leaves the machine, the foreman reports each crew's summary and what merged where, the checks and every judge's verdict, the decisions it made and every cynic overrule with its reason, and the items deferred to the end. It lists the high-impact files that changed and asks you to read those, and only those.
+Before anything leaves the machine, the foreman reports each crew's summary and what merged where, the checks and every judge's verdict, the decisions it made and every cynic overrule with its reason, and the items the end-of-run sweep kept (a cynic drops the rest). It lists the high-impact files that changed and asks you to read those, and only those.
 
 ## What the hooks do
 
