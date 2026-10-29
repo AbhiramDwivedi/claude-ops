@@ -229,17 +229,24 @@ test('call: kind wave refuses when planVerdict refuses (the cap is reached)', ()
 
 // ---- fencedBlock ----
 
-test('fencedBlock: returns the inner lines of a four-backtick block', () => {
-  const msg = 'intro\nplan-file:\n````\nline one\nline two\n````\ntrailer'
-  assert.equal(fencedBlock(msg, 'plan-file:'), 'line one\nline two')
+// Contract (register.ts comment): the inner lines of the first block that opens with a line exactly equal to `open`
+// (the opening fence itself, e.g. '````json plan.json') and ends at the next line that is exactly four backticks.
+
+test('fencedBlock: returns the inner lines of the block opened by the given line', () => {
+  const msg = 'intro\n````json plan.json\n{"a":1}\nx\n````\ntrailer'
+  assert.equal(fencedBlock(msg, '````json plan.json'), '{"a":1}\nx')
 })
 test('fencedBlock: strips CRLF', () => {
-  const msg = 'plan-file:\r\n````\r\na\r\nb\r\n````\r\n'
-  assert.equal(fencedBlock(msg, 'plan-file:'), 'a\nb')
+  const msg = 'intro\r\n````markdown plan.md\r\na\r\nb\r\n````\r\ntrailer'
+  assert.equal(fencedBlock(msg, '````markdown plan.md'), 'a\nb')
 })
 test('fencedBlock: undefined without a closing fence', () => {
-  assert.equal(fencedBlock('plan-file:\n````\na\nb\n', 'plan-file:'), undefined)
+  assert.equal(fencedBlock('````json plan.json\na\nb\n', '````json plan.json'), undefined)
 })
 test('fencedBlock: undefined when the opening line is absent', () => {
-  assert.equal(fencedBlock('nothing here\n````\na\n````', 'plan-file:'), undefined)
+  assert.equal(fencedBlock('nothing here\n````\na\n````', '````json plan.json'), undefined)
+})
+test('fencedBlock: the first matching block wins', () => {
+  const msg = '````json plan.json\nfirst\n````\n````json plan.json\nsecond\n````'
+  assert.equal(fencedBlock(msg, '````json plan.json'), 'first')
 })
