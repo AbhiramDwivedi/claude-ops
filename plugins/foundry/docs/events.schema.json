@@ -8,7 +8,7 @@
   "properties": {
     "v": { "description": "The line's shape. Goes up when a field is renamed or retyped.", "const": 1 },
     "ts": { "description": "The engine clock, as toISOString() gives it (UTC, Z).", "type": "string", "format": "date-time" },
-    "event": { "enum": ["spawn", "stall", "tag", "report", "budget-spent"] },
+    "event": { "enum": ["spawn", "stall", "tag", "report", "budget-spent", "fetch"] },
     "crew": { "description": "The crew's name: its lead's spawn name, as reports/<crew>/ uses it.", "type": "string", "minLength": 1 },
     "agent": { "description": "The agent the event is about, by its spawn name, else its id. For spawn: the new agent (the caller is by); for stall: the idle agent; for tag: the lead; for report: the reporting agent; for budget-spent: the judge whose FAIL report spent the budget.", "type": "string", "minLength": 1 }
   },
@@ -60,6 +60,24 @@
           "v": true, "ts": true, "event": true, "crew": true, "agent": true,
           "tag": { "enum": ["QUESTION", "BLOCKED", "PROPOSAL"] }
         }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "fetch" } } },
+      "then": {
+        "description": "One WebFetch or WebSearch call (foundry ADR-0005 section 11). crew is the caller's crew slug, or main for a caller outside every crew; agent is the agent's name, or main for the main session. url (WebFetch) keeps scheme, host, port and path, with userinfo removed, each query value emptied and the fragment dropped; query (WebSearch) is cut to its first 200 characters. Written only while a plan.json exists.",
+        "additionalProperties": false,
+        "required": ["tool"],
+        "properties": {
+          "v": true, "ts": true, "event": true, "crew": true, "agent": true,
+          "tool": { "enum": ["WebFetch", "WebSearch"] },
+          "url": { "type": "string" },
+          "query": { "type": "string", "maxLength": 200 }
+        },
+        "oneOf": [
+          { "properties": { "tool": { "const": "WebFetch" } }, "required": ["url"], "not": { "required": ["query"] } },
+          { "properties": { "tool": { "const": "WebSearch" } }, "required": ["query"], "not": { "required": ["url"] } }
+        ]
       }
     },
     {
