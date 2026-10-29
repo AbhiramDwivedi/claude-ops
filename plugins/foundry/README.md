@@ -221,12 +221,12 @@ The `foundry:retro` skill runs `python scripts/retro.py <foundry dir>` (Python 3
 
 For the whole folder it also counts the judge files by verdict, and the plan's crews, waves and estimated agents. From 0.6.0 its `leftovers` key lists, with a `count` of agents, the `worktree-agent-<id>` branches and `.claude/worktrees/agent-<id>` folders still present for agents the event log shows were spawned; it is `"not recorded"` when there is no event log, the folder isn't `<git common dir>/foundry/<session>`, or git can't be read. With no such folder it exits 2 with `retro: NO_FOUNDRY_DIR: <path>`.
 
-From 0.8.0 each run's counts also cover how the project grew. Each reads `"not recorded"`, not zero, when its source is absent:
+From 0.8.0 each run's counts also cover how the project grew. Each reads `"not recorded"`, not zero, when its source is absent. `extendPasses` is the one that can honestly be 0:
 
-- `fetches`: the run's `fetch` lines, as `{total, perAgent: {<agent>: n}}`. `"not recorded"` when the log has no `fetch` lines.
-- `extendPasses`: commits in the run's window whose subject starts `docs(arch): extend ` or is `docs(arch): adopt learned items`. It is 0 when git history can be read and no subject matches, and `"not recorded"` only when git can't be read: the folder isn't under `<repo>/.git/foundry`, or git fails.
-- `defaultDecisions`: ADRs in the ADR directory that hold the line `Decided by: default`, the forks no owner has reviewed yet. `"not recorded"` when there is no ADR directory.
-- `openOwnerActions`: `- [ ] ` lines under an `Owner actions` heading in the architecture doc; `- [x] ` lines are done and don't count. `"not recorded"` when there is no architecture doc.
+- `fetches`: the run's `fetch` lines, as `{total, perAgent: {<agent>: n}}`. `"not recorded"` when the folder has no event log, when the run has no parsed start time (so it can't be placed in the log's time windows), or when the log holds no `fetch` lines at all.
+- `extendPasses`: commits from the run's start up to the next run's start whose subject starts `docs(arch): extend ` or is `docs(arch): adopt learned items`. It is 0 when git history can be read and no subject matches. `"not recorded"` when the run has no parsed start time, or git can't be read: the folder isn't `<repo>/.git/foundry/<session>`, or `git log` fails.
+- `defaultDecisions`: `.md` files in the ADR directory that hold the line `Decided by: default`, the forks no owner has reviewed yet. `"not recorded"` when the folder isn't under `<repo>/.git/foundry`, `.claude/foundry.json` can't be read, it has no `adr` key, or the directory it names doesn't exist.
+- `openOwnerActions`: `- [ ] ` lines under an `Owner actions` heading in the architecture doc; `- [x] ` lines are done and don't count. `"not recorded"` when the folder isn't under `<repo>/.git/foundry`, `.claude/foundry.json` can't be read, it has no `architecture` key, or the doc it names doesn't exist.
 
 Retro's JSON is internal to the skill and may change between versions; read the skill's summary, not the field layout.
 
