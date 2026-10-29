@@ -10,7 +10,7 @@ Since 0.3.0 an architect agent plans each run against your project's architectur
 
 ## What changed in 0.9.1
 
-- **The red team checks it is in its own worktree before it resets.** It confirms that `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir` and that its branch starts with `worktree-agent-`. If either fails, it runs nothing else and reports `REDTEAM: not run`. Without the check, `git reset --hard` and `git clean -fd` would destroy work if the red team were ever started without its own worktree, for example by a lead that left out `isolation: "worktree"` while `foundry:judge` is in worktrees' `noIsolateAgents`.
+- **The red team checks it is in its own worktree before it resets.** It confirms that `git rev-parse --path-format=absolute --git-dir` differs from `git rev-parse --path-format=absolute --git-common-dir` and that its branch starts with `worktree-agent-`. If either fails, it runs nothing else and reports `REDTEAM: not run`. The check proves a linked worktree on a `worktree-agent-` branch, which keeps reset and clean out of the main checkout; it does not prove the worktree is the red team's own. Without it, `git reset --hard` and `git clean -fd` would destroy work if the red team were ever started without its own worktree, for example by a lead that left out `isolation: "worktree"` while `foundry:judge` is in worktrees' `noIsolateAgents`.
 
 ## What changed in 0.9.0
 
