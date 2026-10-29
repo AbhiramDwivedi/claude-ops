@@ -26,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -514,6 +515,20 @@ def parse_worktrees(text):
     return out
 
 
+def remove_tree(path):
+    """rmtree that clears the read-only bit git sets on loose objects (Windows), then retries."""
+    def clear_and_retry(func, target, _err):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            pass
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear_and_retry)
+    else:
+        shutil.rmtree(path, onerror=clear_and_retry)
+
+
 def merges_to_same_tree(main, ref, objects):
     """True when merge-tree of HEAD and ref gives HEAD's own tree; objects go to a throwaway dir."""
     code, tree = git_run(main, ["rev-parse", "HEAD^{tree}"])
@@ -524,7 +539,7 @@ def merges_to_same_tree(main, ref, objects):
         code, out = git_run(main, ["merge-tree", "--write-tree", "HEAD", ref], {
             "GIT_OBJECT_DIRECTORY": scratch, "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects})
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        remove_tree(scratch)
     lines = out.splitlines() if code == 0 else []
     return bool(lines) and lines[0].strip() == tree.strip()
 
@@ -579,7 +594,7 @@ def leftover_details(directory, event_files, left):
         ref = head if head is not None and not head.startswith("detached ") else branch
         in_main = None
         if ref is not None:
-            in_main = in_main_by(main, ref, objects, wt is not None and wt["locked"] is None and dirty is not True)
+            in_main = in_main_by(main, ref, objects, (wt is None or wt["locked"] is None) and dirty is not True)
         not_in = "%s is not in the main checkout's HEAD yet" % head
         if wt is None:
             skip = "no longer a registered worktree"
