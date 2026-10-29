@@ -198,7 +198,7 @@ flowchart LR
   git[("Local git<br/>[worktrees, branches, HEADs]")]
   lead["Crew lead<br/>[foundry:lead, in the crew worktree]"]
   fore["Foreman<br/>[main session, foundry:run]"]
-  retro["scripts/retro.py<br/>[foundry script]<br/>leftovers count"]
+  retro["scripts/retro.py<br/>[foundry script]<br/>leftovers, 0.9.0: leftoverDetails"]
 
   cc -->|"Agent call without isolation"| pre
   pre -->|"updatedInput: isolation worktree"| cc
@@ -210,11 +210,11 @@ flowchart LR
   sweep -->|"read: finished"| meta
   sweep -->|"retire, prune active"| slots
   sweep -->|"worktree list, is-ancestor, merge-tree, cherry, worktree remove, branch -d or -D"| git
-  retro -->|"reads branches and folders"| git
+  retro -->|"reads branches and folders; 0.9.0: worktree list, status, is-ancestor, merge-tree, cherry"| git
 ```
 
 *worktrees 0.8.0's cleanup: who creates an agent worktree, what tells the sweep a merge ran, and what it reads and removes.*
-Traces to: `plugins/worktrees/hooks/register.ts` (`classic.PreToolUse` at 1298, `withWorktree` at 105, `classic.WorktreeCreate` at 1323 with `markActive` at 1350, `classic.PostToolUse` at 1456, `selfClean` at 966, `mergesToSameTree` at 933); ADR-0015 items 1, 2, 4, 5, 11 and 12 for the project dir, the meta read, the cherry fallback and the merges; `plugins/foundry/skills/run/SKILL.md:296` for the foreman's `--ff-only`; retro's `leftovers` key is foundry-retro's wave-1 work under ADR-0015.
+Traces to: `plugins/worktrees/hooks/register.ts` (`classic.PreToolUse` at 1684, `withWorktree` at 105, `classic.WorktreeCreate` at 1754 with `markActive` at 1767, `classic.PostToolUse` at 1899, `selfClean` at 1244, `mergesToSameTree` at 1206); ADR-0015 items 1, 2, 4, 5, 11 and 12 for the project dir, the meta read, the cherry fallback and the merges; `plugins/foundry/skills/run/SKILL.md:296` for the foreman's `--ff-only`; retro's `leftovers` key is foundry-retro's wave-1 work under ADR-0015.
 
 ```mermaid
 sequenceDiagram
@@ -238,7 +238,7 @@ sequenceDiagram
 ```
 
 *One crew's cleanup in run 4: the lead's member merge and the foreman's fast-forward each trigger a sweep, and retro then counts no leftovers.*
-Traces to: `classic.PostToolUse` (`register.ts:1456`) scheduling `sweep` (`register.ts:1027`) and `selfClean` (`register.ts:966`, its ancestry test at 987 and `git branch -d` at 1014); the merged-into refs and the meta retirement are ADR-0015 items 2 and 12; the lead's `--no-ff` merge is `plugins/foundry/docs/architecture.md`, lifecycle step 7; the foreman's `--ff-only` is `plugins/foundry/skills/run/SKILL.md:296`; retro's `leftovers` is pinned by `plugins/foundry/tests/test_contract_leftovers.py`.
+Traces to: `classic.PostToolUse` (`register.ts:1899`) scheduling `sweep` (`register.ts:1386`) and `selfClean` (`register.ts:1244`, its ancestry test at 1262 and `git branch -d` at 1366); the merged-into refs and the meta retirement are ADR-0015 items 2 and 12; the lead's `--no-ff` merge is `plugins/foundry/docs/architecture.md`, lifecycle step 7; the foreman's `--ff-only` is `plugins/foundry/skills/run/SKILL.md:296`; retro's `leftovers` is pinned by `plugins/foundry/tests/test_contract_leftovers.py`.
 
 ### workflow-audit
 
@@ -372,6 +372,12 @@ Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
 - retro's per-run output gains `fetches`, `extendPasses`, `defaultDecisions` and `openOwnerActions`, each `"not recorded"` where its source is absent; its JSON stays internal (P15).
 - The architect and the writer gain `WebFetch` and `WebSearch`; the judge and the cynic stay without web tools. The P9 and P20 amendments above record what the owner accepted.
 
+**0.9.0: why leftovers stayed** (design in [foundry ADR-0006](../plugins/foundry/docs/adr/0006-leftover-causes.md), proposed 2026-10-29 by the `leftover-design` crew; not repo ADR-0006; details in the module doc's "retro's leftover details (0.9.0)"):
+
+- retro gains one more top-level key, `leftoverDetails`; `leftovers` and every other key keep their shape. It is `"not recorded"` whenever `leftovers` is, else an array sorted by `id` with exactly the keys `id`, `branch`, `folder`, `head`, `dirty`, `inMain` and `skip` per entry. `skip` is the reason worktrees' `decideSelfClean` (`plugins/worktrees/hooks/register.ts:734-752`) would give for the checks retro can see, copied without an import (P1, ADR-0001); foundry ADR-0006 records the drift risk.
+- The red team starts with `git reset --hard <sha>` in its own worktree instead of `git checkout --detach <sha>`, cleans the worktree before it reports, and never commits, so the sweep can remove its branch after the crew merges.
+- The retro skill gains a root-cause step: one `CAUSE: <anomaly> | <evidence> | <fix location>` line per leftover, judge fail, stall, overrule or spent budget, read from git, the disk, `decisions.md`, judge verdict and finding lines and the plugin's own files (P24).
+
 ## Seams
 
 A row marked "Extension point" is one its base declares for other plugins to build on (ADR-0012, rule 2): the base owns its schema, and other plugins read it and never edit it. Every other row is a seam two modules share, not an invitation to extend.
@@ -455,6 +461,7 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 - [foundry ADR-0001](../plugins/foundry/docs/adr/0001-design-phase.md): foundry's design phase, principle packs, extend-or-change verdicts and plan file.
 - [foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), accepted 2026-10-27: foundry init builds on kit's manifest; new `foundry.json` keys; ports from worktrees' slots.
 - [foundry ADR-0003](../plugins/foundry/docs/adr/0003-event-log-and-retro.md), accepted 2026-10-27: the event log, the `decisions.md` grammar and `scripts/retro.py`.
+- [foundry ADR-0006](../plugins/foundry/docs/adr/0006-leftover-causes.md), proposed 2026-10-29: retro's `leftoverDetails` key, the red team's reset and clean end state, and the retro skill's root-cause step (foundry 0.9.0).
 
 ## Open questions
 

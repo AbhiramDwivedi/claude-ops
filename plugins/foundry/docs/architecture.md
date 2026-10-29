@@ -12,6 +12,8 @@ Foundry 0.5.0 (designed in foundry run 3, [ADR-0004](adr/0004-scope-repair-and-h
 
 Foundry 0.8.0 ([ADR-0005](adr/0005-growth-model.md), accepted 2026-10-29) grows the project's architecture doc instead of the plugin. The plugin keeps the seven generic packs and ships no domain content. An architect that finds a domain no pack or doc section covers reports it, and an init-mode extend pass writes a domain section into the project's doc, committed on its own. The architect and the writer gain `WebFetch` and `WebSearch`. Every web fetch in the session passes one hook function, `fetchVerdict`, which allows every call today and logs a `fetch` line to `events.jsonl`, so a guardrail added later changes that function alone. The sections marked 0.8.0 are the design; wave 1 of the 0.8.0 run builds them.
 
+Foundry 0.9.0 ([ADR-0006](adr/0006-leftover-causes.md), proposed 2026-10-29 by the `leftover-design` crew) says why each leftover worktree stayed. retro gains one top-level key, `leftoverDetails`, with `leftovers` and every other key unchanged. The red team resets its own branch to the crew head instead of detaching, and leaves its worktree clean. The retro skill gains a root-cause step that writes one `CAUSE:` line per anomaly. Details are in "retro's leftover details (0.9.0)" below.
+
 The container view below shows which part writes and which reads each stored file. Nodes marked 0.4.0 name the version that added them, and are built.
 
 ```mermaid
@@ -559,6 +561,54 @@ Each row is a seam inside foundry that ADR-0005 adds or changes. The contract te
 | The plan-mode `UNCOVERED: ` hand-back | architect | foreman; `routePlanFiles`, which writes nothing for it | ADR-0005 section 4 and its literals table | `tests/contract-fetch.test.ts` (regression guard), `tests/gates.check.ts` |
 | A lead report's optional `## Learned` section | lead | foreman's run-end extend pass; `leadStopPasses`, which neither needs nor refuses it | ADR-0005 section 7 | `tests/contract-fetch.test.ts` (regression guard), `tests/gates.check.ts` |
 | The fetch rule, the literals and the web tools in the prompts | `agents/*.md`, `skills/run/SKILL.md` | every agent and the foreman | ADR-0005 sections 2, 3 and the literals table | `tests/gates.check.ts` |
+
+### retro's leftover details (0.9.0)
+
+Designed in [ADR-0006](adr/0006-leftover-causes.md). retro's top-level keys are now `retro`, `dir`, `split`, `runs`, `judgeFiles`, `plan`, `eventsSkipped`, `eventsOutsideRuns`, `leftovers` and `leftoverDetails`. `leftoverDetails` is `"not recorded"` whenever `leftovers` is (and when `git worktree list --porcelain` fails), else an array sorted by `id`, one entry per agent `leftovers` counts, each with exactly the keys `id`, `branch`, `folder`, `head`, `dirty`, `inMain` and `skip` (null where absent). `skip` is the reason worktrees' `decideSelfClean` would give, checked in its order for the checks retro can see, or `passes every check retro can see`. retro copies those rules from `plugins/worktrees/hooks/register.ts:734-752` without importing them (repo ADR-0001), so they can drift; ADR-0006 section 1 records the source and what retro can't see.
+
+```mermaid
+flowchart LR
+  retro["retro.py<br/>[foundry script: Python]"]
+  events[("events.jsonl<br/>[foundry dir]")]
+  git[("Local git<br/>[refs, worktree list, main checkout HEAD]")]
+  disk[(".claude/worktrees/agent-id<br/>[folders on disk]")]
+  skill["foundry:retro<br/>[skill: skills/retro/SKILL.md]"]
+  sweep["worktrees sweep<br/>[other plugin: decideSelfClean]"]
+  retro -->|"reads spawn agentIds"| events
+  retro -->|"for-each-ref, worktree list, status, is-ancestor, merge-tree (quarantined), cherry, branch --show-current"| git
+  retro -->|"isdir"| disk
+  retro -->|"JSON: leftovers, leftoverDetails"| skill
+  sweep -.->|"rules copied by hand, never imported"| retro
+```
+
+*Where `leftoverDetails` comes from: git and the disk only; the dashed edge is the copied rule set, not a call.*
+Traces to: `plugins/foundry/scripts/retro.py:452-472` (`leftovers`, which `leftoverDetails` shares its ids and "not recorded" rules with), `:410-419` (`git_out`, `GIT_OPTIONAL_LOCKS=0`); `plugins/worktrees/hooks/register.ts:734-752` (`decideSelfClean`), `:1261-1272` (`inMainBy`), `:1324` (the detached drop); ADR-0006 section 1.
+
+```mermaid
+sequenceDiagram
+  participant S as foundry:retro skill
+  participant R as retro.py
+  participant G as Local git
+  participant J as reports/*/*-judge*.md
+  S->>R: python retro.py <foundry dir>
+  R->>G: worktree list --porcelain; status; is-ancestor / merge-tree / cherry; branch --show-current
+  R-->>S: leftoverDetails [{id, branch, folder, head, dirty, inMain, skip}]
+  S->>J: VERDICT: and finding lines only (P24)
+  S->>G: at most 3 reads per anomaly
+  S-->>S: CAUSE: <anomaly> | <evidence> | <fix location>
+```
+
+*The root-cause step: one `CAUSE:` line per anomaly, from git, the disk, `decisions.md`, judge verdict and finding lines and the plugin's own files.*
+Traces to: ADR-0006 section 3; `plugins/foundry/skills/retro/SKILL.md` (sections 2 to 4, after wave 1).
+
+The red team's first step becomes `git reset --hard <sha>` in its own worktree (no longer `git checkout --detach <sha>`), and before it reports it runs `git reset --hard <sha>` and `git clean -fd` and confirms `git status --porcelain --untracked-files=all` prints nothing. It never commits, even when the worktrees hook tells it to commit; it discards instead (ADR-0006 section 2).
+
+| Seam | Producer | Consumer | Contract | Pinned by |
+| --- | --- | --- | --- | --- |
+| retro's `leftoverDetails` | `scripts/retro.py` | the `foundry:retro` skill's root-cause step; retro's JSON stays internal (P15) | ADR-0006 section 1 | `tests/test_contract_leftover_details.py` |
+| retro's top-level key set | `scripts/retro.py` | the `foundry:retro` skill | `TOP_KEYS` grows by exactly `leftoverDetails` | `tests/test_contract_retro.py`, `tests/test_contract_retro_050.py` |
+| The red team's start and end state | `agents/judge.md`, `agents/lead.md` | the red-team judge; worktrees' sweep | ADR-0006 section 2 and its literals table | `tests/redteam-reset.check.ts` |
+| The root-cause step | `skills/retro/SKILL.md` | the model running `/foundry:retro` | ADR-0006 section 3 | `tests/retro-cause.check.ts` |
 
 ### Heartbeat and stalls
 

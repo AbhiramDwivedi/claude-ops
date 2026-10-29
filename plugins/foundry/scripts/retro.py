@@ -8,8 +8,12 @@ nothing; prints one JSON object on stdout and exits 0. A missing dir exits 2 wit
 "retro: NO_FOUNDRY_DIR: <path>" on stderr. Python 3.9+, standard library only.
 
 Also reports "leftovers": for a dir shaped <git common dir>/foundry/<session>, the spawned agents whose
-worktree-agent-<id> branch or .claude/worktrees/agent-<id> folder is still there, read from git (rev-parse
-and for-each-ref only) and the disk.
+worktree-agent-<id> branch or .claude/worktrees/agent-<id> folder is still there, read from git and the disk.
+Also "leftoverDetails": one entry per such agent. retro runs only these git commands, all with
+GIT_OPTIONAL_LOCKS=0: rev-parse and for-each-ref, worktree list --porcelain, status --porcelain
+--untracked-files=all, merge-base --is-ancestor, rev-parse HEAD^{tree}, merge-tree --write-tree (under a
+temporary object directory, removed before it returns), cherry and branch --show-current. See foundry
+ADR-0006, section 1.
 
 The script counts and the skill judges. Where the log does not say, the output says "not recorded"
 and never a zero. Message, prompt and report text is never printed (P8): a judge report is read
@@ -21,8 +25,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 
 NR = "not recorded"
 LINE_CAP = 1 << 20  # a line longer than 1 MiB is skipped, never held whole
@@ -419,6 +426,20 @@ def git_out(cwd, *args):
     return r.stdout if r.returncode == 0 else None
 
 
+def git_run(cwd, args, extra_env=None):
+    """Run a read-only git command; return (exit code, stdout), or (None, None) when it cannot run."""
+    env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    if extra_env:
+        env.update(extra_env)
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True,
+                           encoding="utf-8", timeout=GIT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, None
+    return r.returncode, r.stdout
+
+
 def same_path(a, b):
     return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
@@ -470,6 +491,134 @@ def leftovers(directory, event_files):
             folders.append(".claude/worktrees/agent-" + i)
             agents.add(i)
     return {"branches": sorted(branches), "folders": sorted(folders), "count": len(agents)}
+
+
+def parse_worktrees(text):
+    """git worktree list --porcelain -> list of dicts: path, head, branch, locked (None or reason)."""
+    out = []
+    for block in text.replace("\r\n", "\n").split("\n\n"):
+        cur = None
+        for line in block.split("\n"):
+            if line.startswith("worktree "):
+                cur = {"path": line[len("worktree "):], "head": None, "branch": None, "locked": None}
+            elif cur is None:
+                continue
+            elif line.startswith("HEAD "):
+                cur["head"] = line[5:].strip()
+            elif line.startswith("branch "):
+                ref = line[7:].strip()
+                cur["branch"] = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+            elif line == "locked" or line.startswith("locked "):
+                cur["locked"] = line[7:].strip() or "locked"
+        if cur is not None:
+            out.append(cur)
+    return out
+
+
+def remove_tree(path):
+    """rmtree that clears the read-only bit git sets on loose objects (Windows), then retries."""
+    def clear_and_retry(func, target, _err):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            pass
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=clear_and_retry)
+    else:
+        shutil.rmtree(path, onerror=clear_and_retry)
+
+
+def merges_to_same_tree(main, ref, objects):
+    """True when merge-tree of HEAD and ref gives HEAD's own tree; objects go to a throwaway dir."""
+    code, tree = git_run(main, ["rev-parse", "HEAD^{tree}"])
+    if code != 0 or not tree.strip():
+        return False
+    scratch = tempfile.mkdtemp()
+    try:
+        code, out = git_run(main, ["merge-tree", "--write-tree", "HEAD", ref], {
+            "GIT_OBJECT_DIRECTORY": scratch, "GIT_ALTERNATE_OBJECT_DIRECTORIES": objects})
+    finally:
+        remove_tree(scratch)
+    lines = out.splitlines() if code == 0 else []
+    return bool(lines) and lines[0].strip() == tree.strip()
+
+
+def in_main_by(main, ref, objects, allow_cherry):
+    code, _ = git_run(main, ["merge-base", "--is-ancestor", ref, "HEAD"])
+    if code == 0:
+        return "ancestor"
+    if merges_to_same_tree(main, ref, objects):
+        return "tree"
+    if allow_cherry:
+        code, out = git_run(main, ["cherry", "HEAD", ref])
+        lines = out.splitlines() if code == 0 else []
+        if lines and all(ln.startswith("- ") for ln in lines):
+            return "cherry"
+    return None
+
+
+def leftover_details(directory, event_files, left):
+    """One entry per leftover agent (ADR-0006 s1), or NR whenever leftovers is or worktree list fails."""
+    if left == NR:
+        return NR
+    main = repo_root(directory)
+    if main is None:
+        return NR
+    listing = git_out(main, "worktree", "list", "--porcelain")
+    if listing is None:
+        return NR
+    refs = git_out(main, "for-each-ref", "--format=%(refname)", "refs/heads/")
+    if refs is None:
+        return NR
+    have = set(refs.splitlines())
+    worktrees = parse_worktrees(listing)
+    common = git_out(main, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    objects = os.path.join(common.strip(), "objects") if common else os.path.join(main, ".git", "objects")
+    current = (git_out(main, "branch", "--show-current") or "").strip()
+    entries = []
+    for i in sorted(spawned_ids(event_files)):
+        name = "worktree-agent-" + i
+        rel = ".claude/worktrees/agent-" + i
+        path = os.path.join(main, ".claude", "worktrees", "agent-" + i)
+        branch = name if "refs/heads/" + name in have else None
+        folder = rel if os.path.isdir(path) else None
+        if branch is None and folder is None:
+            continue
+        wt = next((w for w in worktrees if same_path(w["path"], path)), None)
+        head = dirty = None
+        if wt is not None:
+            head = wt["branch"] if wt["branch"] else "detached " + (wt["head"] or "")
+            status = git_out(path, "status", "--porcelain", "--untracked-files=all")
+            dirty = status is None or status != ""
+        ref = head if head is not None and not head.startswith("detached ") else branch
+        in_main = None
+        if ref is not None:
+            in_main = in_main_by(main, ref, objects, (wt is None or wt["locked"] is None) and dirty is not True)
+        not_in = "%s is not in the main checkout's HEAD yet" % head
+        if wt is None:
+            skip = "no longer a registered worktree"
+        elif head.startswith("detached "):
+            skip = "not on a worktree-* branch (detached)"
+        elif not head.startswith("worktree-"):
+            skip = "not on a worktree-* branch (%s)" % head
+        elif wt["locked"] is not None:
+            skip = "locked (%s)" % wt["locked"]
+        elif dirty:
+            skip = "uncommitted changes"
+        elif in_main is None:
+            skip = not_in
+        elif not current:
+            skip = "the main checkout is on no branch (detached or unreadable)"
+        elif in_main == "ancestor":
+            skip = "passes every check retro can see"
+        elif current.startswith("worktree-"):
+            skip = not_in
+        else:
+            skip = "passes every check retro can see"
+        entries.append({"id": i, "branch": branch, "folder": folder, "head": head, "dirty": dirty,
+                        "inMain": in_main, "skip": skip})
+    return entries
 
 
 def read_config_path(root, key):
@@ -583,6 +732,7 @@ def retro(directory):
             "defaultDecisions": defaults,
             "openOwnerActions": owner_open,
         })
+    left = leftovers(directory, event_files)
     return {
         "retro": 1,
         "dir": directory,
@@ -592,7 +742,8 @@ def retro(directory):
         "plan": read_plan(directory),
         "eventsSkipped": skipped,
         "eventsOutsideRuns": outside,
-        "leftovers": leftovers(directory, event_files),
+        "leftovers": left,
+        "leftoverDetails": leftover_details(directory, event_files, left),
     }
 
 
