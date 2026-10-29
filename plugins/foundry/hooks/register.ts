@@ -1789,7 +1789,8 @@ export const register: Register = on => {
         const readText = async (path: unknown): Promise<string | undefined> => {
           if (typeof path !== 'string') return undefined
           try {
-            return String(await $.fs.read(path))
+            const text = String(await $.fs.read(path))
+            return text === '' ? undefined : text
           } catch {
             return undefined
           }
