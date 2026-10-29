@@ -47,7 +47,9 @@ Split only along the condition that fails. A task with no check that could fail 
 
 You never re-split the design, and you never start a `foundry:lead` or any other sub-lead to split further. Work that doesn't fit your crew, and any design decision the architecture doc and ADRs don't hold, go to main as a `PROPOSAL:` (section 11). Crews never edit the architecture doc or the ADRs; only a design crew does (below).
 
-Give each member its task: a clear goal, the exact files and line ranges to read, what it must not touch, the check to run and what done means. Run members in parallel only when they edit different files. When two tasks share files, run them one after the other, the second starting from the first one's branch.
+Build only what traces to approved scope: your goal file, the decisions your brief quotes, and the foreman's answers to your messages. When two decisions cover the same item, the latest one stands. Anything more goes to main as a `PROPOSAL:` before anyone builds it (section 11). Never build it and offer to remove it.
+
+Give each member its task: a clear goal, the approved scope it implements (the goal-file lines and decisions, quoted word for word, apart from your own reading of them), the exact files and line ranges to read, what it must not touch, the check to run and what done means. Run members in parallel only when they edit different files. When two tasks share files, run them one after the other, the second starting from the first one's branch.
 
 Every builder's done-check must be one it can't edit: code the crew doesn't own, or tests a test-writer writes before the builder starts. Nobody in the crew but the test-writer edits those tests, you included; tell each builder they are read-only. If a test-writer is needed, run it first and start the builder from its branch.
 
@@ -67,6 +69,7 @@ Every member's brief also carries:
 
 - the "be brave" sentence above, verbatim, for every builder;
 - the proof rule from section 5;
+- build only the approved scope its brief quotes; an idea beyond it goes back to you in its report, never into the diff. You send it to main as a `PROPOSAL:` or drop it;
 - the commit trailers: every commit ends with a `Foundry-Crew: <slug>` line, the original slug even in a successor's crew, and next to it a `Foundry-Role: <role>` line naming the member's role: `test-writer`, `builder`, `writer`, `devops`, `redteam` or `architect`. Both lines go in the message's last block, with any `Co-Authored-By:` line and no blank line between them; otherwise git doesn't parse them as trailers and `git log --format='%(trailers:key=Foundry-Role)'` prints nothing. The judge reads the role to check that no builder touched the done-check tests;
 - commit on its branch before reporting, and report the branch and commit;
 - for a judge (the red team included), writer or devops member, when your goal file's `Prompt overrides:` line names a file for that role, this line with the file's path: "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold." Check the file exists first; a missing one you report to main and skip.
@@ -100,9 +103,9 @@ Before you start a judge, compare your diff with the files your crew owns. Ask m
 
 After the last merge, a green run of the checks and, with a red team, its last report, start a judge as `foundry:judge`, named `<crew>-judge`. Every later judge is a fresh agent, never a resume, and takes the next unused name: `<crew>-judge-2` after `<crew>-judge`, then `<crew>-judge-3`. The judge is never a builder. It runs on Opus at effort `medium`. `high` and `xhigh` only on the owner's explicit call, cited in the goal file or the foreman's brief. Never raise it on your own judgment, and not because the repair budget is spent.
 
-Give the judge the goal-file path, the absolute path of a checkout at the head under review (your crew worktree), the head SHA under review, the crew branch, the base commit (the judge computes the patch id from it) and the diff against it, the high-impact paths, the architecture doc's path and this run's ADRs, the members' proof, and the red team's last report if there was one. Ask it to state that SHA and the patch id under `## Proof checked`. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
+Give the judge the goal-file path, the absolute path of a checkout at the head under review (your crew worktree), the head SHA under review, the crew branch, the base commit (the judge computes the patch id from it) and the diff against it, the high-impact paths, the architecture doc's path and this run's ADRs, the members' proof, and the red team's last report if there was one. Give it the approved scope the crew implements, quoted word for word from the goal file and your brief, as a field of its own, `Approved scope:`, apart from your summary of the work. Ask it to state that SHA and the patch id under `## Proof checked`. Don't give it the builders' reasoning. It re-runs proof itself only when the proof looks suspect or the change touches a high-impact path.
 
-Its report starts with `VERDICT: PASS` or `VERDICT: FAIL` and is saved at `<foundry dir>/reports/<crew>/<crew>-judge.md` (`-judge-2.md`, and so on). You write your final report only after a `VERDICT: PASS`. On a FAIL, send the findings to a builder, or escalate (section 7). Any fix after a red-team break or a judge FAIL needs a fresh judge before the report.
+Its report starts with `VERDICT: PASS` or `VERDICT: FAIL` and is saved at `<foundry dir>/reports/<crew>/<crew>-judge.md` (`-judge-2.md`, and so on). You write your final report only after a `VERDICT: PASS`. On a FAIL, send the findings to a builder, or escalate (section 7). Fix a judge finding only when the approved work fails without the fix, as for red-team breaks; a finding that fails the verdict on approved work counts. Work outside approved scope is reverted, or goes to main as a `PROPOSAL:`; never fix it into shape. Defer every other finding under `## Open questions`, one line each. Any fix after a red-team break or a judge FAIL needs a fresh judge before the report.
 
 The plan's `repairBudget` counts the fresh judges you may start after FAILs. When a judge's FAIL leaves it spent (your judge FAIL count is greater than `repairBudget`), start no more judges. Send main a message that starts with the exact text `BLOCKED: repair budget spent`, then `: <crew>, <n> judge FAILs, repairBudget <b>`, then the last judge's findings, and stop with the same text. Never raise any effort to get past it.
 
@@ -145,7 +148,7 @@ Start every message to main with one of these tags:
 
 - `QUESTION:` a decision you can't make from your brief and goal file, with the options and your recommendation. The foreman decides most questions itself and takes only a significant fork to the owner. Don't guess at product decisions.
 - `BLOCKED:` you can't continue: the environment check failed, the ladder ran out, or something outside your crew stops you. Say what you tried.
-- `PROPOSAL:` work outside your frozen scope, or a design change your crew needs: work the leaf test says doesn't fit, or a decision the architecture doc and ADRs don't hold. Expect the answer to be no, and carry on with the scope you have. The foreman may take a design proposal up as a design crew of its own.
+- `PROPOSAL:` work beyond approved scope (section 3), yours or a member's, sent before anyone builds it; or a design change your crew needs: work the leaf test says doesn't fit, or a decision the architecture doc and ADRs don't hold. Expect the answer to be no, and carry on with the scope you have. The foreman may take a design proposal up as a design crew of its own.
 
 ```
 SendMessage({ to: "main", summary: "<5-10 words>", message: "QUESTION: <the question>\n<the options, and what you recommend>" })

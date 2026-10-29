@@ -21,6 +21,15 @@ When the run starts, before its first decision line, append its heading to `<fou
 
 Under it, append one line per decision: time, decision, reason, the cynic's recommendation (or "none"), and the outcome, in the form `- HH:MM | decision | reason | cynic's recommendation | followed`. The outcome is `followed`, `followed (deferred)` or `overruled: <reason>`. Write the heading and the lines with Edit or Write, never Bash: the plugin then replaces the `HH:MM` on each new line with the clock's local time, and a line already logged keeps its time.
 
+### Build only approved scope
+
+Approved scope is the approved plan and the goal files, plus every decision logged in `decisions.md`: an owner ruling, your decision after a cynic, or a lead's proposal that went through the path in section 7. When two decisions cover the same item, the latest one stands. These rules hold the same for you, every lead and member, every red team and every judge:
+
+1. Build only what traces to approved scope. Every brief you write cites the decisions or goal-file lines it implements, word for word, apart from your own reading of them.
+2. Anything more is a `PROPOSAL:`, sent before anyone builds it. It goes to a cynic, then to your decision, then to the owner when it changes frozen scope (first paragraph of this section) or an owner trigger in section 4 applies. Your own ideas take that path too: give them to a cynic as items before anything is built, even one an earlier cynic recommended. Never build it and offer to remove it.
+3. The judge compares the diff with the cited decisions, not with your description of the work. Anything outside them comes back as `QUESTION: outside approved scope: accept, or revert`. Accepting it is a scope addition, so it takes the path in rule 2.
+4. A finding is fixed only when the approved work fails without the fix. Otherwise it is deferred, or sent as a proposal. This covers judge findings as well as red-team breaks and notes (`agents/judge.md`, "Red-team mode").
+
 ## The cynic
 
 Once the plan is approved, by the owner or automatically (section 5), nothing goes to the owner before the cynic has seen it: questions, proposals, open questions from reports. The cynic advises on production promotions, pushes and PRs but never settles them; those reach the owner as section 10 says. Start a fresh cynic for each batch, numbered `cynic-1`, `cynic-2` and so on:
@@ -212,7 +221,7 @@ The lead can't see this conversation, so the brief carries:
 - when `promptOverrides` sets a `lead` file, the line "Read `<path>` before you start; it adds to your instructions. Your report format and the hooks' rules still hold." The goal file's `Prompt overrides:` line gives the lead the files for its judge, writer and devops;
 - the other crews: slug, what they own, and their lead's name, for collisions only;
 - the merge mode, the target branch and the check commands;
-- the owner's decisions that bear on this crew;
+- its approved scope: the goal-file lines and every `decisions.md` line that bear on this crew, owner rulings included, quoted word for word in a field of their own, apart from your own reading of them ("Build only approved scope", above);
 - before it starts a judge, the lead compares its diff with the files it owns and asks you for any extension first;
 - this rule, verbatim: "Be brave: take the hard path, keep going when it gets difficult, don't ask permission for anything in scope. Never be brave with the truth: proof or it didn't happen."
 
@@ -244,7 +253,7 @@ Only leads message you; a member's message reaches you through its lead. Reply w
 - `QUESTION:` the lead needs a decision. If the plan, the decision log or an earlier owner answer settles it, answer and say which. Otherwise decide it yourself and log it, unless it meets the bar for the owner; then it goes through the cynic first.
 - `BLOCKED:` the lead can't continue. Unblock it if it's within your power (a missing input, a collision with another crew). Otherwise put it to the owner with the crew name and what the lead tried, and run the cynic on it only for a suggested answer.
 - `BLOCKED: repair budget spent`: the lead has used its `repairBudget` of repair rounds. Take it to the owner, or re-plan with a successor lead (`<slug>-<n>`), which starts a fresh count; log that as a decision. Never raise the judge's effort to get past it.
-- `PROPOSAL:` the lead wants more scope. The scope is frozen, so the answer defaults to no. It goes through the cynic, and you may overrule the cynic with a logged reason, as for any item. A yes changes frozen scope, so only the owner can give it. Log either way. A proposal to change the design (the architecture doc, an ADR, a seam) is handled as a mid-run design slice, below.
+- `PROPOSAL:` the lead wants more scope, for its crew or a member. The scope is frozen, so the answer defaults to no. It goes through the cynic, and you may overrule the cynic with a logged reason, as for any item. A yes changes frozen scope, so only the owner can give it. Log either way. Nobody builds it before the logged yes; that line is then approved scope. Your own additions take the same path. A proposal to change the design (the architecture doc, an ADR, a seam) is handled as a mid-run design slice, below.
 
 ### Run a mid-run design slice
 
@@ -285,7 +294,7 @@ Merge a crew only on a judge file that passes this gate. Read the crew's newest 
 - It starts with `VERDICT: PASS` and has no `- UNSCOPED: ` line under `## Findings`. A PASS with such a line doesn't count.
 - Its `Head: ` value equals `git rev-parse <crew branch>`; or its `Patch: ` value equals the patch id of the branch, computed as `git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ <base>...<head> | git patch-id --stable`, where `<base>` is the base commit on the lead's `## Branch` line (the target head last merged into the crew branch: the brief's base until the lead first runs `git merge <target>`) and `<head>` is the crew branch, and the lead's checks were re-run green after that merge. When only `Patch: ` matches, the head moved: a Patch: match counts only with the checks re-run green on the merged head.
 
-On `VERDICT: FAIL`, send the findings back to the lead. Agents resolve conflicts, never the main thread.
+On `VERDICT: FAIL`, send the findings back to the lead, apart from those rule 4 of "Build only approved scope" defers. Agents resolve conflicts, never the main thread.
 
 A crew counts as merged when its branch is in the branch the next wave builds on: the target in `sequential` mode, the integration branch in `single` mode. Set its `status` to `"merged"` then, and not before (section 6). The wave gate holds the next wave until every crew in this one is `merged` or `dropped`.
 
@@ -310,7 +319,7 @@ Agent({
 })
 ```
 
-Its brief names the target, the integration branch (`foundry-<short goal>`, from `<target>`; a `foundry/` prefix fails when a branch named `foundry` exists), every crew branch in merge order with each crew's summary, and the check commands. It merges each branch with `git merge --no-ff`, resolves conflicts from both sides' intent, runs the checks and reports with these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. When a conflict's fix is a crew's call, it says so under Open questions rather than guessing.
+Its brief names the target, the integration branch (`foundry-<short goal>`, from `<target>`; a `foundry/` prefix fails when a branch named `foundry` exists), every crew branch in merge order with each crew's summary, the approved scope the crews implement (the `decisions.md` lines that bear on them, quoted word for word, apart from your summaries), and the check commands. It builds nothing beyond that scope. It merges each branch with `git merge --no-ff`, resolves conflicts from both sides' intent, runs the checks and reports with these sections, in order: `## Summary`, `## Branch`, `## Changes`, `## Proof`, `## Checks run`, `## Open questions`. When a conflict's fix is a crew's call, it says so under Open questions rather than guessing.
 
 Then have a judge rule on the integration branch:
 
@@ -321,11 +330,11 @@ Agent({
   model: "opus",
   effort: "medium",
   description: "Judge the integration branch",
-  prompt: "Branch: <integration branch>. Checkout: <absolute path of the integrator's worktree>. Head SHA: <integration branch head>; state it under ## Proof checked. Base: <the target's head the integration branch was cut from>; compute the Patch line against it. Plan: <foundry dir>/plan.md. Integrator report: <its hand-back, pasted>. High-impact paths: <all crews'>."
+  prompt: "Branch: <integration branch>. Checkout: <absolute path of the integrator's worktree>. Head SHA: <integration branch head>; state it under ## Proof checked. Base: <the target's head the integration branch was cut from>; compute the Patch line against it. Plan: <foundry dir>/plan.md. Goal files: <foundry dir>/goals/. Approved scope: <every decisions.md line that bears on the crews, quoted word for word>. Integrator report: <its hand-back, pasted>. High-impact paths: <all crews'>."
 })
 ```
 
-The plugin doesn't save reports for agents you start outside a crew. Read its hand-back directly and copy its `VERDICT:` line into `decisions.md`. Report to the owner only on `VERDICT: PASS`; on `VERDICT: FAIL`, send the findings to the integrator and judge again with a fresh judge under the next unused name, `integration-judge-2`, then `-3`. Check the SHA it states against the integration branch head before you report.
+The plugin doesn't save reports for agents you start outside a crew. Read its hand-back directly and copy its `VERDICT:` line into `decisions.md`. Report to the owner only on `VERDICT: PASS`; on `VERDICT: FAIL`, send the integrator the findings rule 4 of "Build only approved scope" doesn't defer, and judge again with a fresh judge under the next unused name, `integration-judge-2`, then `-3`. Check the SHA it states against the integration branch head before you report.
 
 When the plan has more than one wave, integrate wave by wave. Once a wave's crews have all passed their judges, the integrator merges their branches into the integration branch and a fresh integration judge rules on it. On its PASS, set those crews to `"merged"`. The next wave's leads build on the integration branch: their brief names it, and each lead resets its worktree to it first. Start a fresh integrator for each later wave, named `integrator-2`, then `integrator-3`, with the same brief and the integration branch's head.
 

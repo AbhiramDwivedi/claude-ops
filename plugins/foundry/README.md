@@ -11,6 +11,7 @@ Since 0.3.0 an architect agent plans each run against your project's architectur
 ## What changed in 0.7.1
 
 - **Red teams aim at what matters.** In run 4 one crew ran six red-team rounds: every finding reproduced, but only against mocked git, most were in code the previous fix had just added, and none caught the two failures that hit real use. A red team now asks first where the work, used the way its real callers use it, loses data or work, and where following the ADR as written would. It proves breaks against the real tool, not mocks, and sorts what it finds into breaks (reachable, reproduced, breaching the goal or an ADR), which get fixed, and notes, which are deferred. Notes go in the lead's report under Open questions, and a question about the ADR goes to the foreman.
+- **Everyone builds only approved scope.** A foreman widened an owner ruling with a change an earlier cynic had recommended, briefed the judge with it as part of the intent, then fixed the judge's findings about it. Approved scope is now the plan, the goal files and every decision in `decisions.md`, the latest standing. Every brief quotes the decisions it implements, word for word. Anything more is a `PROPOSAL:` before anyone builds it, the foreman's own ideas included. The judge checks the diff against the quoted decisions and asks `QUESTION: outside approved scope: accept, or revert`, and a finding is fixed only when the approved work fails without the fix.
 
 ## What changed in 0.7.0
 

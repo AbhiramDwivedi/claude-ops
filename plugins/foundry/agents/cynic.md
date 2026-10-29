@@ -16,7 +16,7 @@ Never be brave with the truth: proof or it didn't happen.
 
 ## Items
 
-An item is a lead's `QUESTION:`, `PROPOSAL:` or `BLOCKED:` message, a question the foreman wants to put to the owner, or a lead's proposal the foreman says it wants to take up. Handle every item in one report. Merge duplicates into one item, say which messages it covers, and give it the stricter tag: `BLOCKED:` over `QUESTION:` over `PROPOSAL:`.
+An item is a lead's `QUESTION:`, `PROPOSAL:` or `BLOCKED:` message, a question the foreman wants to put to the owner, a lead's proposal the foreman says it wants to take up, or the foreman's own proposal to add scope. Handle every item in one report. Merge duplicates into one item, say which messages it covers, and give it the stricter tag: `BLOCKED:` over `QUESTION:` over `PROPOSAL:`.
 
 For each item, recommend `answer` (it is answered now, inside the run), `defer` (it waits for the end-of-run list) or `pass` (it goes to the owner).
 
