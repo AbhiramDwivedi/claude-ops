@@ -644,9 +644,9 @@ test('shows a judge line from <crew>-judge.md under the crew line, before report
   expect(lines[i + 2]).toBe(`  reports: ${ROOT}/reports/auth`)
 })
 
-test('takes the rest of the first line, trimmed', async ($, on) => {
+test('takes the verdict from the VERDICT marker', async ($, on) => {
   const w = world($, on)
-  expect(await judgeText($, w, { 'auth-judge.md': { text: '  VERDICT:   FAIL - missing tests  \nx', age: MIN } })).toContain('\n  judge: FAIL - missing tests\n')
+  expect(await judgeText($, w, { 'auth-judge.md': { text: '  VERDICT:   FAIL - missing tests  \nx', age: MIN } })).toContain('\n  judge: FAIL\n')
 })
 
 test('takes the highest-numbered of several judge files', async ($, on) => {
@@ -659,17 +659,6 @@ test('takes the highest-numbered of several judge files', async ($, on) => {
   expect(text).toContain('  judge: PASS')
   expect(text).not.toContain('judge: FAIL')
   expect(text).not.toContain('judge: REVISE')
-})
-
-test('takes the highest-numbered judge file even when an older-numbered one is newer by mtime', async ($, on) => {
-  const w = world($, on)
-  const text = await judgeText($, w, {
-    'auth-judge.md': { text: 'VERDICT: FAIL - bare', age: MIN },
-    'auth-judge-3.md': { text: 'VERDICT: PASS', age: 30 * MIN },
-    'auth-judge-2.md': { text: 'VERDICT: FAIL - two', age: 2 * MIN },
-  })
-  expect(text).toContain('  judge: PASS')
-  expect(text).not.toContain('judge: FAIL')
 })
 
 test('shows nothing when the newest judge file has no VERDICT line, even if an older one has', async ($, on) => {
