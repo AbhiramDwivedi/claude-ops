@@ -558,11 +558,15 @@ test('run-model: model and effort come from each agent frontmatter, not a consta
 
 test('run-model (source check): the per-case timeout is CASE_TIMEOUT_MS = 600000 and reaches the case spawn', () => {
   // A source check because a live 600-second test is too slow and no override of the timeout is allowed.
-  const text = readFileSync(RUN_MODEL, 'utf8')
-  assert.ok(text.includes('CASE_TIMEOUT_MS = 600000'), 'CASE_TIMEOUT_MS = 600000')
-  const chunk = text.split('spawnSync(').slice(1).find((c) => c.includes('input: c.input'))
-  assert.ok(chunk, 'no spawnSync call passing the case input')
-  assert.ok(chunk.includes('timeout: CASE_TIMEOUT_MS'), 'timeout: CASE_TIMEOUT_MS missing from the case spawn')
+  const text = stripComments(readFileSync(RUN_MODEL, 'utf8'))
+  assert.equal(text.split('const CASE_TIMEOUT_MS = 600000').length - 1, 1, 'const CASE_TIMEOUT_MS = 600000 must be declared exactly once')
+  // The function that spawns the model: a top-level function whose body calls spawn( and writes the case input to stdin.
+  const fn = text.split(/\n(?=(?:async )?function )/).find((f) => /\bspawn\(/.test(f) && /stdin\.(end|write)\(/.test(f))
+  assert.ok(fn, 'no function spawns the model and writes to its stdin')
+  assert.ok(/setTimeout\(\s*\(\)\s*=>\s*\{[^}]*\}\s*,\s*CASE_TIMEOUT_MS\s*\)/.test(fn), 'setTimeout(..., CASE_TIMEOUT_MS) with no arithmetic must guard the case child')
+  assert.ok(/setTimeout\(\s*\(\)\s*=>\s*\{[^}]*'SIGKILL'[^}]*\}\s*,\s*CASE_TIMEOUT_MS\s*\)/.test(fn), 'the CASE_TIMEOUT_MS timer must kill the child with SIGKILL')
+  assert.ok(/stdin\.end\(\s*input\s*\)/.test(fn), 'the case input must be written to the child stdin')
+  assert.ok(/runCase\([^)]*\bc\.input\s*\)/.test(text), 'the call site must pass c.input to runCase')
 })
 
 test('run-model: runs claude in a throwaway worktree even when started from a subdirectory', () => {
