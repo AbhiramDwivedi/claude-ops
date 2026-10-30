@@ -355,9 +355,9 @@ test('v03 /foundry: an owner run with approvedAt null says it waits for the owne
   const w = world($, on)
   const base = await status($)
   setPlan(w, [crew('a', 0), crew('b', 1)], { approval: 'owner', approvedAt: null })
-  expectPlanAbove(await status($), ['Plan (2 crews, approval owner, waiting for the owner):', '- wave 0: a, change, planned', '- wave 1: b, change, planned'], base)
+  expectPlanAbove(await status($), ['Plan (2 crews, approval owner, waiting for the owner):', "- wave 0: a, change, planned, waits for the owner's approval of the plan", "- wave 1: b, change, planned, waits for the owner's approval of the plan"], base)
   setPlan(w, [crew('a', 0), crew('b', 1)], { approval: 'owner', approvedAt: '2026-10-26T10:00:00Z' })
-  expectPlanAbove(await status($), ['Plan (2 crews, approval owner):', '- wave 0: a, change, planned', '- wave 1: b, change, planned'], base)
+  expectPlanAbove(await status($), ['Plan (2 crews, approval owner):', '- wave 0: a, change, planned, ready to start', '- wave 1: b, change, planned, waits for wave 0 to merge: a'], base)
 })
 
 test('v03 /foundry: a missing crew field prints as ?', async ($, on) => {
@@ -373,7 +373,7 @@ test('v03 /foundry: plan lines sit above the no-crews line too', async ($, on) =
   const base = await status($)
   expect(base.startsWith('No foundry crews in this session.')).toBe(true)
   setPlan(w, [crew('a', 0)])
-  expectPlanAbove(await status($), ['Plan (1 crews, approval auto):', '- wave 0: a, change, planned'], base)
+  expectPlanAbove(await status($), ['Plan (1 crews, approval auto):', '- wave 0: a, change, planned, ready to start'], base)
 })
 
 test('v03 /foundry: no plan, or one it cannot read, leaves the output byte-identical to 0.2.1', async ($, on) => {
@@ -461,7 +461,7 @@ test('v03 amendment 1: a BOM-prefixed plan still gates and still shows on /found
   const base = await status($)
   w.files.set(PLAN, `﻿${planText([crew('a', 0)], { approval: 'owner', approvedAt: null })}`)
   await expectRefused(w, 'a', RUN)
-  expectPlanAbove(await status($), ['Plan (1 crews, approval owner, waiting for the owner):', '- wave 0: a, change, planned'], base)
+  expectPlanAbove(await status($), ['Plan (1 crews, approval owner, waiting for the owner):', "- wave 0: a, change, planned, waits for the owner's approval of the plan"], base)
 })
 
 test('v03 amendment 1: a duplicate of the started slug does not count toward the cap', async ($, on) => {
