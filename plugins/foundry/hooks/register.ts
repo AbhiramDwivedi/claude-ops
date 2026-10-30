@@ -589,7 +589,7 @@ export function workflowRoleVerdict(roles: unknown): { deny: string } | undefine
 // ADR-0009 Decision 6. Whether a Workflow call may start while a plan is on. Pure: the handler reads the files.
 export function workflowCallVerdict(
   plan: Plan | undefined,
-  input: { script?: unknown; scriptPath?: unknown; scriptText?: unknown; args?: unknown; pluginDir: string; pluginScriptTexts: readonly string[] },
+  input: { script?: unknown; scriptPath?: unknown; scriptText?: unknown; args?: unknown; pluginDir: string; pluginScriptTexts: readonly (string | undefined)[] },
 ): { deny: string } | undefined {
   if (!planAtLeastV2(plan)) return undefined
   const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
@@ -598,8 +598,11 @@ export function workflowCallVerdict(
   const dir = flat(input.pluginDir)
   const path = typeof input.scriptPath === 'string' ? flat(input.scriptPath) : undefined
   const text = typeof input.scriptText === 'string' ? input.scriptText : undefined
+  // pluginScriptTexts is positional: index 0 is plan.js's text, index 1 is wave.js's. An undefined entry matches nothing.
+  const isPlanJs = (path !== undefined && path === `${dir}/workflows/plan.js`) || (text !== undefined && input.pluginScriptTexts[0] !== undefined && text === input.pluginScriptTexts[0])
+  const isWaveJs = (path !== undefined && path === `${dir}/workflows/wave.js`) || (text !== undefined && input.pluginScriptTexts[1] !== undefined && text === input.pluginScriptTexts[1])
   const byPath = path !== undefined && (path === `${dir}/workflows/plan.js` || path === `${dir}/workflows/wave.js`)
-  const byText = text !== undefined && input.pluginScriptTexts.includes(text)
+  const byText = text !== undefined && input.pluginScriptTexts.some((t) => t !== undefined && t === text)
   if (!byPath && !byText) {
     if (input.scriptPath !== undefined && text === undefined) return refuse(ONLY_FROM_PLUGIN)
     if (text === undefined || text.includes('foundry:')) return refuse(ONLY_FROM_PLUGIN)
@@ -610,6 +613,10 @@ export function workflowCallVerdict(
   if (!isRecord(foundry)) return refuse('a foundry Workflow needs args.foundry')
   const roles = workflowRoleVerdict(foundry.roles)
   if (roles !== undefined) return roles
+  if (isPlanJs && isWaveJs) return refuse('the script matches both plan.js and wave.js')
+  const shown = typeof foundry.kind === 'string' ? `"${foundry.kind}"` : JSON.stringify(foundry.kind)
+  if (isPlanJs && foundry.kind !== 'plan') return refuse(`plan.js runs only with kind "plan", not ${shown}`)
+  if (isWaveJs && foundry.kind !== 'wave') return refuse(`wave.js runs only with kind "wave", not ${shown}`)
   if (foundry.kind === 'plan') return plan.approvedAt ? refuse('the plan is already approved; a plan Workflow would replace it') : undefined
   if (foundry.kind !== 'wave') return refuse('a foundry Workflow runs only with kind "plan" or "wave"')
   const crews = foundry.crews
@@ -1798,7 +1805,7 @@ export const register: Register = on => {
           }
         }
         const pluginDir = pluginDirOf()
-        const texts = pluginDir === undefined ? [] : await Promise.all([`${pluginDir}/workflows/plan.js`, `${pluginDir}/workflows/wave.js`].map(readText))
+        const texts = pluginDir === undefined ? [undefined, undefined] : await Promise.all([`${pluginDir}/workflows/plan.js`, `${pluginDir}/workflows/wave.js`].map(readText))
         const script: unknown = e.script
         const scriptPath: unknown = e.scriptPath
         const verdict = workflowCallVerdict(plan, {
@@ -1807,7 +1814,7 @@ export const register: Register = on => {
           scriptText: typeof script === 'string' ? script : await readText(scriptPath),
           args: e.args,
           pluginDir: pluginDir ?? ' ',
-          pluginScriptTexts: texts.filter((t): t is string => t !== undefined),
+          pluginScriptTexts: texts, // positional: [plan.js text, wave.js text]
         })
         if (verdict !== undefined) await logRule($, `Workflow gate refused a call: ${verdict.deny}`)
         return verdict
