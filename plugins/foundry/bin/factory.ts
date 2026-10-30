@@ -389,7 +389,7 @@ function cmdPlanCheck(f: Flags): Obj {
       }
     }
   }
-  const hasWave0 = crews.some((c) => c.wave === 0)
+  const hasWave0 = crews.some((c) => c.wave === 0 && goalOf(c) === RUN_GOAL)
   if ((plan.approval === 'owner') !== hasWave0) errors.push(`plan: approval must be owner exactly when a wave-0 crew exists (approval ${JSON.stringify(plan.approval)}, wave-0 crews ${hasWave0 ? 'exist' : 'do not'})`)
   for (const c of crews) {
     const s = name(c)
@@ -403,7 +403,7 @@ function cmdPlanCheck(f: Flags): Obj {
   }
   for (let i = 0; i < crews.length; i++) {
     for (let j = i + 1; j < crews.length; j++) {
-      if (crews[i].wave !== crews[j].wave) continue
+      if (crews[i].wave !== crews[j].wave || goalOf(crews[i]) !== goalOf(crews[j])) continue
       for (const ga of Array.isArray(crews[i].owns) ? crews[i].owns : []) {
         for (const gb of Array.isArray(crews[j].owns) ? crews[j].owns : []) {
           if (typeof ga === 'string' && typeof gb === 'string' && globsOverlap(ga, gb)) errors.push(`${name(crews[i])}: owns ${ga} overlaps ${name(crews[j])}'s ${gb} in wave ${crews[i].wave}`)
