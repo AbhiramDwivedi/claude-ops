@@ -1,6 +1,7 @@
 // foundry ADR-0007 section 7: the owner's optional model-eval runner. Never a gate, outside every suite.
 // Run: node plugins/foundry/evals/run-model.ts   (CLAUDE=<path> picks the binary, else `claude`)
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, statSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -61,9 +62,31 @@ function dropWorktree(wt: string): void {
   run('worktree', 'prune')
 }
 process.on('exit', () => { if (live) dropWorktree(live) })
-// An interrupt removes the live worktree, prints no score line and exits 130. Handlers only run once the loop turns,
-// so the case loop yields after each spawnSync; a child that shares the console dies from the same break.
-for (const sig of ['SIGINT', 'SIGBREAK', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () => process.exit(130))
+// An interrupt kills the live model child, gives it 1.5 s to let go of its cwd, then the exit hook above removes the
+// worktree. It prints no score line and exits 130. The case runs async so these handlers can fire mid-case.
+let child: ChildProcess | undefined
+let stopping = false
+for (const sig of ['SIGINT', 'SIGBREAK', 'SIGTERM', 'SIGHUP'] as const) {
+  process.on(sig, () => { stopping = true; child?.kill('SIGKILL'); setTimeout(() => process.exit(130), 1500) })
+}
+
+type Run = { status: number | null; stdout: string; stderr: string; error?: Error & { code?: string }; timedOut: boolean }
+function runCase(cmd: string, argv: string[], cwd: string, input: string): Promise<Run> {
+  return new Promise((done) => {
+    const ch = spawn(cmd, argv, { cwd, shell: false, windowsHide: true })
+    child = ch
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    ch.stdout.setEncoding('utf8').on('data', (d) => { stdout += d })
+    ch.stderr.setEncoding('utf8').on('data', (d) => { stderr += d })
+    const timer = setTimeout(() => { timedOut = true; ch.kill('SIGKILL') }, CASE_TIMEOUT_MS)
+    ch.on('error', (error) => { clearTimeout(timer); done({ status: null, stdout, stderr, error, timedOut }) })
+    ch.on('close', (status) => { clearTimeout(timer); done({ status, stdout, stderr, timedOut }) })
+    ch.stdin.on('error', () => {})
+    ch.stdin.end(input)
+  })
+}
 
 // Frontmatter sits between the first two --- lines; the body is what follows.
 function agent(role: string): { body: string; model: string; effort: string } {
@@ -135,23 +158,21 @@ for (const c of cases) {
     copied.set(src, `inputs/${name}`)
     return `inputs/${name}` + tail
   })
-  const r = spawnSync(script ? process.execPath : bin, script ? [bin, ...args] : args, {
-    cwd: wt, input: c.input, encoding: 'utf8', shell: false,
-    timeout: CASE_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024,
-  })
-  await new Promise((done) => setImmediate(done))
+  const r = await runCase(script ? process.execPath : bin, script ? [bin, ...args] : args, wt, c.input)
+  if (stopping) await new Promise(() => {}) // the interrupt timer exits; the exit hook removes the worktree
+  child = undefined
   dropWorktree(wt)
   live = ''
-  const err = r.error as (Error & { code?: string }) | undefined
-  const timedOut = err?.code === 'ETIMEDOUT'
+  const err = r.error
+  const timedOut = r.timedOut
   if (err && !timedOut) {
     rmSync(out, { recursive: true, force: true })
     fail(`${c.id}: cannot run ${bin}: ${err.message}`)
   }
-  const report = (r.stdout ?? '').replace(/\r/g, '')
+  const report = r.stdout.replace(/\r/g, '')
   if (!timedOut && r.status !== 0 && report === '') {
     childFailed = true
-    process.stderr.write(r.stderr ?? '')
+    process.stderr.write(r.stderr)
   }
   writeFileSync(join(out, `${c.id}.txt`), report)
   const s = timedOut ? { ok: false, got: undefined } : score(report, c.expected)
