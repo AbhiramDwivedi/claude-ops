@@ -335,6 +335,9 @@ foundry's internals are in its [module doc](../plugins/foundry/docs/architecture
 | eval runner (0.10.0) | `evals/run-model.ts` | `node plugins/foundry/evals/run-model.ts`: runs the golden set through `claude -p` (binary from `CLAUDE`), one case at a time with a per-case timeout, and prints a score. Optional; the owner runs it by hand, and no suite or done-check does |
 | `/foundry` | `hooks/register.ts`, `command.run` | Prints crew status |
 | hooks | `hooks/register.ts` (via `hooks/hooks.json`) | Message rules, model and effort on crew `Agent` calls, plan gates, report capture, lead stop gate, heartbeat and stall wakes, limit-reset wake; (0.8.0) the fetch gate, `fetchVerdict`, on every `WebFetch` and `WebSearch` call; table in the module doc, "Hooks" |
+| `factory.ts` (designed in foundry ADR-0009, not built yet) | `bin/factory.ts` | The workflow factory's CLI: `node <plugin>/bin/factory.ts <command> [flags]`, run by the foreman and, inside the scripts, by the `runner` agent, for the plan checks, crew start, done-check runs, the record step, the session audit and merges on the Workflow path; one-line JSON output per command |
+| workflow scripts (designed in foundry ADR-0009, not built yet) | `workflows/roles.json`, `workflows/plan.js`, `workflows/wave.js` | The roles table (model and effort per role) and the two scripts the foreman passes to the `Workflow` tool: `plan.js` runs the plan-mode architect and the cynic, `wave.js` runs a wave's crews without leads |
+| `foundry:crew-planner` (designed in foundry ADR-0009, not built yet) | `agents/crew-planner.md` | Splits one workflow crew's goal into member tasks for `wave.js`; it can't assign the judge |
 
 `skills/run/SKILL.md` calls `foundry:init` through the Skill tool when the doc is missing (section 0). That is the only skill-to-skill call inside foundry; across plugins, the lead's load of `subagent-limits:split-work` is the only one in the repo.
 
@@ -342,12 +345,19 @@ foundry's internals are in its [module doc](../plugins/foundry/docs/architecture
 
 | File | Written by | Read by |
 | --- | --- | --- |
-| `<repo>/.claude/foundry.json` | `foundry:init` via the architect (keys `architecture`, `adr`); the owner adds `maxParallelCrews`, `merge`, `target` | the run skill and the architect. The hooks don't read it. |
+| `<repo>/.claude/foundry.json` | `foundry:init` via the architect (keys `architecture`, `adr`); the owner adds `maxParallelCrews`, `merge`, `target`. This repo's file has only `architecture` and `adr` today; it gains `"merge": "sequential"` and `"target": "main"` when foundry ADR-0009's `run-procedure` work lands, and from then `factory.ts settings` reads merge mode and target from it (missing `merge` is `sequential`, missing `target` the current branch) and the foreman never asks | the run skill and the architect; (designed in ADR-0009, not built yet) `factory.ts`. The hooks don't read it. |
+| `requirements.md` (designed in foundry ADR-0008, not built yet) | the foreman, with Edit or Write, during the `foundry:interview` skill (`interview/cli.ts` only reads) | the plan-mode architect; where it lives is an open owner decision: ADR-0008 recommends the repo, `<dir of the architecture key>/requirements.md` (`docs/requirements.md` here), against the session's foundry dir |
 | the architecture doc and ADR directory it names | the architect (`init` and `design` modes) | the architect, leads, judges, cynic |
 | `<git common dir>/foundry/<session id>/` | foreman (`decisions.md`, `plan.md`, `goals/`), architect (draft `plan.json`, `plan.md`, until 0.5.1; from 0.6.0 the hooks write them from its hand-back), hooks (`reports/`, `messages*.jsonl`) | foreman, hooks, `/foundry`; layout in the module doc, "On disk" (ADR-0006) |
 | `plan.json` | architect (0.5.1), or the hooks from the plan-mode architect's hand-back with `approvedAt: null` (0.6.0, ADR-0015 item 9); then the foreman | hooks (plan gates); contract `docs/plan.schema.json`, example `docs/plan.example.json`, rules in foundry ADR-0001 section 8 |
 
 Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
+
+**Designed, not built yet** (the module doc has the detail):
+
+- [foundry ADR-0008](../plugins/foundry/docs/adr/0008-owner-interview.md): the `foundry:interview` skill (`skills/interview/SKILL.md`, with `interview/ledger.ts` and `interview/cli.ts`) has the foreman ask the owner about a goal before planning and write `requirements.md`. Two owner decisions are open: whether unasked questions are filled with defaults, and where `requirements.md` lives.
+- [foundry ADR-0009](../plugins/foundry/docs/adr/0009-workflow-factory.md): the Workflow path, `factory.ts` plus the `workflows/` scripts, runs crews without leads, behind a new hook gate on `Workflow` calls. Two owner decisions are open: whether red-team rounds share `repairBudget`, and whether the Workflow path becomes the default.
+- [foundry ADR-0010](../plugins/foundry/docs/adr/0010-mid-run-intake.md).
 
 **Seams with other plugins**
 

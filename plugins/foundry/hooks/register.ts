@@ -570,6 +570,69 @@ export function mainCallVerdict(plan: Plan | undefined, callerId: string | undef
   return typeof effort === 'string' && EFFORTS.includes(effort) ? undefined : { deny: MAIN_EFFORT_REFUSAL }
 }
 
+// ADR-0009 Decision 6. The role table a foundry Workflow script is given (Decision 2): opus or sonnet, low or medium
+// effort, no lead, devops or integrator, keys that match ^[a-z]+$. Undefined means the table is allowed.
+export function workflowRoleVerdict(roles: unknown): { deny: string } | undefined {
+  const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
+  if (!isRecord(roles)) return refuse('the Workflow needs a roles table in args.foundry.roles')
+  for (const [key, role] of Object.entries(roles)) {
+    if (!/^[a-z]+$/.test(key)) return refuse(`Workflow role "${key}" is not a lowercase name`)
+    if (key === 'lead' || key === 'devops' || key === 'integrator') return refuse(`a Workflow never runs a ${key} role`)
+    if (!isRecord(role)) return refuse(`Workflow role ${key} is not an object`)
+    if (role.agentType === 'foundry:lead' || role.agentType === 'foundry:devops' || role.agentType === 'foundry:integrator') return refuse(`Workflow role ${key} never runs as ${role.agentType}`)
+    if (role.model !== 'opus' && role.model !== 'sonnet') return refuse(`Workflow role ${key} needs model opus or sonnet`)
+    if (role.effort !== 'low' && role.effort !== 'medium') return refuse(`Workflow role ${key} needs effort low or medium`)
+  }
+  return undefined
+}
+
+// ADR-0009 Decision 6. Whether a Workflow call may start while a plan is on. Pure: the handler reads the files.
+export function workflowCallVerdict(
+  plan: Plan | undefined,
+  input: { script?: unknown; scriptPath?: unknown; scriptText?: unknown; args?: unknown; pluginDir: string; pluginScriptTexts: readonly (string | undefined)[] },
+): { deny: string } | undefined {
+  if (!planAtLeastV2(plan)) return undefined
+  const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
+  if (input.script !== undefined && input.scriptPath !== undefined) return refuse('a Workflow call gives either script or scriptPath, not both')
+  const flat = (v: string) => v.replace(/\\/g, '/')
+  const dir = flat(input.pluginDir)
+  const path = typeof input.scriptPath === 'string' ? flat(input.scriptPath) : undefined
+  const text = typeof input.scriptText === 'string' ? input.scriptText : undefined
+  // pluginScriptTexts is positional: index 0 is plan.js's text, index 1 is wave.js's. An undefined entry matches nothing.
+  const isPlanJs = (path !== undefined && path === `${dir}/workflows/plan.js`) || (text !== undefined && input.pluginScriptTexts[0] !== undefined && text === input.pluginScriptTexts[0])
+  const isWaveJs = (path !== undefined && path === `${dir}/workflows/wave.js`) || (text !== undefined && input.pluginScriptTexts[1] !== undefined && text === input.pluginScriptTexts[1])
+  const byPath = path !== undefined && (path === `${dir}/workflows/plan.js` || path === `${dir}/workflows/wave.js`)
+  const byText = text !== undefined && input.pluginScriptTexts.some((t) => t !== undefined && t === text)
+  if (!byPath && !byText) {
+    if (input.scriptPath !== undefined && text === undefined) return refuse(ONLY_FROM_PLUGIN)
+    if (text === undefined || text.includes('foundry:')) return refuse(ONLY_FROM_PLUGIN)
+    return undefined
+  }
+  const args = input.args
+  const foundry = isRecord(args) ? args.foundry : undefined
+  if (!isRecord(foundry)) return refuse('a foundry Workflow needs args.foundry')
+  const roles = workflowRoleVerdict(foundry.roles)
+  if (roles !== undefined) return roles
+  if (isPlanJs && isWaveJs) return refuse('the script matches both plan.js and wave.js')
+  const shown = typeof foundry.kind === 'string' ? `"${foundry.kind}"` : JSON.stringify(foundry.kind)
+  if (isPlanJs && foundry.kind !== 'plan') return refuse(`plan.js runs only with kind "plan", not ${shown}`)
+  if (isWaveJs && foundry.kind !== 'wave') return refuse(`wave.js runs only with kind "wave", not ${shown}`)
+  if (foundry.kind === 'plan') return plan.approvedAt ? refuse('the plan is already approved; a plan Workflow would replace it') : undefined
+  if (foundry.kind !== 'wave') return refuse('a foundry Workflow runs only with kind "plan" or "wave"')
+  const crews = foundry.crews
+  if (!Array.isArray(crews)) return refuse('a wave Workflow needs args.foundry.crews as a list')
+  for (const entry of crews) {
+    const slug = isRecord(entry) ? entry.slug : undefined
+    if (typeof slug !== 'string') return refuse('a wave Workflow crew has no slug')
+    const target = planCrewFor(plan, slug)
+    if (target === undefined || target.crew.status !== 'running') return refuse(`${slug} is not a running crew in the plan`)
+    const verdict = planVerdict(plan, slug)
+    if (verdict !== undefined) return verdict
+  }
+  return undefined
+}
+const ONLY_FROM_PLUGIN = `foundry agents run in a Workflow only from the plugin's plan.js and wave.js`
+
 export function stallText(label: string, crew: string, minutes: number): string {
   return `${STALLED} ${label} in crew ${crew}, no activity for ${minutes}m. Check /foundry and message the ${crew} lead. Read its transcript tail before you stop it; a resumed agent may be compacting.`
 }
@@ -845,7 +908,7 @@ async function rootOf($: $, state: State): Promise<string | undefined> {
 
 // The plan-file route (ADR-0015 s9): the inner lines of the first block that opens with exactly `open` and ends at the
 // next line that is exactly four backticks, joined with a newline. Undefined when there is no such block.
-function fencedBlock(message: string, open: string): string | undefined {
+export function fencedBlock(message: string, open: string): string | undefined {
   const lines = message.split('\n').map(l => l.replace(/\r$/, ''))
   const start = lines.indexOf(open)
   if (start < 0) return undefined
@@ -913,6 +976,18 @@ async function planOf($: $, state: State): Promise<Plan | undefined> {
 
 // how long the idle prompt waits on the plan read before it names the 0.2.1 successor instead
 const PLAN_READ_MS = 2000
+
+// The plugin dir, from this module's own path (<plugin>/hooks/register.ts); undefined when it can't be worked out.
+function pluginDirOf(): string | undefined {
+  try {
+    let p = decodeURIComponent(new URL('..', import.meta.url).pathname)
+    if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1)
+    p = p.replace(/\/+$/, '')
+    return p === '' ? undefined : p
+  } catch {
+    return undefined
+  }
+}
 
 // The plan as planOf reads it, or undefined when the read hasn't settled within `ms` on the engine clock, so a hung
 // read never holds up the heartbeat pass that awaits it. The timer is cancelled once the read settles; a read that
@@ -1712,6 +1787,41 @@ export const register: Register = on => {
       by: caller?.label ?? MAIN,
     })
     return note === undefined ? result : withNote(result, note)
+  }).catch(failOpen)
+
+  on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
+    // ADR-0009 s6: on a v>=2 plan, the main session's Workflow calls run foundry agents only from the plugin's scripts
+    if (e.agentId === undefined) {
+      const refused = await safely($, 'Workflow gate', async () => {
+        const plan = await planWithin($, state, PLAN_READ_MS)
+        if (!planAtLeastV2(plan)) return undefined
+        const readText = async (path: unknown): Promise<string | undefined> => {
+          if (typeof path !== 'string') return undefined
+          try {
+            const text = String(await $.fs.read(path))
+            return text === '' ? undefined : text
+          } catch {
+            return undefined
+          }
+        }
+        const pluginDir = pluginDirOf()
+        const texts = pluginDir === undefined ? [undefined, undefined] : await Promise.all([`${pluginDir}/workflows/plan.js`, `${pluginDir}/workflows/wave.js`].map(readText))
+        const script: unknown = e.script
+        const scriptPath: unknown = e.scriptPath
+        const verdict = workflowCallVerdict(plan, {
+          script,
+          scriptPath,
+          scriptText: typeof script === 'string' ? script : await readText(scriptPath),
+          args: e.args,
+          pluginDir: pluginDir ?? ' ',
+          pluginScriptTexts: texts, // positional: [plan.js text, wave.js text]
+        })
+        if (verdict !== undefined) await logRule($, `Workflow gate refused a call: ${verdict.deny}`)
+        return verdict
+      })
+      if (refused !== undefined) return refused
+    }
+    return next(e)
   }).catch(failOpen)
 
   // Every tool call is activity, the main session's included. A report sent through the hand-back tool is the agent's
