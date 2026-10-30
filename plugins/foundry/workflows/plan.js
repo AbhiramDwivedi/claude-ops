@@ -1,6 +1,6 @@
 export const meta = {
   name: 'foundry-plan',
-  description: 'Runs the foundry architect in plan mode, has a cynic review its verdicts, and runs one reconcile round when the cynic disagrees.',
+  description: 'Runs the foundry architect in plan mode, has a cynic review its verdicts.',
 }
 
 // ADR-0009 Decision 3. Every agent() call goes through spawn(); the roles table comes from args.foundry.roles.
@@ -36,10 +36,9 @@ function architectPrompt(extra) {
   ].join('\n')
 }
 
-function cynicPrompt(a, reconciled) {
+function cynicPrompt(a) {
   return [
     'Your job: the verdict review of the foreman skill\'s section 4 ("Have a cynic review the verdicts"). Review the architect\'s extend/change verdicts in this plan against the architecture doc and the code.',
-    reconciled ? 'A reconcile round has happened: the architect saw your earlier review and revised the plan. Review the revised plan below.' : '',
     '',
     `Architecture doc: ${F.architecture}`,
     '',
@@ -54,11 +53,11 @@ function cynicPrompt(a, reconciled) {
 }
 
 const fix = F.fix === true
-let architectLabel = fix ? 'foundry-architect-3' : 'foundry-architect'
-let cynicLabel = fix ? 'foundry-cynic-3' : 'foundry-cynic'
+const architectLabel = fix ? 'foundry-architect-3' : 'foundry-architect'
+const cynicLabel = fix ? 'foundry-cynic-3' : 'foundry-cynic'
 
 phase('Plan')
-let a = await spawn('architect', architectLabel, architectPrompt(), { schema: SCHEMA })
+const a = await spawn('architect', architectLabel, architectPrompt(), { schema: SCHEMA })
 if (!a || typeof a.planJson !== 'string') throw new Error(`${architectLabel} returned no plan`)
 
 const uncovered = linesOf(a.report, /^UNCOVERED:/)
@@ -69,22 +68,10 @@ const owner = []
 const addOwner = (text) => {
   for (const l of linesOf(text, /^Owner:/)) if (!/^Owner:\s*none\b/i.test(l) && !owner.includes(l)) owner.push(l)
 }
-let review = await spawn('cynic', cynicLabel, cynicPrompt(a, false))
+const review = await spawn('cynic', cynicLabel, cynicPrompt(a))
 if (review == null) throw new Error(`${cynicLabel} returned nothing`)
 addOwner(review)
-let reviews = linesOf(review, /^REVIEW:/)
+const reviews = linesOf(review, /^REVIEW:/)
 const disagrees = () => reviews.some((l) => /^REVIEW:\s*disagree\b/i.test(l))
-
-if (!fix && disagrees()) {
-  phase('Reconcile')
-  architectLabel = 'foundry-architect-2'
-  a = await spawn('architect', architectLabel, architectPrompt(`The cynic reviewed your plan and disagrees. Its lines:\n${String(review)}\n\nReconcile: revise the plan, or say why a verdict stands.`), { schema: SCHEMA })
-  if (!a || typeof a.planJson !== 'string') throw new Error(`${architectLabel} returned no plan`)
-  cynicLabel = 'foundry-cynic-2'
-  review = await spawn('cynic', cynicLabel, cynicPrompt(a, true))
-  if (review == null) throw new Error(`${cynicLabel} returned nothing`)
-  addOwner(review)
-  reviews = linesOf(review, /^REVIEW:/)
-}
 
 return { architectLabel, reviews, owner, stillDisagree: disagrees() }
