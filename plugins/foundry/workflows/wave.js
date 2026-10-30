@@ -132,8 +132,14 @@ function guardBudget(crew, at) {
 const clip = (s, n = 4000) => (s.length > n ? s.slice(s.length - n) : s)
 
 // Runs one factory.ts command through the runner. met: exit 0 and the parsed stdout has key === true.
+// one shell word: bare when only safe characters, else single-quoted with each ' written as '\''
+const sh = (v) => {
+  const s = String(v)
+  return /^[A-Za-z0-9_./:@=+,-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`
+}
+
 async function runFactory(crew, command, key) {
-  const full = `node ${F.plugin}/bin/factory.ts ${command} --dir ${F.dir} --repo ${F.repo}`
+  const full = `node ${sh(`${F.plugin}/bin/factory.ts`)} ${command} --dir ${sh(F.dir)} --repo ${sh(F.repo)}`
   const prompt = [
     'Run exactly the one command below, as written, in a single shell call. Do not change directory and do not run anything else.',
     "Return the command's exit code as exit and its full standard output as stdout.",
@@ -152,7 +158,7 @@ async function runFactory(crew, command, key) {
   return { met, parsed, out: `exit ${res.exit}\n${res.stdout}` }
 }
 
-const check = (crew, expect) => runFactory(crew, `check --slug ${crew.slug} --cwd ${crew.e.worktree} --expect ${expect}`, 'ok')
+const check = (crew, expect) => runFactory(crew, `check --slug ${sh(crew.slug)} --cwd ${sh(crew.e.worktree)} --expect ${sh(expect)}`, 'ok')
 
 // ---------------------------------------------------------------- prompts
 
@@ -201,6 +207,7 @@ function resolverPrompt(crew, what, conflicts) {
     `Task: resolve the conflicts from ${what}`,
     `Work in the crew worktree ${e.worktree} (branch ${e.branch}). Do not make a new worktree.`,
     `Conflicting files: ${conflicts.length ? conflicts.join(', ') : 'none listed; run git status to find them'}`,
+    `Run git as git -C ${e.worktree} <command> so it acts on the crew worktree whatever your working directory is.`,
     'Resolve every conflict, keep both sides intent, run the done-check, and commit the merge. Never edit a done-check test file to make it pass.',
   ]
   return memberPrompt(crew, 'resolver', { start: [], body })
@@ -242,7 +249,7 @@ function integrate(crew, branch, at) {
 }
 
 async function integrateNow(crew, branch, at) {
-  const command = `integrate --slug ${crew.slug} --branch ${branch}`
+  const command = `integrate --slug ${sh(crew.slug)} --branch ${sh(branch)}`
   let r = await runFactory(crew, command, 'merged')
   if (r.met) return
   await resolveConflicts(crew, `merging ${branch} into ${crew.e.branch}`, conflictsOf(r), at)
@@ -320,7 +327,8 @@ function validateTasks(tasks, owns) {
     if (!['tester', 'builder', 'writer'].includes(t.role)) errors.push(`task ${t.name} has role ${t.role}; use tester, builder or writer`)
     if (!ROLE_EFFORTS.includes(t.effort)) errors.push(`task ${t.name} has effort ${t.effort}; use low or medium`)
     for (const f of t.files || []) {
-      if (!owned.some((re) => re.test(f))) errors.push(`task ${t.name} lists file ${f}, which matches none of the crew owns`)
+      if (/[*?[{]/.test(f)) errors.push(`task ${t.name} lists file ${f}, which is a glob; list exact file paths`)
+      else if (!owned.some((re) => re.test(f))) errors.push(`task ${t.name} lists file ${f}, which matches none of the crew owns`)
     }
     for (const a of t.after || []) {
       if (!tasks.some((x) => x.name === a)) errors.push(`task ${t.name} lists after: ${a}, but no task has that name`)
@@ -461,7 +469,7 @@ async function redteam(crew) {
 
 async function scope(crew) {
   crew.step = 'scope'
-  const r = await runFactory(crew, `owns-check --slug ${crew.slug}`, 'ok')
+  const r = await runFactory(crew, `owns-check --slug ${sh(crew.slug)}`, 'ok')
   if (r.met) return
   const outside = r.parsed && Array.isArray(r.parsed.outside) ? r.parsed.outside : []
   const names = outside.length ? outside.join(', ') : r.out
@@ -475,6 +483,20 @@ function verdictOf(text) {
   if (first.startsWith('VERDICT: PASS')) return 'PASS'
   if (first.startsWith('VERDICT: FAIL')) return 'FAIL'
   return undefined
+}
+
+// mirrors register.ts UNSCOPED (wave.js cannot import it)
+const UNSCOPED = '- UNSCOPED: '
+
+// the UNSCOPED lines under ## Findings; a section runs from its "## " heading to the next line starting "## " (register.ts judgeRuling)
+function unscopedOf(text) {
+  const out = []
+  let section
+  for (const line of String(text || '').replace(/^﻿/, '').replace(/\r/g, '').split('\n')) {
+    if (line.startsWith('## ')) section = line.trimEnd()
+    else if (section === '## Findings' && line.startsWith(UNSCOPED)) out.push(line)
+  }
+  return out
 }
 
 function judgePrompt(crew) {
@@ -521,10 +543,14 @@ async function judge(crew) {
       j = await runJudge(crew)
       if (!j.verdict) throw new Stop('BLOCKED', `no verdict from two judges:\n${j.text || 'no result'}`, 'judge')
     }
-    if (j.verdict === 'PASS') return { slug: crew.slug, state: 'passed', head: crew.head, base: crew.e.base, judge: j.label }
+    const unscoped = j.verdict === 'PASS' ? unscopedOf(j.text) : []
+    if (j.verdict === 'PASS' && unscoped.length === 0) return { slug: crew.slug, state: 'passed', head: crew.head, base: crew.e.base, judge: j.label }
     crew.fails++
     if (spendOf(crew) > F.repairBudget) throw budgetStop(crew, 'judge', j.text)
-    await fixBuilder(crew, 'judge findings', `The judge ruled FAIL:\n${j.text}`)
+    const detail = unscoped.length
+      ? `The judge passed the work but left claims with no stated scope:\n${unscoped.join('\n')}\nFor each claim, state its scope (in ## Examined or beside the claim) or withdraw it.`
+      : `The judge ruled FAIL:\n${j.text}`
+    await fixBuilder(crew, 'judge findings', detail)
     await green(crew)
   }
 }
@@ -533,7 +559,7 @@ async function judge(crew) {
 
 async function syncStep(crew) {
   crew.step = 'R1'
-  const command = `sync --slug ${crew.slug}`
+  const command = `sync --slug ${sh(crew.slug)}`
   let r = await runFactory(crew, command, 'merged')
   if (r.met) return
   await resolveConflicts(crew, `syncing ${crew.e.branch} with ${F.target}`, conflictsOf(r), 'R1')
