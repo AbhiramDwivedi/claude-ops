@@ -1167,6 +1167,16 @@ t('wave resume merge-ready: sync, green, owns-check, judge in that order; no red
   const { deferred, ...rest } = r.res[0]
   passedShape(rest, 'a', HEAD, 'a-judge', { ...e, redTeam: false })
 })
+t('wave resume merge-ready: a red-team crew returns the deferred notes the first run recorded', async () => {
+  const e = rtCrew({ resume: 'merge-ready', deferred: ['GAP-from-first-run'] })
+  const r = await runWave([e], { labels: { 'a-judge': PASS } })
+  passedShape(r.res[0], 'a', HEAD, 'a-judge', e, ['GAP-from-first-run'])
+})
+t('wave resume merge-ready: several recorded deferred notes come back in order', async () => {
+  const e = rtCrew({ resume: 'merge-ready', deferred: ['GAP-one', 'GAP-two'] })
+  const r = await runWave([e], { labels: { 'a-judge': PASS } })
+  assert.deepEqual(r.res[0].deferred, ['GAP-one', 'GAP-two'])
+})
 t('wave resume merge-ready: a sync conflict spawns the resolver in the crew worktree, then syncs again', async () => {
   const r = await runWave([entry('a', { resume: 'merge-ready' })], { labels: { 'a-resolver': marked('DONE', 'ok'), 'a-judge': PASS }, runner: ({ key, n }) => (key === 'sync' && n === 0 ? rj({ merged: false, conflicts: ['SYNC-CONFLICT.ts'] }) : undefined) })
   const p = call(r, 'a-resolver').prompt

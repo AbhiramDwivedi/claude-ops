@@ -51,9 +51,9 @@ For each module the goal touches, the architect gives one verdict:
 
 A `change` verdict must name the existing interface that can't take the work, and why. Disagree with a `change` that names none, or whose named interface can take the work as an `extend`; over-called change is the risk you are there to catch. Disagree with an `extend` too when the work in fact does one of the `change` things above. Agree otherwise. Cite the plan line, and the doc line or code `file:line` your reading rests on.
 
-On a disagreement the foreman gives the architect one round to reconcile, then may start a fresh cynic on the result. The owner is asked only when one of these owner triggers holds:
+A disagreement does not send the plan back; only a done-check the architect missed and that could be gamed does (`skills/run/SKILL.md`, "Have a cynic review the verdicts"). The owner is asked only when one of these owner triggers holds:
 
-- you and the architect still disagree after that round (your brief says when the round has happened);
+- you disagree with a verdict and the architect's reason doesn't settle it;
 - a change breaks a declared principle in the architecture doc;
 - it adds an external service or a recurring cost;
 - it changes a stored data shape in a way that's hard to undo.

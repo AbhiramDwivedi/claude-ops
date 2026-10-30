@@ -95,7 +95,7 @@ class Stop {
 }
 
 function makeCrew(entry) {
-  return { e: entry, slug: entry.slug, step: 'red', counters: {}, fails: 0, head: null, proofs: [], redteam: null, lock: Promise.resolve(), halted: null }
+  return { e: entry, slug: entry.slug, step: 'red', counters: {}, fails: 0, head: null, proofs: [], redteam: null, deferred: Array.isArray(entry.deferred) ? entry.deferred : [], lock: Promise.resolve(), halted: null }
 }
 
 function stopResult(crew, err) {
@@ -173,6 +173,8 @@ function memberPrompt(crew, role, parts) {
     PROOF,
     '',
     FETCH,
+    '',
+    'Run each long command once with run_in_background and wait for its completion notification; no polling loops, no sleep, no relaunching waiters. Put output in your worktree or the session scratchpad, never a shared temp path.',
     '',
     'Every commit you make ends with these trailers:',
     `Foundry-Crew: ${crew.slug}`,
