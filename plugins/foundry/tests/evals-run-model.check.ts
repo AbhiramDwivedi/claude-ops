@@ -52,6 +52,14 @@ function cases() {
   return all
 }
 
+// Every form a .git/foundry path takes in a golden input: repo-relative or absolute, either slash, any run of
+// separators (JSON-escaped backslashes are single after JSON.parse). The spec rewrites each to inputs/<basename>.
+const FOUNDRY_PATH = /[^\s"'`()]*\.git[\\/]+foundry[\\/][^\s"'`)]*/g
+function foundryPaths(input: string): string[] { return input.match(FOUNDRY_PATH) ?? [] }
+function expectedInput(input: string): string {
+  return input.replace(FOUNDRY_PATH, (p) => `inputs/${basename(p.replace(/\\/g, '/'))}`)
+}
+
 function body(role: string) {
   const text = readFileSync(join(PLUGIN, 'agents', `${role}.md`), 'utf8').replace(/\r/g, '').replace(/^﻿/, '')
   const m = text.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/)
@@ -264,7 +272,7 @@ test('run-model: one claude call per case, with the flags, role prompt, tool lis
     assert.equal(tools.join(' '), c.role === 'judge' ? JUDGE_TOOLS : CYNIC_TOOLS, `${c.id}: tools`)
     for (const bad of ['Write', 'Edit', 'NotebookEdit']) assert.ok(!tools.join(' ').includes(bad), `${c.id}: ${bad}`)
     assert.ok(!argv.includes('--max-budget-usd'), 'no budget flag')
-    assert.equal(stdin, c.input, `${c.id}: stdin is the case input`)
+    assert.equal(stdin, expectedInput(c.input), `${c.id}: stdin is the case input with .git/foundry paths rewritten to inputs/<basename>`)
     assertThrowawayCwd(cwd, `${c.id}: cwd`)
   }
 })
@@ -605,7 +613,9 @@ test('run-model: no .git/foundry (either slash) reaches claude on stdin; named f
       const call = calls[i]
       assert.ok(!call.stdin.includes('.git/foundry'), `${c.id}: stdin contains .git/foundry`)
       assert.ok(!call.stdin.includes('.git\\foundry'), `${c.id}: stdin contains .git\\foundry`)
-      const paths = c.input.match(/\S*\.git[\\/]foundry[^\s"'`)]*/g) ?? []
+      assert.ok(!/\.git[\\/]+foundry/.test(call.stdin), `${c.id}: stdin still names a .git/foundry path`)
+      assert.equal(call.stdin, expectedInput(c.input), `${c.id}: stdin is the input with only the paths rewritten`)
+      const paths = foundryPaths(c.input)
       for (const p of paths) {
         named++
         const base = basename(p.replace(/\\/g, '/'))
