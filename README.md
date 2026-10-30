@@ -49,13 +49,7 @@ Once several agents work at once, the trouble moves from cost to collisions. Two
 
 [`kit`](plugins/kit) sets a project up from its actual code. `/kit:init` proposes a conventions section for `CLAUDE.md`, lint and test hooks that stop an agent reporting done with broken checks, a review checklist and, where needed, a worktree setup script; it writes only what you approve. `/kit:revise` reads the project's recent sessions and proposes what to add or drop. The plugin also ships four agents with their model fixed: `builder` (Sonnet), `reviewer` (Opus, read-only), `test-writer` (Sonnet) and `scout` (Haiku, read-only), so picking the agent picks the model. From 0.2.0, once you approve the proposal, `scripts/kit_manifest.py` writes `.claude/kit/manifest.json`: the checks you approved, each agent type and whether it is read-only, the risky paths and the worktree setup scripts. Each time the script writes the manifest it also rewrites the skip list in kit's stop gates from it, so the gates don't run the tests for an agent that only reads. Another plugin marks its own agent types read-only through the script's `declare` command. From 0.3.0 the script refuses to declare an editing type read-only (`general-purpose`, `kit:builder`, `kit:test-writer`, `foundry:architect`, `foundry:devops`, `foundry:lead`, `foundry:writer`), matched by case-folded full name, so no gate skips the tests of an agent that edits. It still reads an existing manifest that lists one. `kit:reviewer` now pins effort `medium`.
 
-[`foundry`](plugins/foundry) runs a big goal as several crews at once. `/foundry:run` makes the main session the foreman: it asks whether the goal is the end or a step toward something bigger, splits it into crews that own separate files, shows you the plan, and freezes the scope once you approve. Each crew's lead delegates to your project's agents, or to general-purpose agents when there are none, with a model and effort set on every one. A judge in each crew checks the work against proof, and a crew merges only on its PASS, into your branch one at a time or into one integration branch for a single PR. Questions bound for you go first to a cynic agent, which recommends whether the foreman answers them, defers them to the end of the run, or passes them to you. The mod saves every crew agent's report to a file in case its hand-back gets lost, keeps crew messages inside the crew, sends a lead back when it tries to stop without a report, and wakes the foreman when an agent stalls or the usage limit resets. From 0.3.0, an architect agent writes the project's architecture doc and ADRs (`/foundry:init`), and plans each run as waves of crews with an extend-or-change verdict per module. Design work runs first, in wave 0, and waits for your approval. The mod refuses to start a crew before that approval, ahead of its wave, or over the parallel-crew cap.
-
-foundry 0.4.0 builds on kit when it's installed. After the doc check, `/foundry:init` reads kit's manifest. When the manifest doesn't mark `foundry:judge` and `foundry:cynic` read-only and the session has `kit:init`, init hands that declaration to `kit:init` to put to you. Without kit, init says `kit is not installed` and carries on as 0.3.0 did. Init also proposes four new `.claude/foundry.json` keys: `roles` (which agent type does each job, such as `build: kit:builder`), `deploy`, `writingSkill` and `promptOverrides`. The 0.4.0 init has run headless, with `claude -p`, in two scratch repos; there `claude -p` refused its write under `.git/`, so init stopped and left `.claude/foundry.json` unchanged. An earlier run with the owner's own settings loaded wrote the approved keys, but an older foundry was loaded too, so it shows only that the write path works when permissions allow it. Nobody has yet checked an interactive run. The hooks now append a line to `events.jsonl` in the session's foundry folder for each crew spawn, stall, tagged lead message and saved report, with no message, prompt or report text in it. When the foreman writes the decision log with Write or Edit, a literal `HH:MM` it typed is always replaced with the clock's time; a write through Bash isn't stamped. `/foundry:retro` reads the decision log, the event and message logs, the judge reports and the plan. It counts decisions, events and messages for each run, and the judge files and the plan once for the whole folder. It then proposes changes to the config, which it writes only if you approve. Neither the event log nor the retro has run in a live run yet.
-
-foundry 0.5.0 bounds what a run can claim and spend. A lead's report says which paths and commands back each claim of absence, and the judge fails one that doesn't. `repairBudget` (default 2) caps how many fresh judges a crew may start after FAILs; past it the crew is `BLOCKED` and the foreman comes to you instead of raising anyone's effort. A judge's PASS is bound to the branch head and its patch id, so it survives a rebase only when the patch is unchanged and the checks pass again, and the foreman's merge gate reads the newest judge file since approval. Judges, red teams, reviewers and writers run at `medium` unless you say otherwise, and `/foundry:retro` reports crews that spent their budget and any share of Opus spawns at `high` or `xhigh`. Text checks show these rules are written into the prompts and hooks, not that a live lead obeys them.
-
-foundry 0.6.0 follows ADR-0015: a lead merges each member's branch with `git merge --no-ff` and never rebases or cherry-picks, so every member commit stays an ancestor of the crew branch. `/foundry:retro` gains a `leftovers` key listing the `worktree-agent-<id>` branches and `.claude/worktrees/agent-<id>` folders still present for agents the event log shows were spawned, or `"not recorded"` when there is no event log, the folder isn't `<git common dir>/foundry/<session>`, or git can't be read.
+[Truss](https://github.com/AbhiramDwivedi/truss) (formerly foundry) now lives in its own repo. It runs a big goal as parallel crews of engineering-role agents, each in its own worktree, with a QC engineer checking the work before the crews merge. Install it from this marketplace as `truss@claude-ops`. `foundry@claude-ops` is gone: if you have foundry installed, uninstall it and install truss. The migration steps are in Truss's [CHANGELOG](https://github.com/AbhiramDwivedi/truss/blob/main/CHANGELOG.md).
 
 ## Install
 
@@ -69,7 +63,7 @@ You need Claude Code 2.1.287 or newer, the first release with mods. The mod API 
 /plugin install workflow-audit@claude-ops
 /plugin install worktrees@claude-ops
 /plugin install kit@claude-ops
-/plugin install foundry@claude-ops
+/plugin install truss@claude-ops
 ```
 
 The mods load when your next session starts.
@@ -165,7 +159,7 @@ subagent-limits keeps its counts inside the mod, so a reload starts them over. A
 To run the mods from a clone instead of the marketplace, pass the folders for one session:
 
 ```
-claude --plugin-dir ./plugins/usage-limits --plugin-dir ./plugins/session-models --plugin-dir ./plugins/subagent-limits --plugin-dir ./plugins/workflow-audit --plugin-dir ./plugins/worktrees --plugin-dir ./plugins/kit --plugin-dir ./plugins/foundry
+claude --plugin-dir ./plugins/usage-limits --plugin-dir ./plugins/session-models --plugin-dir ./plugins/subagent-limits --plugin-dir ./plugins/workflow-audit --plugin-dir ./plugins/worktrees --plugin-dir ./plugins/kit
 ```
 
 Or list them in the `env` block of `~/.claude/settings.json`. Separate the paths with `;` on Windows and `:` elsewhere:
@@ -186,9 +180,6 @@ claude plugin test plugins/usage-limits       # runs tests/*.test.ts
 claude plugin test plugins/session-models
 claude plugin test plugins/subagent-limits
 claude plugin test plugins/worktrees
-claude plugin test plugins/foundry            # foundry's crew hooks
-node --test plugins/foundry/tests/*.check.ts  # foundry's prompt, config-schema and principle-pack checks
-python -m unittest discover -s plugins/foundry/tests          # the retro script
 python -m unittest discover -s plugins/kit/tests              # kit's transcript miner and manifest script
 python -m unittest discover -s plugins/workflow-audit/tests   # the audit's script
 node --test tests/e2e/cleanup.e2e.ts                          # real git on a temp repo: a lead and two members leave no agent branches, folders or active slots; a member the lead never merged survives

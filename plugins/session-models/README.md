@@ -14,7 +14,7 @@ A crew is a named top-level agent (one with a name, spawned by the main thread) 
 crews: export 4 (sonnet 3, opus 1) · staffing 3 (sonnet 2, opus 1)
 ```
 
-Crews run largest first, then by name, and models within a crew by count. A [foundry](../foundry) lead and its crew show up here this way. Past three, the rest collapse to `+N more`. With no crew, the segment is left out. Crew members still count in `agents:` and in the live total as before. An unnamed lead, a named agent with no live helpers, and finished helpers are not counted. A member whose model is not known yet adds to the size but not to the breakdown.
+Crews run largest first, then by name, and models within a crew by count. A [Truss](https://github.com/AbhiramDwivedi/truss) foreman and its crew show up here this way. Past three, the rest collapse to `+N more`. With no crew, the segment is left out. Crew members still count in `agents:` and in the live total as before. An unnamed lead, a named agent with no live helpers, and finished helpers are not counted. A member whose model is not known yet adds to the size but not to the breakdown.
 
 | Setting | Default | What it does |
 | --- | --- | --- |

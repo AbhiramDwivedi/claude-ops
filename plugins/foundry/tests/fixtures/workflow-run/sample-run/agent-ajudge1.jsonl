@@ -1,3 +1,0 @@
-{"parentUuid":null,"isSidechain":true,"agentId":"ajudge1","type":"user","message":{"role":"user","content":"task text"},"uuid":"u-ajudge1-1","timestamp":"2026-10-29T10:00:00.000Z","userType":"external","entrypoint":"cli"}
-{"parentUuid":null,"isSidechain":true,"agentId":"ajudge1","type":"api-request-blob","hash":"h","message":{"role":"system","content":[{"type":"text","text":"sys"}],"output_config":{"effort":"medium"}},"timestamp":"2026-10-29T10:00:00.000Z","userType":"external","entrypoint":"cli"}
-{"parentUuid":null,"isSidechain":true,"agentId":"ajudge1","type":"assistant","message":{"role":"assistant","model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}]},"uuid":"u-ajudge1-2","timestamp":"2026-10-29T10:05:00.000Z","userType":"external","entrypoint":"cli"}

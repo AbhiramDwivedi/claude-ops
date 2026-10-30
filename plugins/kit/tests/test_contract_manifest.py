@@ -264,7 +264,8 @@ class ManifestContract(unittest.TestCase):
     # Names are listed literally (ADR-0013 "Seams added"). Error code: READ_ONLY_EDITING_TYPE.
 
     REFUSED = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect",
-               "foundry:devops", "foundry:lead", "foundry:writer")
+               "foundry:devops", "foundry:lead", "foundry:writer",
+               "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer")
     CODE = "READ_ONLY_EDITING_TYPE"
 
     @staticmethod

@@ -13,7 +13,9 @@ import { fileURLToPath } from 'node:url'
 import { META_FINISHED } from '../../plugins/worktrees/tests/fixtures/run3.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-const RETRO = path.resolve(HERE, '../../plugins/foundry/scripts/retro.py')
+// retro.py lives in the Truss repo (https://github.com/AbhiramDwivedi/truss). Set TRUSS_RETRO to a checkout scripts/retro.py.
+const RETRO = process.env.TRUSS_RETRO ?? ''
+const RETRO_SKIP = RETRO && fs.existsSync(RETRO) ? false : 'set TRUSS_RETRO to the path of a truss checkout scripts/retro.py to run this test'
 const REGISTER = '../../plugins/worktrees/hooks/register.ts'
 const fwd = (p: string) => p.replace(/\\/g, '/')
 
@@ -292,7 +294,7 @@ after(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 })
 
-test('a foundry-shaped run leaves zero leftovers', async t => {
+test('a foundry-shaped run leaves zero leftovers', { skip: RETRO_SKIP }, async t => {
   const f = await flow(true)
   dirs.push(f.w.sandbox)
   const seen = observe(f.w)
@@ -305,7 +307,7 @@ test('a foundry-shaped run leaves zero leftovers', async t => {
   assert.deepEqual(f.leftovers, { branches: [], folders: [], count: 0 })
 })
 
-test('control: a member the lead never merged survives, and only that one', async t => {
+test('control: a member the lead never merged survives, and only that one', { skip: RETRO_SKIP }, async t => {
   const f = await flow(false)
   dirs.push(f.w.sandbox)
   const seen = observe(f.w)

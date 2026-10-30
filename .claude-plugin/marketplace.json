@@ -41,9 +41,9 @@
       "category": "productivity"
     },
     {
-      "name": "foundry",
-      "description": "Runs a big goal as parallel crews of agents: each crew's lead delegates to your project's agents in its own worktree, and the crews merge one at a time or as one PR",
-      "source": "./plugins/foundry",
+      "name": "truss",
+      "description": "Runs a big goal as parallel crews of engineering-role agents: each crew's foreman delegates to your project's agents in its own worktree, a QC engineer checks the work, and the crews merge one at a time or as one PR",
+      "source": { "source": "github", "repo": "AbhiramDwivedi/truss" },
       "category": "productivity"
     }
   ]

@@ -1,4 +1,0 @@
-{"v":1,"ts":"2026-10-27T09:01:00.000Z","event":"spawn","crew":"alpha","agent":"alpha","agentId":"e0","type":"foundry:lead","model":"opus","effort":"high","by":"main"}
-{"v":1,"ts":"2026-10-27T09:10:00.000Z","event":"fetch","crew":"alpha","agent":"alpha-architect","tool":"WebFetch","url":"https://docs.invalid/one"}
-{"v":1,"ts":"2026-10-27T09:11:00.000Z","event":"fetch","crew":"alpha","agent":"alpha-architect","tool":"WebSearch","query":"invented thing"}
-{"v":1,"ts":"2026-10-27T09:12:00.000Z","event":"fetch","crew":"alpha","agent":"alpha-writer","tool":"WebFetch","url":"https://docs.invalid/two"}

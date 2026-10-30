@@ -1,5 +1,0 @@
-{"type":"launched"}
-{"type":"started","key":"v2:ajudge1000000000000000000000000000000000000000000000000000000000","agentId":"ajudge1","label":"s-judge","phase":"Judge"}
-{"type":"started","key":"v2:abuild1000000000000000000000000000000000000000000000000000000000","agentId":"abuild1","label":"s-builder","phase":"Build"}
-{"type":"result","key":"v2:ajudge1000000000000000000000000000000000000000000000000000000000","agentId":"ajudge1","result":"VERDICT: PASS\n\n## Proof checked\nHead: 0000000000000000000000000000000000000000\n"}
-{"type":"result","key":"v2:abuild1000000000000000000000000000000000000000000000000000000000","agentId":"abuild1","result":{"task":"t","marker":"DONE","branch":"b","commit":"c","proof":"p","text":"ok"}}

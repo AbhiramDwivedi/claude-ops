@@ -139,7 +139,7 @@ for (const [label, files, throws] of broken) {
 
 // ---- amendment 2026-10-27 to ADR-0014: refused read-only types ----
 
-const REFUSED = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer']
+const REFUSED = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer', 'truss:foreman', 'truss:design-engineer', 'truss:commissioning-engineer', 'truss:planning-engineer', 'truss:writer']
 const IGNORING = 'worktrees: kit manifest declares editing types read-only, ignoring them: '
 const ALL_DECLARED = manifest([
   ...REFUSED.map(name => ({ name, readOnly: true, declaredBy: 'kit' })),

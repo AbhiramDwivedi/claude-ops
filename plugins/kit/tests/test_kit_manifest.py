@@ -580,7 +580,8 @@ class KitManifest(unittest.TestCase):
     # ---------- read-only guard (ADR-0013 amendment, 2026-10-27) ----------
 
     REFUSED = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect", "foundry:devops",
-               "foundry:lead", "foundry:writer")
+               "foundry:lead", "foundry:writer",
+               "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer")
 
     def guard_facts(self, name, read_only=True, declared_by=None):
         facts = fixture_facts()
@@ -612,6 +613,9 @@ class KitManifest(unittest.TestCase):
             with self.subTest(name):
                 self.err(self.write(self.guard_facts(name)), "READ_ONLY_EDITING_TYPE", 2)
                 self.assertFalse(os.path.exists(self.manifest))
+
+    def test_guard_write_refuses_truss_foreman(self):
+        self.err(self.write(self.guard_facts("truss:foreman")), "READ_ONLY_EDITING_TYPE", 2)
 
     def test_guard_write_refuses_casing_variants(self):
         for name in ("General-Purpose", "GENERAL-PURPOSE", "foundry:LEAD"):

@@ -540,11 +540,17 @@ test('skips a worktree for each condition it fails, forgetting only those that c
   expect(skip({ inMain: undefined })).toEqual(["worktree-agent-a1 is not in the main checkout's HEAD yet", false])
 })
 
-const SEVEN = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer']
+const SEVEN = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer', 'truss:foreman', 'truss:design-engineer', 'truss:commissioning-engineer', 'truss:planning-engineer', 'truss:writer']
 const ro = (...names: string[]) => names.map((name) => ({ name, readOnly: true, declaredBy: 'kit' }))
 
 test('REFUSED_READ_ONLY_TYPES is the ADR list, in order, lower-case', async () => {
   expect([...REFUSED_READ_ONLY_TYPES]).toEqual(SEVEN)
+})
+
+test('truss:foreman declared read-only is refused', async () => {
+  const r = declaredReadOnly(kitManifest(ro('truss:foreman')))
+  expect(r.types.has('truss:foreman')).toBe(false)
+  expect(r.refused).toEqual(['truss:foreman'])
 })
 
 test('refused is [] when nothing is refused, and when the manifest is broken', async () => {

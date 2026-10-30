@@ -73,7 +73,7 @@ const asciiLower = (s: string): string => s.replace(/[A-Z]/g, c => c.toLowerCase
 // agents array declares nothing and says why in `error`.
 // Types that edit files, so a manifest can't make them skip their worktree (ADR-0014, amendment of 2026-10-27).
 // ADR-0013 carries the same list; plugins share no code, so this is its own copy.
-export const REFUSED_READ_ONLY_TYPES = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer']
+export const REFUSED_READ_ONLY_TYPES = ['general-purpose', 'kit:builder', 'kit:test-writer', 'foundry:architect', 'foundry:devops', 'foundry:lead', 'foundry:writer', 'truss:foreman', 'truss:design-engineer', 'truss:commissioning-engineer', 'truss:planning-engineer', 'truss:writer']
 
 // An entry naming a refused type (full name, case-folded) is left out of `types` and its name, as written, goes to
 // `refused` in file order; `refused` is [] when `error` is set.

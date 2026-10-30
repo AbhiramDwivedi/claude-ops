@@ -26,7 +26,7 @@ import sys
 import tempfile
 import time
 
-KIT_VERSION = "0.3.0"
+KIT_VERSION = "0.3.1"
 MANIFEST_VERSION = 1
 
 FACT_KEYS = ("checks", "agents", "riskyPaths", "setupScripts")
@@ -48,7 +48,8 @@ OWN_DECLARERS = ("kit", "project")
 
 # Editing types that may not be declared read-only (repo ADR-0013 amendment); worktrees holds its own copy.
 REFUSED_READ_ONLY_TYPES = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect",
-                           "foundry:devops", "foundry:lead", "foundry:writer")
+                           "foundry:devops", "foundry:lead", "foundry:writer",
+                           "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer")
 REFUSED_FOLDED = tuple(n.casefold() for n in REFUSED_READ_ONLY_TYPES)
 
 # Claude Code's built-in read-only agent types, always first in the gates' skip list.
