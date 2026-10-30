@@ -785,9 +785,34 @@ test('run-model: a directory named in the input does not abort the run; every ca
   } finally { rm(tmp) }
 })
 
-// On Windows child.kill('SIGINT') is TerminateProcess: no handler in the runner can run, and child.kill('SIGBREAK')
-// returns true but delivers nothing (the child stays alive), so SIGBREAK is not testable from Node. Only SIGINT here.
-test('run-model: an interrupt (SIGINT) mid-case leaves no temp worktree and no score line', async () => {
+// An interrupt the runner can actually catch. On Windows child.kill('SIGINT') is TerminateProcess, so no handler can
+// run; a real Ctrl-Break is a console control event, delivered here by a Python helper (CREATE_NEW_PROCESS_GROUP +
+// os.kill(pid, CTRL_BREAK_EVENT)). On POSIX the signal is sent with child.kill.
+const SIG_HELPER_PY = `import json, os, signal, subprocess, sys, time
+node, script, cwd, d = sys.argv[1:5]
+p = subprocess.Popen([node, script], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+started = os.path.join(d, 'started.json')
+deadline = time.time() + 60
+while time.time() < deadline and not os.path.exists(started) and p.poll() is None:
+    time.sleep(0.1)
+time.sleep(0.3)
+if p.poll() is None:
+    os.kill(p.pid, signal.CTRL_BREAK_EVENT)
+try:
+    out, _ = p.communicate(timeout=20)
+    code = p.returncode
+except subprocess.TimeoutExpired:
+    p.kill()
+    out, _ = p.communicate()
+    code = 'hung'
+sys.stdout.write(json.dumps({'code': code, 'stdout': out.decode('utf8', 'replace')}))
+`
+
+async function interruptCase(how: 'SIGINT' | 'SIGTERM' | 'CTRL_BREAK', t: { skip: (m?: string) => void }) {
+  if (how === 'CTRL_BREAK') {
+    const py = spawnSync('python', ['-c', 'import sys; print(sys.version_info[0])'], { encoding: 'utf8', windowsHide: true })
+    if (py.error || py.status !== 0) { t.skip('python was not found on PATH; the Windows Ctrl-Break delivery needs it'); return }
+  }
   const before = tmpWorktrees()
   const dir = mkdtempSync(join(tmpdir(), 'foundry-sig-'))
   const stub = join(dir, 'hang.mjs')
@@ -796,30 +821,57 @@ import { join } from 'node:path'
 writeFileSync(join(process.env.SIG_DIR, 'started.json'), JSON.stringify({ pid: process.pid, cwd: process.cwd() }))
 setTimeout(() => {}, 60000)
 `)
-  const child = spawn(process.execPath, [RUN_MODEL], { cwd: ROOT, env: { ...cleanEnv(), CLAUDE: stub, SIG_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  const env = { ...cleanEnv(), CLAUDE: stub, SIG_DIR: dir }
+  let child: ReturnType<typeof spawn>
+  if (how === 'CTRL_BREAK') {
+    const helper = join(dir, 'sigbreak.py')
+    writeFileSync(helper, SIG_HELPER_PY)
+    child = spawn('python', [helper, process.execPath, RUN_MODEL, ROOT, dir], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  } else {
+    child = spawn(process.execPath, [RUN_MODEL], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  }
   let out = ''
-  child.stdout.on('data', (d) => { out += d })
-  child.stderr.on('data', () => {})
+  let err = ''
+  child.stdout!.on('data', (d) => { out += d })
+  child.stderr!.on('data', (d) => { err += d })
   const exited = new Promise<{ code: number | null; sig: string | null }>((res) => child.on('exit', (code, sig) => res({ code, sig })))
   let started: { pid: number; cwd: string } | undefined
   let leftL: string[] = []
   try {
-    for (let i = 0; i < 600 && !started; i++) {
-      try { started = JSON.parse(readFileSync(join(dir, 'started.json'), 'utf8')) } catch { await sleepMs(100) }
+    let code: number | string | null
+    let sig: string | null = null
+    let runnerOut: string
+    if (how === 'CTRL_BREAK') {
+      const res = await Promise.race([exited, sleepMs(100000).then(() => 'hung' as const)])
+      assert.notEqual(res, 'hung', 'the Python helper did not finish')
+      let parsed: { code: number | string; stdout: string } | undefined
+      try { parsed = JSON.parse(out) } catch { assert.fail(`helper gave no result (python stderr: ${err}) stdout: ${out}`) }
+      code = parsed!.code
+      runnerOut = parsed!.stdout
+      try { started = JSON.parse(readFileSync(join(dir, 'started.json'), 'utf8')) } catch {}
+      assert.ok(started, `the stub never started (python stderr: ${err})`)
+      assert.notEqual(code, 'hung', 'run-model did not exit within 20 s of Ctrl-Break')
+    } else {
+      for (let i = 0; i < 600 && !started; i++) {
+        try { started = JSON.parse(readFileSync(join(dir, 'started.json'), 'utf8')) } catch { await sleepMs(100) }
+      }
+      assert.ok(started, 'the stub never started')
+      child.kill(how)
+      const res = await Promise.race([exited, sleepMs(20000).then(() => 'hung' as const)])
+      assert.notEqual(res, 'hung', `run-model did not exit within 20 s of ${how}`)
+      ;({ code, sig } = res as { code: number | null; sig: string | null })
+      runnerOut = out
     }
-    assert.ok(started, 'the stub never started')
-    child.kill('SIGINT')
-    const res = await Promise.race([exited, sleepMs(20000).then(() => 'hung' as const)])
-    assert.notEqual(res, 'hung', 'run-model did not exit within 20 s of SIGINT')
-    const { code, sig } = res as { code: number | null; sig: string | null }
+    await sleepMs(300)
     const after = tmpWorktrees()
     leftL = newOnly(before.listed, after.listed)
     assert.ok(code !== 0, `exit code ${code} signal ${sig}: an interrupted run must not exit 0`)
-    assert.ok(!/^score /m.test(out), `a score line was printed after the interrupt:\n${out}`)
-    assert.deepEqual(leftL, [], `runner exit ${code}/${sig}: git worktree list shows a leftover temp worktree`)
-    assert.deepEqual(newOnly(before.meta, after.meta), [], `runner exit ${code}/${sig}: <common>/worktrees holds leftover metadata`)
+    assert.ok(!/^score /m.test(runnerOut), `a score line was printed after the interrupt:\n${runnerOut}`)
+    assert.deepEqual(leftL, [], `runner exit ${code}/${sig} after ${how}: git worktree list shows a leftover temp worktree`)
+    assert.deepEqual(newOnly(before.meta, after.meta), [], `runner exit ${code}/${sig} after ${how}: <common>/worktrees holds leftover metadata`)
+    assert.ok(!existsSync(started!.cwd), `runner exit ${code}/${sig} after ${how}: the temp worktree dir ${started!.cwd} still exists`)
   } finally {
-    child.kill('SIGKILL')
+    try { child.kill('SIGKILL') } catch {}
     if (started) { try { process.kill(started.pid, 'SIGKILL') } catch {} }
     await sleepMs(500)
     // Tidy what the red run leaked, so the suite does not accumulate worktrees.
@@ -828,7 +880,14 @@ setTimeout(() => {}, 60000)
     spawnSync('git', ['worktree', 'prune'], { cwd: ROOT, windowsHide: true })
     rm(dir)
   }
-})
+}
+
+if (process.platform === 'win32') {
+  test('run-model: an interrupt (Ctrl-Break console event) mid-case leaves no temp worktree and no score line', (t) => interruptCase('CTRL_BREAK', t))
+} else {
+  test('run-model: an interrupt (SIGINT) mid-case leaves no temp worktree and no score line', (t) => interruptCase('SIGINT', t))
+  test('run-model: SIGTERM mid-case leaves no temp worktree and no score line', (t) => interruptCase('SIGTERM', t))
+}
 
 test('run-model: cleanup that cannot remove the tree at once (a leftover process holds the cwd) does not abort the run, and nothing is left afterwards', async () => {
   const { tmp, rp } = synth([{ id: 'busy-one', input: 'x\n' }], {})
