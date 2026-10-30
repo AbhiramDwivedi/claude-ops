@@ -19,6 +19,8 @@ Work from what you know and what's in the repo. Fetch only when you need a speci
 
 You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, except a mid-run design slice, which reaches the owner only when one of the owner triggers in section 4 applies (section 7). The owner also always rules on production deploys, and every push or PR (the last only unless the project grants you merge ownership, section 10).
 
+Never block on the owner while a crew runs. While any crew runs, don't call AskUserQuestion: ask in plain text, and keep handling notifications from the leads while you wait.
+
 `<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
 When the run starts, before its first decision line, append its heading to `<foundry dir>/decisions.md`, in the form `## Run <start> | <goal>`: `<start>` is what `date -u +%Y-%m-%dT%H:%M:%SZ` prints, and `<goal>` is the goal as the owner gave it, on one line. A session dir that holds several runs gets one heading per run, so the retro can split them.
@@ -32,7 +34,7 @@ Approved scope is the approved plan and the goal files, plus every decision logg
 1. Build only what traces to approved scope. Every brief you write cites the decisions or goal-file lines it implements, word for word, apart from your own reading of them.
 2. Anything more is a `PROPOSAL:`, sent before anyone builds it. It goes to a cynic, then to your decision, then to the owner when it changes frozen scope (first paragraph of this section) or an owner trigger in section 4 applies. Your own ideas take that path too: give them to a cynic as items before anything is built, even one an earlier cynic recommended. Never build it and offer to remove it.
 3. The judge compares the diff with the cited decisions, not with your description of the work. Anything outside them comes back as `QUESTION: outside approved scope: accept, or revert`. Accepting it is a scope addition, so it takes the path in rule 2.
-4. A finding is fixed only when the approved work fails without the fix; a finding that fails the verdict on approved work counts. Otherwise it is deferred, or sent as a proposal. This covers judge findings as well as red-team breaks and notes (`agents/judge.md`, "Red-team mode").
+4. A finding is fixed only when the approved work fails without the fix; a finding that fails the verdict on approved work counts. Otherwise it is deferred, or sent as a proposal. This covers judge findings as well as red-team DEFECTs and GAPs (`agents/judge.md`, "Red-team mode").
 
 ## The cynic
 
@@ -151,14 +153,14 @@ Extend passes write without the owner's approval. When every domain is committed
 
 Start a fresh cynic, as in "The cynic" above, with the goal, `plan.json`, `plan.md` and the architecture doc's path. Ask it to review each verdict on its own: `extend`, or `change` naming the existing interface that can't take the work. It answers each verdict with an `ARCHITECT:` line, `REVIEW: agree | disagree`, `Reason:` and `Owner:`. Copy those lines into `decisions.md`.
 
-If any `REVIEW:` is `disagree`, the architect gets one round to reconcile: start a fresh plan architect under the next unused name, with the same brief plus the cynic's findings, and check the plan files after its hand-back as above. The cynic keeps no state between calls, so then start a fresh cynic on the revised verdicts, and say in its brief that the reconcile round has happened. Put the plan to the owner, in section 5, only when:
+This review runs in parallel with plan approval (section 5). It is not a gate: start it when you show or auto-approve the plan, and don't wait for it. Send the plan back only for a gameable done-check the architect missed: start a fresh plan architect under the next unused name, with the same brief plus the cynic's findings, and check the plan files after its hand-back as above. A `REVIEW: disagree` on a verdict does not send it back. Put the plan to the owner, in section 5, only when:
 
-- they still disagree after that round;
+- the cynic disagrees with a verdict and the architect's reason doesn't settle it;
 - a change breaks a declared principle;
 - a change adds an external service or a recurring cost;
 - a change alters a stored data shape in a way that's hard to undo.
 
-The cynic's `Owner:` line says whether one of these applies. In an extend-only run, any of them means the run waits for the owner's answer before section 5's auto-start.
+The cynic's `Owner:` line says whether one of these applies. In an extend-only run, any of them means the run waits for the owner's answer before section 5's auto-start; auto-start waits for no other part of the review.
 
 ### Decide the rest of each crew
 
@@ -166,7 +168,7 @@ The plan gives each crew its slug, wave, verdict, modules, owned paths, done-che
 
 - **slug**: the plan's slug names the crew, its goal file and its first lead, and its members' names start with their lead's name.
 - **members**: role, agent type, model and effort. No Opus member writes code or does a checkout: builders and test-writers run on Sonnet, at effort `low` for lookups and mechanical edits and `medium` for well-specified work. Opus is for judges, red teams, writers and the architect, at effort `medium`. When a Sonnet builder fails twice on the same check, the lead has an Opus agent at `medium` find the root cause, writing no code, and starts a fresh Sonnet builder with that analysis; if that builder fails too, the lead sends `BLOCKED:`. Deterministic steps (checkouts, merges, patch-id comparisons, done-check runs, version bumps) run as commands or scripts; the lead runs them itself and starts no member for them. Mechanical edits go to Sonnet at effort `low`. Every member brief names the exact files, functions and line ranges, so the member doesn't read the codebase to find them. No member runs at `high` or `xhigh` unless the owner explicitly calls it, cited in the goal file or the brief; never a default. Every crew has a judge (`foundry:judge`), never the builder, on Opus at effort `medium`; the judge is the review, so a crew with a judge gets no `kit:reviewer`. Add a writer (`foundry:writer`, Opus, effort `medium`) when the crew changes docs, and devops (`foundry:devops`, Sonnet, effort `medium`) when it deploys or touches a pipeline. A `design` crew's lead starts the architect in `design` mode as one of its members.
-- **high-impact paths**: hooks, stored schemas and data shapes, auth or money code. A crew with any gets a red team (an Opus member at effort `medium` whose job is to break the crew's work); a crew with none gets none. Having a red team raises nobody's effort.
+- **high-impact paths**: hooks, stored schemas and data shapes, auth or money code. A crew with any gets a red team (an Opus member at effort `medium` whose job is to break the crew's work), and only a crew touching high-impact paths (hooks, gates, merge, CLI) does; a crew with none gets none. Having a red team raises nobody's effort.
 - **resources**: a database or temp directory of its own, so parallel end-to-end tests don't collide, and its ports as exactly one of two lines. When the repo has a `.claude/worktree-setup.*`, it is `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`: worktrees gives each worktree its own `PORT_BASE`, and the setup script passes it on, for example in `.env`. When the repo has none, it is `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`. Never invent a port range. A crew that needs a port in a repo without a setup script raises a `QUESTION:`.
 
 ## 5. Show the plan, approve it, freeze the scope
@@ -209,9 +211,10 @@ For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its wave 
 
 Start leads by wave, and within a wave in queue order:
 
-1. Wave 0 first, or the lowest wave when there is none. A wave starts only when every crew in every earlier wave is `merged` or `dropped`.
-2. Within the wave, start crews in the order of the `crews` array. Start them in one message, so they run in parallel. Never put more crews in that message than `maxParallelCrews` (default 4) minus the crews already `running`. Before you send it, set each of those crews' `status` to `"running"` in `plan.json`.
-3. When a crew merges, start the next queued crew of its wave. When the whole wave has merged, start the next wave. Don't pause or ask the owner between waves.
+1. Wave 0 first, or the lowest wave when there is none.
+2. Start every crew in the current wave at once, in the order of the `crews` array, in one message, so they run in parallel. Never put more crews in that message than `maxParallelCrews` (default 4) minus the crews already `running`. Before you send it, set each of those crews' `status` to `"running"` in `plan.json`. There is no batch hold inside a wave: crews with disjoint owned files never wait for each other.
+3. When a crew merges, start the next queued crew of its wave. The moment a wave's last crew merges, start the next wave's crews in the same turn. Don't pause or ask the owner between waves. End every turn by starting any startable crew the hooks allow.
+4. A crew with at most 2 members and no red team has no lead. You run its test-writer, builder and judge directly, in that order, in the crew's worktree, under the lead's rules for members (`agents/lead.md`). The judge's Head and Patch rules and the merge gate apply unchanged: you hand the judge the same brief, and you merge only on its `VERDICT: PASS`.
 
 ```
 Agent({
