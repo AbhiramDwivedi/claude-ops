@@ -466,6 +466,7 @@ test('run-model: a case that outlives CASE_TIMEOUT_MS is killed and scored timeo
     for (const f of readdirSync(join(PLUGIN, 'evals'))) if (f !== 'golden') cpSync(join(PLUGIN, 'evals', f), join(base, 'evals', f), { recursive: true })
     for (const c of keep) writeFileSync(join(base, 'evals', 'golden', `${c.id}.json`), JSON.stringify(c))
     cpSync(join(PLUGIN, 'hooks', 'register.ts'), join(base, 'hooks', 'register.ts'))
+    cpSync(join(PLUGIN, 'hooks', 'intake.ts'), join(base, 'hooks', 'intake.ts'))
     for (const a of ['judge', 'cynic']) cpSync(join(PLUGIN, 'agents', `${a}.md`), join(base, 'agents', `${a}.md`))
     const rp = join(base, 'evals', 'run-model.ts')
     const orig = readFileSync(rp, 'utf8')
@@ -537,6 +538,7 @@ test('run-model: model and effort come from each agent frontmatter, not a consta
     mkdirSync(join(base, 'agents'), { recursive: true })
     cpSync(join(PLUGIN, 'evals'), join(base, 'evals'), { recursive: true })
     cpSync(join(PLUGIN, 'hooks', 'register.ts'), join(base, 'hooks', 'register.ts'))
+    cpSync(join(PLUGIN, 'hooks', 'intake.ts'), join(base, 'hooks', 'intake.ts'))
     for (const a of ['judge', 'cynic']) cpSync(join(PLUGIN, 'agents', `${a}.md`), join(base, 'agents', `${a}.md`))
     const jp = join(base, 'agents', 'judge.md')
     writeFileSync(jp, readFileSync(jp, 'utf8').replace(/^model:.*$/m, 'model: sonnet').replace(/^effort:.*$/m, 'effort: low'))
@@ -702,6 +704,7 @@ function synth(defs: { id: string; input: string }[], sources: Record<string, st
   mkdirSync(join(base, 'evals', 'golden'), { recursive: true })
   for (const f of readdirSync(join(PLUGIN, 'evals'))) if (f !== 'golden') cpSync(join(PLUGIN, 'evals', f), join(base, 'evals', f), { recursive: true })
   cpSync(join(PLUGIN, 'hooks', 'register.ts'), join(base, 'hooks', 'register.ts'))
+  cpSync(join(PLUGIN, 'hooks', 'intake.ts'), join(base, 'hooks', 'intake.ts'))
   for (const a of ['judge', 'cynic']) cpSync(join(PLUGIN, 'agents', `${a}.md`), join(base, 'agents', `${a}.md`))
   for (const d of defs) {
     writeFileSync(join(base, 'evals', 'golden', `${d.id}.json`), JSON.stringify({
