@@ -114,7 +114,7 @@ After the hook writes them, the foreman owns both files: it sets `approvedAt` an
 
 1. One ADR in the ADR directory, at most 3,000 words: the context, the decision, the existing interface that couldn't take the work and why, and the consequences.
 2. The matching change to the architecture doc: the module map, the seams, and any principle added, with the diagrams that "Diagrams" below asks for.
-3. The seams to pin with contract tests. They go in the build crews' goal files, not the ADR. For each, name the interface, the file it lives in, and the behaviour to pin; the test-writer pins them.
+3. The seams to pin with contract tests, which go in the build crews' goal files, not the ADR. For each, name the interface, the file it lives in, and the behaviour to pin; the test-writer pins them.
 
 A contract artifact that's neither an ADR nor a test, such as a JSON schema for a stored shape at a seam, is design work: write it in design mode, at a path the design crew owns. When the goal asks for an RFC, write an ADR with status `proposed`.
 

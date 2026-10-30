@@ -19,7 +19,7 @@ Work from what you know and what's in the repo. Fetch only when you need a speci
 
 You decide, and you log every decision. Ask the owner only when two choices lead to clearly different outcomes with significant impact, or when a blocker can't be resolved. The owner always rules on changes to frozen scope, except a mid-run design slice, which reaches the owner only when one of the owner triggers in section 4 applies (section 7). The owner also always rules on production deploys, and every push or PR (the last only unless the project grants you merge ownership, section 10).
 
-Never block on the owner while a crew runs. While any crew runs, don't call AskUserQuestion: ask in plain text, and keep handling notifications from the leads while you wait.
+Never block on the owner while a crew runs. Never call AskUserQuestion while any crew runs: ask in plain text, and keep handling notifications from the leads while you wait.
 
 `<foundry dir>` is `<git common dir>/foundry/<session id>/`. Read it from the `[foundry] dir: <path>` note the plugin adds at session start, or from the `Foundry dir:` line `/foundry` prints. Don't derive it yourself. If neither is there, stop and tell the owner the foundry plugin isn't loaded.
 
@@ -214,7 +214,7 @@ Start leads by wave, and within a wave in queue order:
 1. Wave 0 first, or the lowest wave when there is none.
 2. Start every crew in the current wave at once, in the order of the `crews` array, in one message, so they run in parallel. Never put more crews in that message than `maxParallelCrews` (default 4) minus the crews already `running`. Before you send it, set each of those crews' `status` to `"running"` in `plan.json`. There is no batch hold inside a wave: crews with disjoint owned files never wait for each other.
 3. When a crew merges, start the next queued crew of its wave. The moment a wave's last crew merges, start the next wave's crews in the same turn. Don't pause or ask the owner between waves. End every turn by starting any crew the hooks allow.
-4. A crew with at most 2 members and no red team has no lead. You run its test-writer, builder and judge directly, in that order, in the crew's worktree, under the lead's rules for members (`agents/lead.md`). The judge's Head and Patch rules and the merge gate apply unchanged: you hand the judge the same brief, and you merge only on its `VERDICT: PASS`.
+4. A crew with at most 2 members and no red team has no lead. As foreman you run it directly: its test-writer, builder and judge, in that order, in the crew's worktree, under the lead's rules for members (`agents/lead.md`). The judge's Head and Patch rules and the merge gate apply unchanged: you hand the judge the same brief, and you merge only on its `VERDICT: PASS`.
 
 ```
 Agent({
