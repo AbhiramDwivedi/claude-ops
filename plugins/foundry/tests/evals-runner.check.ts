@@ -9,13 +9,14 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { score } from '../evals/score.ts'
-import { runSnippet } from '../evals/snippets.ts'
+import { extractSnippet, runSnippet } from '../evals/snippets.ts'
+import { judgeRuling } from '../hooks/register.ts'
 
 const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ROOT = join(PLUGIN, '..', '..')
@@ -207,4 +208,89 @@ test('score RECOMMEND: the line must start with RECOMMEND or a cynic-N prefix', 
   assert.equal(score('note: cynic-2 RECOMMEND: defer\n', R('defer')).got, undefined)
   assert.deepEqual(score('cynic-2: RECOMMEND: defer\n', R('defer')), { ok: true, got: 'defer' })
   assert.deepEqual(score('  RECOMMEND answer\n', R('answer')), { ok: true, got: 'answer' })
+})
+
+// ---- ADR-0007 section 5: the 30-second bash timeout (source check: a live 30 s test is too slow) ----
+test('runSnippet (source check): the bash spawn carries timeout: 30_000', () => {
+  const text = readFileSync(join(PLUGIN, 'evals', 'snippets.ts'), 'utf8')
+  const chunk = text.split('spawnSync(').slice(1).find((c) => c.includes("'bash'"))
+  assert.ok(chunk, 'no spawnSync call running bash')
+  const opts = chunk.slice(0, chunk.indexOf('})'))
+  assert.match(opts, /timeout:\s*(30_000|30000)\b/, 'the bash spawn has no 30-second timeout')
+})
+
+// ---- ADR-0007 section 5: extractSnippet rules ----
+function withPrompt(content: string, fn: (path: string) => void) {
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-extract-'))
+  try {
+    const p = join(dir, 'prompt.md')
+    writeFileSync(p, content)
+    fn(p)
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10 })
+  }
+}
+const line = (opening: string, form: 'fenced' | 'inline') => ({ file: 'x.md', opening, form, fills: {} })
+
+test('extractSnippet: drops a BOM (and every CR), so a BOM-prefixed fence still opens at line 0', () => {
+  withPrompt('﻿```\r\ngit foo\r\nsecond\r\n```\r\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'fenced')), 'git foo\nsecond')
+  })
+  withPrompt('﻿`git foo` then text\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'inline')), 'git foo')
+  })
+  // JS trimStart() also strips a BOM, so behaviour alone cannot tell a dropped BOM from a kept one; the source must say it.
+  const text = readFileSync(join(PLUGIN, 'evals', 'snippets.ts'), 'utf8')
+  assert.ok(/\\uFEFF|﻿/.test(text), 'snippets.ts never removes a BOM')
+})
+
+test('extractSnippet fenced: a fence line with leading spaces opens and closes a fence', () => {
+  withPrompt('text\n   ```\n   git foo\n  more\n   ```\nafter\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'fenced')), '   git foo\n  more')
+  })
+  // An indented closing fence must close it, or the body would run on to the next fence.
+  withPrompt('```\ngit foo\n   ```\nprose\n```\ngit foo trailing\n```\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'fenced')), 'git foo')
+  })
+})
+
+test('extractSnippet fenced: the opening must start the FIRST body line, leading spaces dropped', () => {
+  withPrompt('```\necho hi\ngit foo bar\n```\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'fenced')), undefined, 'a later body line must not match')
+  })
+  withPrompt('```\necho hi\ngit foo bar\n```\n\n```\n    git foo baz\nline2\n```\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'fenced')), '    git foo baz\nline2', 'first fence whose first line matches')
+  })
+  withPrompt('```\nxgit foo\n```\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'fenced')), undefined, 'opening is a prefix match, not a substring')
+  })
+})
+
+test('extractSnippet inline: spans inside fence bodies are skipped; the first span outside wins', () => {
+  withPrompt('```\nrun `git foo inside`\n```\nSee `git foo outside` and `git foo second`.\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'inline')), 'git foo outside')
+  })
+  withPrompt('```\n`git foo inside`\n```\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'inline')), undefined, 'only a fenced span exists')
+  })
+  // An indented fence still hides its body.
+  withPrompt('  ```\n`git foo hidden`\n  ```\n', (p) => {
+    assert.equal(extractSnippet(p, line('git foo', 'inline')), undefined)
+  })
+})
+
+test('extractSnippet: an unreadable file gives undefined', () => {
+  assert.equal(extractSnippet(join(tmpdir(), 'foundry-no-such-prompt-' + token() + '.md'), line('x', 'fenced')), undefined)
+})
+
+// ---- ADR-0007 section 4: score rules a VERDICT exactly as the merge gate does ----
+test('score VERDICT: agrees with judgeRuling from the gate (hooks/register.ts) on text the gate and a bare regex rule differently', () => {
+  for (const text of ['  VERDICT: PASS\n', '\n\nVERDICT: FAIL\n', 'VERDICT:  PASS\n', 'VERDICT: PASS   \n', '﻿VERDICT: PASS\n']) {
+    const gate = judgeRuling(text).verdict
+    for (const kind of ['PASS', 'FAIL']) {
+      assert.deepEqual(score(text, V(kind)), { ok: gate === kind, got: gate }, JSON.stringify(text) + ' expecting ' + kind)
+    }
+  }
+  assert.equal(judgeRuling('  VERDICT: PASS\n').verdict, 'PASS', 'premise: the gate rules indented VERDICT lines')
+  assert.deepEqual(score('  VERDICT: PASS\n', V('PASS')), { ok: true, got: 'PASS' })
 })

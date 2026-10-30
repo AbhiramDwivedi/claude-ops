@@ -95,7 +95,9 @@ function run(env: Record<string, string> = {}, args: string[] = [], opts: { clau
       .map((f) => JSON.parse(readFileSync(join(logDir, f), 'utf8')))
     const results = outDir && existsSync(outDir) ? JSON.parse(readFileSync(join(outDir, 'results.json'), 'utf8')) : undefined
     const outFiles = outDir && existsSync(outDir) ? readdirSync(outDir) : []
-    return { r, stdout, calls, outDir, results, outFiles }
+    const raw: Record<string, string> = {}
+    for (const f of outFiles) raw[f] = readFileSync(join(outDir, f), 'utf8')
+    return { r, stdout, calls, outDir, results, outFiles, raw }
   } finally {
     rm(logDir)
     if (outDir && basename(outDir).startsWith('foundry-evals-') && norm(dirname(outDir)) === norm(realpathSync.native(tmpdir()))) rm(outDir)
@@ -344,6 +346,54 @@ test('run-model: writes nothing under .claude (worktrees excepted) and no run ou
   const leaked = readdirSync(COMMON).filter(
     (n) => !commonBefore.has(n) && (n.includes('foundry-evals') || n.includes('results') || ids.some((id) => n.includes(id))))
   assert.deepEqual(leaked, [], 'new run output in the git common dir')
+})
+
+test('run-model (source check): the only environment variable it reads by name is CLAUDE (a bare process.env passed whole is allowed)', () => {
+  // ADR-0007 section 7: "It takes no flag that picks or adds cases." A behavioural test can only try names it guesses;
+  // a source check closes the door on every name.
+  const text = readFileSync(RUN_MODEL, 'utf8')
+  const reads = [...text.matchAll(/process\.env(\s*\.\s*(\w+)|\s*\?\.\s*(\w+)|\s*\[\s*(['"`])([^'"`]*)\4\s*\]|\s*\[[^\]]*\])?/g)]
+  const named = reads.filter((m) => m[1] !== undefined)
+  assert.ok(named.some((m) => (m[2] ?? m[3] ?? m[5]) === 'CLAUDE'), 'run-model no longer reads process.env.CLAUDE')
+  for (const m of named) {
+    const key = m[2] ?? m[3] ?? m[5]
+    assert.equal(key, 'CLAUDE', `run-model reads process.env${m[1]}; only CLAUDE may be read by name`)
+  }
+})
+
+test('run-model (source check): a timed-out child is detected by ETIMEDOUT and scored with the timeout label', () => {
+  // A live 600 s run is too slow, and no override of the timeout is allowed, so there is no behavioural test here.
+  // (A red team proved the real path with a patched copy in tmp at 1.5 s.) A dead branch must turn this red.
+  const text = readFileSync(RUN_MODEL, 'utf8')
+  assert.match(text, /code\s*===\s*['"]ETIMEDOUT['"]/, 'no ETIMEDOUT comparison on the spawn error')
+  assert.match(text, /['"]timeout['"]/, "no 'timeout' result label")
+  assert.ok(!/(?:const|let)\s+timedOut\s*=\s*(?:false|true)\b/.test(text), 'timedOut is a constant')
+  assert.match(text, /timedOut\s*\?\s*['"]timeout['"]/, 'a timed-out case is not given the timeout label')
+})
+
+test('run-model: each raw report is the child stdout, and each results.json entry matches that case\'s printed line', () => {
+  const reply = 'VERDICT: FAIL\n\nunique-reply-' + Date.now() + '-xq7\n'
+  const { r, stdout, results, raw } = run({ CLAUDE_STUB_REPLY: reply })
+  assert.equal(r.status, 0, r.stderr)
+  const all = cases()
+  const { rows } = parse(stdout)
+  assert.equal(rows.length, all.length)
+  const entries = Array.isArray(results) ? results : Object.values(results.cases ?? results)
+  assert.equal(entries.length, all.length)
+  for (const c of all) {
+    assert.ok(raw[`${c.id}.txt`] !== undefined, `${c.id}.txt missing`)
+    assert.equal(raw[`${c.id}.txt`].replace(/\r/g, '').trimEnd(), reply.trimEnd(), `${c.id}.txt is not the child's reply`)
+  }
+  for (const m of rows) {
+    const e = entries.find((x) => x.id === m[1])
+    assert.ok(e, `no results entry for ${m[1]}`)
+    assert.equal(e.result, m[2], `${m[1]} result`)
+    assert.equal(e.expected, m[3], `${m[1]} expected`)
+    assert.equal(e.got, m[4], `${m[1]} got`)
+  }
+  // The reply must really split the cases, or an always-ok results.json would agree with the printed lines.
+  assert.ok(rows.some((m) => m[2] === 'ok'), 'premise: some case scores ok on VERDICT: FAIL')
+  assert.ok(rows.some((m) => m[2] === 'miss'), 'premise: some case scores miss on VERDICT: FAIL')
 })
 
 test('run-model: honours no environment variable that filters cases', () => {
