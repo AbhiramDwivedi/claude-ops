@@ -1,0 +1,13 @@
+{
+  "architect": { "agentType": "foundry:architect", "model": "opus", "effort": "medium", "isolation": "worktree" },
+  "cynic": { "agentType": "foundry:cynic", "model": "opus", "effort": "medium", "isolation": "none" },
+  "planner": { "agentType": "foundry:crew-planner", "model": "opus", "effort": "medium", "isolation": "none" },
+  "tester": { "agentType": "general-purpose", "model": "sonnet", "effort": "medium", "isolation": "worktree", "typeFromProject": true },
+  "builder": { "agentType": "general-purpose", "model": "sonnet", "effort": "medium", "isolation": "worktree", "typeFromProject": true },
+  "resolver": { "agentType": "general-purpose", "model": "sonnet", "effort": "medium", "isolation": "none", "typeFromProject": "builder" },
+  "writer": { "agentType": "foundry:writer", "model": "opus", "effort": "medium", "isolation": "worktree" },
+  "rca": { "agentType": "general-purpose", "model": "opus", "effort": "medium", "isolation": "none" },
+  "redteam": { "agentType": "foundry:judge", "model": "opus", "effort": "medium", "isolation": "worktree" },
+  "judge": { "agentType": "foundry:judge", "model": "opus", "effort": "medium", "isolation": "none" },
+  "runner": { "agentType": "general-purpose", "model": "sonnet", "effort": "low", "isolation": "none" }
+}
