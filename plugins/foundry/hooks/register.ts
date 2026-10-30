@@ -571,14 +571,15 @@ export function mainCallVerdict(plan: Plan | undefined, callerId: string | undef
 }
 
 // ADR-0009 Decision 6. The role table a foundry Workflow script is given (Decision 2): opus or sonnet, low or medium
-// effort, no lead or devops, keys that match ^[a-z]+$. Undefined means the table is allowed.
+// effort, no lead, devops or integrator, keys that match ^[a-z]+$. Undefined means the table is allowed.
 export function workflowRoleVerdict(roles: unknown): { deny: string } | undefined {
   const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
   if (!isRecord(roles)) return refuse('the Workflow needs a roles table in args.foundry.roles')
   for (const [key, role] of Object.entries(roles)) {
     if (!/^[a-z]+$/.test(key)) return refuse(`Workflow role "${key}" is not a lowercase name`)
-    if (key === 'lead' || key === 'devops') return refuse(`a Workflow never runs a ${key} role`)
+    if (key === 'lead' || key === 'devops' || key === 'integrator') return refuse(`a Workflow never runs a ${key} role`)
     if (!isRecord(role)) return refuse(`Workflow role ${key} is not an object`)
+    if (role.agentType === 'foundry:lead' || role.agentType === 'foundry:devops' || role.agentType === 'foundry:integrator') return refuse(`Workflow role ${key} never runs as ${role.agentType}`)
     if (role.model !== 'opus' && role.model !== 'sonnet') return refuse(`Workflow role ${key} needs model opus or sonnet`)
     if (role.effort !== 'low' && role.effort !== 'medium') return refuse(`Workflow role ${key} needs effort low or medium`)
   }
@@ -592,6 +593,7 @@ export function workflowCallVerdict(
 ): { deny: string } | undefined {
   if (!planAtLeastV2(plan)) return undefined
   const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
+  if (input.script !== undefined && input.scriptPath !== undefined) return refuse('a Workflow call gives either script or scriptPath, not both')
   const flat = (v: string) => v.replace(/\\/g, '/')
   const dir = flat(input.pluginDir)
   const path = typeof input.scriptPath === 'string' ? flat(input.scriptPath) : undefined
