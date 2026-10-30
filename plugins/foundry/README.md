@@ -110,7 +110,7 @@ After you pick the goal's altitude, the foreman runs the `foundry:interview` ski
 
 ## Workflow engine
 
-When the session has the Workflow tool and you have opted in to workflows, the foreman plans and builds with scripts instead of long agent conversations. Crews with a `devops` member, or a member you raised to `high` or `xhigh` effort, stay on the lead path, and so does every crew in a `single`-mode run. Without Workflow, or when you haven't opted in, the foreman passes `--no-workflow` and every crew uses the lead path described below.
+When the session has the Workflow tool, the foreman plans and builds with scripts instead of long agent conversations. Crews with a `devops` member, or a member you raised to `high` or `xhigh` effort, stay on the lead path, and so does every crew in a `single`-mode run. Workflow is the default; you don't need to opt in. Without Workflow, or when you opt out, the foreman passes `--no-workflow` and every crew uses the lead path described below.
 
 - **Plan.** The foreman writes the brief to `plan-brief.md`, runs `plan-args`, then `Workflow(plan.js)`: the architect, then a cynic review of the verdicts. `plan-write` saves the plan and `plan-check` validates it; a failed check resumes once.
 - **Build.** `start` picks the next wave, makes each crew's worktree and returns the crews; the foreman runs `Workflow(wave.js)`, which takes each crew through the done-check red, a split into member tasks, the members, the green check, an optional single red-team round, the scope check and the judge. Then `finish --transcript <T> --result <file>` records the run and merges: it is the merge gate for these crews.
