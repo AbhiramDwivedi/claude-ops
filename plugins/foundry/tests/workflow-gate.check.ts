@@ -269,6 +269,42 @@ test('call: kind wave refuses when planVerdict refuses (the cap is reached)', ()
   refused(workflowCallVerdict(p, waveCall([{ slug: 'a' }])))
 })
 
+// ---- script and kind must pair: wave.js with "wave", plan.js with "plan" ----
+
+const planKindArgs = (crews: unknown[] = []) => ({ foundry: { kind: 'plan', roles: ROLES, crews } })
+const runningPlan = () => plan({ approvedAt: APPROVED, crews: [crew('a', 1, 'running')] })
+const mismatch = (d: string, script: string, kind: string) => {
+  assert.ok(d.includes(script), d)
+  assert.ok(d.includes(kind), d)
+}
+
+test('call: wave.js by path with kind plan is refused, naming wave.js and plan', () => {
+  const input = call({ scriptPath: `${PLUGIN}/workflows/wave.js`, scriptText: WAVE_JS, args: planKindArgs() })
+  mismatch(refused(workflowCallVerdict(plan(), input)), 'wave.js', 'plan')
+})
+test('call: wave.js with kind plan is refused for the red-team case (owner approval, approvedAt null, planned crew)', () => {
+  const p = plan({ approval: 'owner', crews: [crew('auth', 1, 'planned')] })
+  const args = { foundry: { kind: 'plan', roles: ROLES, crews: [{ slug: 'auth' }] } }
+  const input = call({ scriptPath: `${PLUGIN}/workflows/wave.js`, scriptText: WAVE_JS, args })
+  mismatch(refused(workflowCallVerdict(p, input)), 'wave.js', 'plan')
+})
+test('call: plan.js by path with kind wave (running allowed crews) is refused, naming plan.js and wave', () => {
+  const input = call({ scriptPath: `${PLUGIN}/workflows/plan.js`, scriptText: PLAN_JS, args: waveArgs([{ slug: 'a' }]) })
+  mismatch(refused(workflowCallVerdict(runningPlan(), input)), 'plan.js', 'wave')
+})
+test('call: an inline script identical to wave.js with kind plan is refused', () => {
+  const input = call({ script: WAVE_JS, scriptPath: undefined, scriptText: WAVE_JS, args: planKindArgs() })
+  mismatch(refused(workflowCallVerdict(plan(), input)), 'wave.js', 'plan')
+})
+test('call: an inline script identical to plan.js with kind wave is refused', () => {
+  const input = call({ script: PLAN_JS, scriptPath: undefined, scriptText: PLAN_JS, args: waveArgs([{ slug: 'a' }]) })
+  mismatch(refused(workflowCallVerdict(runningPlan(), input)), 'plan.js', 'wave')
+})
+test('call: a byte-identical copy of wave.js at a foreign path with kind plan is refused', () => {
+  const input = call({ scriptPath: '/elsewhere/foundry-wave.js', scriptText: WAVE_JS, args: planKindArgs() })
+  mismatch(refused(workflowCallVerdict(plan(), input)), 'wave.js', 'plan')
+})
+
 // ---- fencedBlock ----
 
 // Contract (register.ts comment): the inner lines of the first block that opens with a line exactly equal to `open`
