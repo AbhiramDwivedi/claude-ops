@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "foundry plan.json, versions 1 and 2",
+  "title": "foundry plan.json, versions 1, 2 and 3",
   "description": "<foundry dir>/plan.json: the seam between the architect, the foreman and the hooks. The architect drafts it in plan mode; the foreman owns it after that; the hooks treat it as read-only. See adr/0001-design-phase.md, section 8.",
   "type": "object",
   "additionalProperties": false,
@@ -15,8 +15,8 @@
   ],
   "properties": {
     "version": {
-      "description": "Plan file format version. It goes up whenever a field is added; readers gate on version >= 2, never === 2, so a later version inherits every v2 rule. Version 2 adds repairBudget.",
-      "enum": [1, 2]
+      "description": "Plan file format version. It goes up whenever a field is added; readers gate on version >= 2, never === 2, so a later version inherits every v2 rule. Version 2 adds repairBudget. Version 3 adds the top-level goals array and a crew's goal.",
+      "enum": [1, 2, 3]
     },
     "goal": {
       "description": "The run's goal, as the owner gave it.",
@@ -47,6 +47,56 @@
       "type": "integer",
       "minimum": 0
     },
+    "goals": {
+      "description": "Version 3 only. The goals added after the run's approval, in the order they were added. The run's first goal stays in the top-level goal, approval and approvedAt; its id is the reserved word \"run\". See adr/0010-mid-run-intake.md, section 1.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "goal", "addedAt", "approval", "approvedAt"],
+        "properties": {
+          "id": {
+            "description": "The goal's handle in /foundry, in crews' goal field and in decisions.md tags. The crew-slug pattern, and never \"run\", which names the run's first goal.",
+            "type": "string",
+            "maxLength": 100,
+            "pattern": "^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "not": { "const": "run" }
+          },
+          "goal": {
+            "description": "The goal as the owner gave it.",
+            "type": "string",
+            "minLength": 1
+          },
+          "addedAt": {
+            "description": "When the hook appended the goal: an RFC 3339 UTC date-time from its clock, ending in Z.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "approval": {
+            "description": "\"owner\" only when an owner trigger in run/SKILL.md section 4 applies to the goal, otherwise \"auto\". A design crew alone does not make it \"owner\".",
+            "enum": ["auto", "owner"]
+          },
+          "approvedAt": {
+            "description": "Null until the foreman logs the goal (auto) or the owner approves it (owner). While approval is \"owner\" and this is null, the hooks hold the goal's crews.",
+            "type": ["string", "null"],
+            "format": "date-time"
+          }
+        },
+        "allOf": [
+          {
+            "$comment": "Mirrors the top-level rule: an auto goal never waits, so an auto goal on disk fails the schema until the foreman logs it.",
+            "if": {
+              "properties": { "approval": { "const": "auto" } },
+              "required": ["approval"]
+            },
+            "then": {
+              "properties": { "approvedAt": { "type": "string" } }
+            }
+          }
+        ]
+      }
+    },
     "maxParallelCrews": {
       "description": "The most crews that may be running at once; extra crews in a wave queue. Default 4, from maxParallelCrews in <repo>/.claude/foundry.json.",
       "type": "integer",
@@ -61,12 +111,27 @@
   },
   "allOf": [
     {
-      "$comment": "version 2 requires repairBudget (ADR-0004 section 1).",
+      "$comment": "versions 2 and 3 require repairBudget (ADR-0004 section 1, ADR-0010 section 1).",
       "if": {
-        "properties": { "version": { "const": 2 } },
+        "properties": { "version": { "enum": [2, 3] } },
         "required": ["version"]
       },
       "then": { "required": ["repairBudget"] }
+    },
+    {
+      "$comment": "versions 1 and 2 forbid top-level goals and a crew's goal (ADR-0010 section 1). The schema can't check that a crew's goal names a goals entry; the hooks refuse a crew whose goal matches none.",
+      "if": {
+        "properties": { "version": { "enum": [1, 2] } },
+        "required": ["version"]
+      },
+      "then": {
+        "not": { "required": ["goals"] },
+        "properties": {
+          "crews": {
+            "items": { "not": { "required": ["goal"] } }
+          }
+        }
+      }
     },
     {
       "$comment": "version 1 forbids repairBudget (ADR-0004 section 1).",
@@ -128,8 +193,13 @@
           "maxLength": 100,
           "pattern": "^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$"
         },
+        "goal": {
+          "description": "Version 3 only, optional. The id of the plan goal the crew serves. Absent or \"run\" means the run's first goal; \"run\" needs no goals entry. The schema can't check that another value names a goals entry; the hooks refuse the crew when it doesn't.",
+          "type": "string",
+          "pattern": "^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
         "wave": {
-          "description": "The wave the crew runs in. Wave 0 holds the change work and merges before any other wave starts; each wave merges before the next starts. A mid-run design slice goes to the earliest wave that hasn't started yet, and the crews that depend on it move one wave later.",
+          "description": "The wave the crew runs in. Waves are numbered per goal: an added goal's first wave is its wave 0. Wave 0 holds the change work and merges before any other wave starts; each wave merges before the next starts. A mid-run design slice goes to the earliest wave that hasn't started yet, and the crews that depend on it move one wave later.",
           "type": "integer",
           "minimum": 0
         },
