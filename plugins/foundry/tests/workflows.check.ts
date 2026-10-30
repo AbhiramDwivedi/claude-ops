@@ -1150,3 +1150,48 @@ t('wave resume merge-ready: sync still not merged after the resolver stops BLOCK
   assert.ok(noRunner(r, 'check:green'))
   assert.ok(!had(r, 'a-judge'))
 })
+
+// ---------------------------------------------------------------- wave.js: judge gets earlier reports on resume
+
+const rpt = (n) => `/proj/.foundry/reports/a/${n}.md`
+const LF = { builder: 3, tester: 2, judge: 2 }
+const earlierPaths = (p) => p.match(/\/reports\/[^\s`'",)]*/g) ?? []
+t('wave judge reports: labelFrom paths of earlier members appear in the judge prompt (resume merge-ready)', async () => {
+  const r = await runWave([entry('a', { resume: 'merge-ready', labelFrom: LF })], { labels: { 'a-judge-2': PASS } })
+  const p = call(r, 'a-judge-2').prompt
+  for (const n of ['a-builder', 'a-builder-2', 'a-tester', 'a-judge']) has(p, rpt(n))
+  for (const n of ['a-builder-3', 'a-tester-2', 'a-judge-2']) assert.ok(!p.includes(rpt(n)), `unexpected ${rpt(n)}`)
+})
+t('wave judge reports: a plain run with labelFrom lists the same earlier paths', async () => {
+  const labels = { 'a-planner': PLAN(), 'a-tester-2': done('feat/t'), 'a-builder-3': done('feat/b'), 'a-judge-2': PASS }
+  const r = await runWave([entry('a', { labelFrom: LF })], { labels })
+  const p = call(r, 'a-judge-2').prompt
+  for (const n of ['a-builder', 'a-builder-2', 'a-tester', 'a-judge']) has(p, rpt(n))
+  for (const n of ['a-builder-3', 'a-tester-2']) assert.ok(!p.includes(rpt(n)), `unexpected ${rpt(n)}`)
+})
+t('wave judge reports: a role with labelFrom 1 or absent contributes no path', async () => {
+  const r = await runWave([entry('a', { resume: 'merge-ready', labelFrom: { builder: 1, tester: 2 } })], { labels: { 'a-judge': PASS } })
+  assert.deepEqual(earlierPaths(call(r, 'a-judge').prompt), ['/reports/a/a-tester.md'])
+})
+t('wave judge reports: the last red-team report is named on its own line that says red-team', async () => {
+  for (const [n, file] of [[2, 'a-redteam'], [4, 'a-redteam-3']]) {
+    const r = await runWave([entry('a', { resume: 'merge-ready', labelFrom: { redteam: n } })], { labels: { 'a-judge': PASS } })
+    const p = call(r, 'a-judge').prompt
+    const line = p.split('\n').find((l) => l.includes(rpt(file)))
+    assert.ok(line, `no line carries ${rpt(file)}`)
+    assert.match(line, /red-?team/i)
+    if (n === 4) assert.ok(!p.includes(rpt('a-redteam-4')))
+  }
+})
+t('wave judge reports: the prompt says to read each path and treat a missing file as no report, not a failed proof', async () => {
+  const r = await runWave([entry('a', { resume: 'merge-ready', labelFrom: LF })], { labels: { 'a-judge-2': PASS } })
+  const p = call(r, 'a-judge-2').prompt
+  assert.match(p, /read/i)
+  has(p, 'no report')
+  assert.match(p, /not a failed proof|never a failed proof/i)
+})
+t('wave judge reports: a fresh start (labelFrom {}) lists no report paths', async () => {
+  const r = await runWave([entry('a')], { labels: base() })
+  const p = call(r, 'a-judge').prompt
+  assert.ok(!p.includes('/reports/'), 'fresh judge prompt names a report path')
+})
