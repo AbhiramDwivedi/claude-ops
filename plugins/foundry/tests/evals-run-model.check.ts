@@ -130,12 +130,18 @@ function assertThrowawayCwd(cwd: string, label: string) {
 
 // Worktrees git knows that live under os.tmpdir(): `git worktree list` entries and <common>/worktrees/<name>/gitdir
 // pointers. Live agent worktrees sit under .claude/worktrees, so only tmpdir ones count.
-function tmpWorktrees() {
+// The leak tests pass a throwaway repo (see leakRepo) so the snapshot only sees worktrees that repo's runner made;
+// reading the real checkout's list would also see every parallel crew's evals run.
+function tmpWorktrees(repo: string = ROOT) {
+  const common = repo === ROOT ? COMMON : realpathSync.native(join(repo, '.git'))
   const tmps = [norm(tmpdir()), norm(realpathSync.native(tmpdir()))]
   const underTmp = (p: string) => tmps.some((t) => norm(p).startsWith(`${t}/`))
-  const listed = git('worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))
-    .map((l) => l.slice(9).trim()).filter(underTmp).map(norm)
-  const wtDir = join(COMMON, 'worktrees')
+  const own = [norm(repo), norm(realpathSync.native(repo))]
+  const listedRaw = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf8', env: cleanEnv(), windowsHide: true })
+  assert.equal(listedRaw.status, 0, listedRaw.stderr)
+  const listed = listedRaw.stdout.split('\n').filter((l) => l.startsWith('worktree '))
+    .map((l) => l.slice(9).trim()).filter(underTmp).map(norm).filter((p) => !own.includes(p))
+  const wtDir = join(common, 'worktrees')
   const meta: string[] = []
   if (existsSync(wtDir)) {
     for (const n of readdirSync(wtDir)) {
@@ -636,25 +642,31 @@ test('run-model: no .git/foundry (either slash) reaches claude on stdin; named f
 })
 
 test('run-model: after a run git lists no extra worktree under os.tmpdir() and the common dir holds no leftover worktree metadata', () => {
-  const before = tmpWorktrees()
-  const { r, calls } = run()
-  assert.equal(r.status, 0, r.stderr)
-  assert.ok(calls.length >= 1)
-  const after = tmpWorktrees()
-  assert.deepEqual(newOnly(before.listed, after.listed), [], 'git worktree list shows a leftover temp worktree')
-  assert.deepEqual(newOnly(before.meta, after.meta), [], '<common>/worktrees holds leftover metadata from the run')
-  for (const c of calls) assert.equal(existsSync(c.cwd), false, `${c.cwd} still exists`)
+  const { tmp, rp } = leakRepo()
+  try {
+    const before = tmpWorktrees(tmp)
+    const { r, calls } = run({}, [], { runModel: rp, cwd: tmp })
+    assert.equal(r.status, 0, r.stderr)
+    assert.ok(calls.length >= 1)
+    const after = tmpWorktrees(tmp)
+    assert.deepEqual(newOnly(before.listed, after.listed), [], 'git worktree list shows a leftover temp worktree')
+    assert.deepEqual(newOnly(before.meta, after.meta), [], '<common>/worktrees holds leftover metadata from the run')
+    for (const c of calls) assert.equal(existsSync(c.cwd), false, `${c.cwd} still exists`)
+  } finally { rm(tmp) }
 })
 
 test('run-model: the temp worktrees are removed even when every claude call fails', () => {
-  const before = tmpWorktrees()
-  const { r, calls } = run({ CLAUDE_STUB_EXIT: '3', CLAUDE_STUB_STDERR: 'boom' })
-  assert.notEqual(r.status, 0)
-  assert.equal(calls.length, cases().length)
-  const after = tmpWorktrees()
-  assert.deepEqual(newOnly(before.listed, after.listed), [], 'leftover temp worktree after failing calls')
-  assert.deepEqual(newOnly(before.meta, after.meta), [], 'leftover worktree metadata after failing calls')
-  for (const c of calls) assertThrowawayCwd(c.cwd, 'failing-call cwd')
+  const { tmp, rp } = leakRepo()
+  try {
+    const before = tmpWorktrees(tmp)
+    const { r, calls } = run({ CLAUDE_STUB_EXIT: '3', CLAUDE_STUB_STDERR: 'boom' }, [], { runModel: rp, cwd: tmp })
+    assert.notEqual(r.status, 0)
+    assert.equal(calls.length, LEAK_CASES.length)
+    const after = tmpWorktrees(tmp)
+    assert.deepEqual(newOnly(before.listed, after.listed), [], 'leftover temp worktree after failing calls')
+    assert.deepEqual(newOnly(before.meta, after.meta), [], 'leftover worktree metadata after failing calls')
+    for (const c of calls) assertThrowawayCwd(c.cwd, 'failing-call cwd')
+  } finally { rm(tmp) }
 })
 
 test('run-model: a missing binary leaves no foundry-evals-* dir in os.tmpdir()', async () => {
@@ -709,6 +721,12 @@ function synth(defs: { id: string; input: string }[], sources: Record<string, st
   }
   return { tmp, rp: join(base, 'evals', 'run-model.ts') }
 }
+
+// A throwaway repo (copy of the plugin, two golden cases) for the worktree-leak tests. The runner inside it creates
+// its temp worktrees in THIS repo, so before/after snapshots of tmpWorktrees(tmp) see only what this run did, never
+// a parallel crew's run against the real checkout.
+const LEAK_CASES = [{ id: 'leak-one', input: 'x\n' }, { id: 'leak-two', input: 'y\n' }]
+const leakRepo = () => synth(LEAK_CASES, {})
 
 // Like makeProbe, but resolves every inputs/... token in stdin (nested paths too) and records the content found.
 function makeResolveProbe() {
@@ -817,7 +835,8 @@ async function interruptCase(how: 'SIGINT' | 'SIGTERM' | 'CTRL_BREAK', t: { skip
     const py = spawnSync('python', ['-c', 'import sys; print(sys.version_info[0])'], { encoding: 'utf8', windowsHide: true })
     if (py.error || py.status !== 0) { t.skip('python was not found on PATH; the Windows Ctrl-Break delivery needs it'); return }
   }
-  const before = tmpWorktrees()
+  const { tmp, rp } = leakRepo()
+  const before = tmpWorktrees(tmp)
   const dir = mkdtempSync(join(tmpdir(), 'foundry-sig-'))
   const stub = join(dir, 'hang.mjs')
   writeFileSync(stub, `import { writeFileSync } from 'node:fs'
@@ -830,9 +849,9 @@ setTimeout(() => {}, 60000)
   if (how === 'CTRL_BREAK') {
     const helper = join(dir, 'sigbreak.py')
     writeFileSync(helper, SIG_HELPER_PY)
-    child = spawn('python', [helper, process.execPath, RUN_MODEL, ROOT, dir], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    child = spawn('python', [helper, process.execPath, rp, tmp, dir], { cwd: tmp, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   } else {
-    child = spawn(process.execPath, [RUN_MODEL], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    child = spawn(process.execPath, [rp], { cwd: tmp, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   }
   let out = ''
   let err = ''
@@ -867,7 +886,7 @@ setTimeout(() => {}, 60000)
       runnerOut = out
     }
     await sleepMs(300)
-    const after = tmpWorktrees()
+    const after = tmpWorktrees(tmp)
     leftL = newOnly(before.listed, after.listed)
     assert.ok(code !== 0, `exit code ${code} signal ${sig}: an interrupted run must not exit 0`)
     assert.ok(!/^score /m.test(runnerOut), `a score line was printed after the interrupt:\n${runnerOut}`)
@@ -879,10 +898,11 @@ setTimeout(() => {}, 60000)
     if (started) { try { process.kill(started.pid, 'SIGKILL') } catch {} }
     await sleepMs(500)
     // Tidy what the red run leaked, so the suite does not accumulate worktrees.
-    for (const w of leftL) spawnSync('git', ['worktree', 'remove', '--force', w], { cwd: ROOT, windowsHide: true })
+    for (const w of leftL) spawnSync('git', ['worktree', 'remove', '--force', w], { cwd: tmp, windowsHide: true })
     if (started) rm(started.cwd)
-    spawnSync('git', ['worktree', 'prune'], { cwd: ROOT, windowsHide: true })
+    spawnSync('git', ['worktree', 'prune'], { cwd: tmp, windowsHide: true })
     rm(dir)
+    rm(tmp)
   }
 }
 
