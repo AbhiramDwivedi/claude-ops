@@ -124,7 +124,7 @@ test("isJudgeName: only the crew's own judge names", () => {
   expect(f('auth', 42)).toBe(false)
 })
 
-test('judgeFails: counts this-run FAIL judge files only; stale, red-team, interim, PASS and other crews do not count', () => {
+test('judgeFails: counts this-run FAIL judge files only; stale, red-team, interim, clean PASS and other crews do not count', () => {
   const f = fn('judgeFails')
   const files = [
     jf('auth-judge.md', 'VERDICT: FAIL\nx'),
@@ -141,6 +141,23 @@ test('judgeFails: counts this-run FAIL judge files only; stale, red-team, interi
   expect(f('auth', [], SINCE)).toBe(0)
   expect(f('auth', files, SINCE + 5000)).toBe(0)
   expect(f('auth', files, SINCE - 10)).toBe(3)
+})
+
+// judge.md: "A PASS that carries such a line [`- UNSCOPED: ` under ## Findings] counts as no PASS", and wave.js spends one
+// repair-budget unit on it, so the hook's count must include it.
+const PASS_UNSCOPED = `VERDICT: PASS\n\n## Proof checked\nok\n\n## Findings\n${UNSCOPED}no other caller checked\n\n## Other\n`
+const PASS_CLEAN = `VERDICT: PASS\n\n## Proof checked\nok\n\n## Findings\nNone.\n\n## Other\n`
+
+test('judgeFails: a this-run PASS carrying an UNSCOPED finding counts 1; a clean PASS counts 0; a FAIL still counts 1', () => {
+  const f = fn('judgeFails')
+  expect(f('auth', [jf('auth-judge.md', PASS_UNSCOPED)], SINCE)).toBe(1)
+  expect(f('auth', [jf('auth-judge.md', PASS_CLEAN)], SINCE)).toBe(0)
+  expect(f('auth', [jf('auth-judge.md', 'VERDICT: FAIL\nx')], SINCE)).toBe(1)
+  expect(f('auth', [jf('auth-judge.md', 'VERDICT: FAIL\nx'), jf('auth-judge-2.md', PASS_UNSCOPED), jf('auth-judge-3.md', PASS_CLEAN)], SINCE)).toBe(2)
+  // an UNSCOPED line outside ## Findings does not make a PASS count
+  expect(f('auth', [jf('auth-judge.md', `VERDICT: PASS\n${UNSCOPED}y\n\n## Proof checked\n${UNSCOPED}z\n\n## Findings\nNone.\n`)], SINCE)).toBe(0)
+  // the usual exclusions still apply to an UNSCOPED PASS
+  expect(f('auth', [jf('auth-judge.md', PASS_UNSCOPED, SINCE - 1), jf('auth-judge-2.interim.md', PASS_UNSCOPED), jf('auth-redteam.md', PASS_UNSCOPED), jf('billing-judge.md', PASS_UNSCOPED)], SINCE)).toBe(0)
 })
 
 test('latestJudge: newest mtime at or after since; ties go to the higher -judge-<k>; red-team, interim and stale ignored', () => {
@@ -423,6 +440,28 @@ test("handler: with the budget spent, a crew member's Agent call named as a judg
   expect(eventLines(w).filter(e => e.event === 'spawn')).toEqual([])
   // not a judge name: through
   expect((await call('auth-helper')).deny).toBeUndefined()
+})
+
+test('handler: one judge FAIL plus one UNSCOPED PASS (repairBudget 1) spends the budget and a further judge is refused', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, 2, 1)
+  w.files.set(AUTH_JUDGE, 'VERDICT: FAIL\nx')
+  w.files.set(`${ROOT}/reports/auth/auth-judge-2.md`, PASS_UNSCOPED)
+  await startSession($)
+  const r = await w.agentCall('A1', { subagent_type: 'foundry:judge', name: 'auth-judge-3', model: 'opus', effort: 'medium' })
+  expect(r.deny ?? 'not denied').toBe(
+    `${MARK} Refused: repair budget spent: auth has 2 judge FAILs this run and repairBudget is 1. Start no more judges: send main a message that starts with "${BUDGET_BLOCKED}", with the last judge's findings.`,
+  )
+})
+
+test('handler: one judge FAIL plus one clean PASS (repairBudget 1) does not spend the budget', async ($, on) => {
+  const w = world($, on)
+  setPlan(w, 2, 1)
+  w.files.set(AUTH_JUDGE, 'VERDICT: FAIL\nx')
+  w.files.set(`${ROOT}/reports/auth/auth-judge-2.md`, PASS_CLEAN)
+  await startSession($)
+  const r = await w.agentCall('A1', { subagent_type: 'foundry:judge', name: 'auth-judge-3', model: 'opus', effort: 'medium' })
+  expect(r.deny).toBeUndefined()
 })
 
 test('handler: stale judge FAIL files from before approvedAt do not spend the budget', async ($, on) => {
