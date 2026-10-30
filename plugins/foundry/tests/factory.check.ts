@@ -24,7 +24,7 @@ import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import * as reg from '../hooks/register.ts'
 import {
-  REAL_FACTORY, REAL_PLUGIN, REAL_REPO, addCrewWorktree, appendEvent, assertOneLine, assertUsageError, caseFiles, crew, flat, git, gitStatus,
+  REAL_FACTORY, REAL_PLUGIN, REAL_REPO, addCrewWorktree, appendEvent, assertOneLine, factorySpawn, assertUsageError, caseFiles, crew, flat, git, gitStatus,
   head, mkEnv, mkRepo, mkRun, planObj, pluginCopy, putFile, readEvents, readPlan, runCli, tmp, validateEvent, writeGoal, writePlan,
 } from './fixtures/workflow-run/harness.ts'
 
@@ -945,6 +945,79 @@ test('harness: mkRun writes the same file shapes as the static sample-run fixtur
   assert.ok(rec.every((r) => typeof r.timestamp === 'string'))
   assert.equal(rec.find((r) => r.type === 'assistant').message.model, 'claude-opus-5-5')
   assert.equal(rec.find((r) => r.type === 'api-request-blob').message.output_config.effort, 'medium')
+})
+
+// ---------------------------------------------------------------------------------------------------------------
+// factory-goals: plan version 3, per-goal waves and goal approval in `start`, deferred notes on resume (ADR-0010)
+
+const goalsEntry = (id, over = {}) => ({ id, goal: `goal ${id}`, addedAt: new Date().toISOString(), approval: 'auto', approvedAt: new Date().toISOString(), ...over })
+const slugsIn = (j) => (j.foundry.crews ?? []).map((c) => c.slug)
+const planStatus = (env, slug) => readPlan(env.dir).crews.find((c) => c.slug === slug).status
+
+function goalsWorld(crews, goals) {
+  const env = mkEnv({ config: { merge: 'sequential', target: 'main' } })
+  writePlan(env.dir, planObj(crews, { version: 3, goals }))
+  for (const c of crews) writeGoal(env.dir, c.slug)
+  return env
+}
+
+test('plan-check: a version 3 plan with goals and a crew naming one passes; a crew naming an unknown goal is refused', () => {
+  const ok = checkPlan(planObj([crew('alpha'), crew('beta', { goal: 'g2' })], { version: 3, goals: [goalsEntry('g2')] }))
+  assert.equal(ok.res.status, 0, ok.res.stdout + ok.res.stderr)
+  assert.equal(ok.json.ok, true)
+  const bad = checkPlan(planObj([crew('alpha'), crew('beta', { goal: 'nope' })], { version: 3, goals: [goalsEntry('g2')] }))
+  assert.equal(bad.res.status, 1)
+  assert.equal(bad.json.ok, false)
+  assert.ok(errorsFor(bad.json, 'beta').length >= 1, JSON.stringify(bad.json.errors))
+})
+
+test('start --wave next: an owner goal\'s crew is not started before approval and is started after; the run crew starts meanwhile', () => {
+  const env = goalsWorld(
+    [crew('g2c', { wave: 0, goal: 'g2' }), crew('runc', { wave: 1 })],
+    [goalsEntry('g2', { approval: 'owner', approvedAt: null })],
+  )
+  const first = env.run('start', { wave: 'next' })
+  assert.equal(first.status, 0, first.stdout + first.stderr)
+  assert.deepEqual(slugsIn(assertOneLine(first)), ['runc'])
+  assert.equal(planStatus(env, 'runc'), 'running')
+  assert.equal(planStatus(env, 'g2c'), 'planned', 'the owner goal is not approved')
+  const plan = readPlan(env.dir)
+  plan.goals[0].approvedAt = new Date().toISOString()
+  writePlan(env.dir, plan)
+  const second = env.run('start', { wave: 'next' })
+  assert.equal(second.status, 0, second.stdout + second.stderr)
+  assert.ok(slugsIn(assertOneLine(second)).includes('g2c'), second.stdout)
+  assert.equal(planStatus(env, 'g2c'), 'running')
+})
+
+test('start --wave next: an added auto-approved goal\'s wave 0 does not hold back a ready run crew at wave 1', () => {
+  const env = goalsWorld([crew('g2c', { wave: 0, goal: 'g2' }), crew('runc', { wave: 1 })], [goalsEntry('g2')])
+  const res = env.run('start', { wave: 'next' })
+  assert.equal(res.status, 0, res.stdout + res.stderr)
+  assert.deepEqual(slugsIn(assertOneLine(res)).sort(), ['g2c', 'runc'])
+  assert.equal(planStatus(env, 'runc'), 'running')
+  assert.equal(planStatus(env, 'g2c'), 'running')
+})
+
+test('start --resume merge-ready: the entry carries the deferred notes of the crew\'s red-team report, and no deferred key without one', () => {
+  const mk = () => {
+    const env = mkEnv({ config: { merge: 'sequential', target: 'main' } })
+    writePlan(env.dir, planObj([crew('x', { status: 'running' })]))
+    writeGoal(env.dir, 'x')
+    addCrewWorktree(env.repo, 'x')
+    appendEvent(env.dir, factorySpawn('x', new Date(Date.now() - 5 * 60000).toISOString()))
+    return env
+  }
+  const withRt = mk()
+  mkdirSync(`${withRt.dir}/reports/x`, { recursive: true })
+  writeFileSync(`${withRt.dir}/reports/x/x-redteam.md`, 'REDTEAM: PASS\n\n## Findings\n\n- not a note\n\n## Notes\n\n- a\n- b\n\n## Proof\n\n- not a note either\n')
+  const res = withRt.run('start', { slug: 'x', resume: 'merge-ready' })
+  assert.equal(res.status, 0, res.stdout + res.stderr)
+  assert.deepEqual(assertOneLine(res).foundry.crews[0].deferred, ['a', 'b'])
+  const without = mk()
+  const e = assertOneLine(without.run('start', { slug: 'x', resume: 'merge-ready' })).foundry.crews[0]
+  assert.equal(e.slug, 'x')
+  assert.ok(!('deferred' in e), 'no red-team report: no deferred key')
 })
 
 // Case files written after this one register their tests by being loaded here.
