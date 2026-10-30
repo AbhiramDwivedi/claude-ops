@@ -304,6 +304,13 @@ t('crew-planner.md: tools line exists and excludes Agent, Write and Edit', () =>
   const tools = line[1].split(',').map((s) => s.trim())
   for (const bad of ['Agent', 'Write', 'Edit']) assert.ok(!tools.includes(bad), `tools must not include ${bad}`)
 })
+t('crew-planner.md: says files entries are never a directory', () => {
+  assert.ok(plannerParts().body.includes('never a directory'), 'body must say files entries are file paths, never a directory')
+})
+t('crew-planner.md: body states the canonical-path rules wave.js enforces', () => {
+  const { body } = plannerParts()
+  for (const tok of ['repo-relative', '//', './', '..', 'trailing /']) assert.ok(body.includes(tok), `body must contain ${tok}`)
+})
 t('crew-planner.md: body carries the fetch rule word for word', () => has(plannerParts().body, FETCH))
 for (const word of ['AWS', 'GCP', 'Entra', 'Azure', 'iOS', 'Android', 'Salesforce', 'Flutter']) {
   t(`crew-planner.md: never names ${word}`, () => {
