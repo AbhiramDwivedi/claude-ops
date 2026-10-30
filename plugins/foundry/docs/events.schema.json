@@ -8,7 +8,7 @@
   "properties": {
     "v": { "description": "The line's shape. Goes up when a field is renamed or retyped.", "const": 1 },
     "ts": { "description": "The engine clock, as toISOString() gives it (UTC, Z).", "type": "string", "format": "date-time" },
-    "event": { "enum": ["spawn", "stall", "tag", "report", "budget-spent", "fetch"] },
+    "event": { "enum": ["spawn", "stall", "tag", "report", "budget-spent", "fetch", "incomplete"] },
     "crew": { "description": "The crew's name: its lead's spawn name, as reports/<crew>/ uses it.", "type": "string", "minLength": 1 },
     "agent": { "description": "The agent the event is about, by its spawn name, else its id. For spawn: the new agent (the caller is by); for stall: the idle agent; for tag: the lead; for report: the reporting agent; for budget-spent: the judge whose FAIL report spent the budget.", "type": "string", "minLength": 1 }
   },
@@ -33,7 +33,19 @@
           "type": { "description": "subagent_type, or general-purpose when unset.", "type": "string", "minLength": 1 },
           "model": { "description": "The model the call asked for, or null.", "type": ["string", "null"] },
           "effort": { "description": "The effort the call asked for, or null.", "type": ["string", "null"] },
-          "by": { "description": "main for the foreman, else the calling agent's spawn name.", "type": "string", "minLength": 1 }
+          "by": { "description": "main for the foreman, else the calling agent's spawn name; factory for a workflow crew factory.ts started, workflow:<run id> for an agent a wave.js run started.", "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "event": { "const": "incomplete" } } },
+      "then": {
+        "description": "A Workflow wave.js run that ended without a result, recorded by factory finish (foundry ADR-0009). agent repeats crew; run is the Workflow run id (the run's transcript folder name).",
+        "additionalProperties": false,
+        "required": ["run"],
+        "properties": {
+          "v": true, "ts": true, "event": true, "crew": true, "agent": true,
+          "run": { "type": "string", "minLength": 1 }
         }
       }
     },
