@@ -1,7 +1,7 @@
 // foundry ADR-0007 section 7: the owner's optional model-eval runner. Never a gate, outside every suite.
 // Run: node plugins/foundry/evals/run-model.ts   (CLAUDE=<path> picks the binary, else `claude`)
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, statSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -47,10 +47,23 @@ let live = ''
 function dropWorktree(wt: string): void {
   const run = (...a: string[]) => spawnSync('git', a, { cwd: here, encoding: 'utf8', env: gitEnv(), windowsHide: true, shell: false })
   run('worktree', 'remove', '--force', wt)
-  rmSync(wt, { recursive: true, force: true })
+  // A leftover process can hold the tree for a few seconds (EBUSY/EPERM/ENOTEMPTY): retry about 5 s, then warn.
+  for (let i = 0; ; i++) {
+    try {
+      rmSync(wt, { recursive: true, force: true })
+      break
+    } catch (e) {
+      if (i < 25) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200); continue }
+      process.stderr.write(`run-model: could not remove ${wt}: ${(e as Error).message}\n`)
+      break
+    }
+  }
   run('worktree', 'prune')
 }
 process.on('exit', () => { if (live) dropWorktree(live) })
+// An interrupt removes the live worktree, prints no score line and exits 130. Handlers only run once the loop turns,
+// so the case loop yields after each spawnSync; a child that shares the console dies from the same break.
+for (const sig of ['SIGINT', 'SIGBREAK', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () => process.exit(130))
 
 // Frontmatter sits between the first two --- lines; the body is what follows.
 function agent(role: string): { body: string; model: string; effort: string } {
@@ -105,20 +118,28 @@ for (const c of cases) {
   git('worktree', 'add', '--detach', wt, 'HEAD')
   rmSync(join(wt, 'plugins', 'foundry', 'evals', 'golden'), { recursive: true, force: true })
   // Files under .git/foundry are copied in and named by relative path, so the input points nowhere outside the tree.
+  const copied = new Map<string, string>()
   c.input = c.input.replace(/\S*\.git[\\/]foundry[^\s"'`)]*/g, (p) => {
-    const rel = p.replace(/\\/g, '/').replace(/^.*?\.git\//, '')
+    const tail = /[,;.:!?]*$/.exec(p)![0]
+    const rel = p.slice(0, p.length - tail.length).replace(/\\/g, '/').replace(/^.*?\.git\//, '')
     const src = join(common, rel)
-    const name = basename(rel)
+    const known = copied.get(src)
+    if (known) return known + tail
+    let name = basename(rel)
     if (existsSync(src)) {
+      for (let n = 2; [...copied.values()].includes(`inputs/${name}`); n++) name = `${n}-${basename(rel)}`
       mkdirSync(join(wt, 'inputs'), { recursive: true })
-      copyFileSync(src, join(wt, 'inputs', name))
+      if (statSync(src).isDirectory()) cpSync(src, join(wt, 'inputs', name), { recursive: true })
+      else copyFileSync(src, join(wt, 'inputs', name))
     }
-    return `inputs/${name}`
+    copied.set(src, `inputs/${name}`)
+    return `inputs/${name}` + tail
   })
   const r = spawnSync(script ? process.execPath : bin, script ? [bin, ...args] : args, {
-    cwd: wt, input: c.input, encoding: 'utf8', shell: false, windowsHide: true,
+    cwd: wt, input: c.input, encoding: 'utf8', shell: false,
     timeout: CASE_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024,
   })
+  await new Promise((done) => setImmediate(done))
   dropWorktree(wt)
   live = ''
   const err = r.error as (Error & { code?: string }) | undefined
