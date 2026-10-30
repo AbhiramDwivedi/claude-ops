@@ -166,7 +166,7 @@ function memberPrompt(crew, role, parts) {
   const e = crew.e
   const lines = [`You are the ${role} for crew ${crew.slug}. ${BRAVE}`, '']
   lines.push(...parts.start)
-  lines.push(`Approved scope: ${e.scope}`, '', `Done-check: ${e.doneCheck}`, '')
+  lines.push(`Approved scope: ${e.scope}`, '', 'Build only the approved scope quoted above. An idea beyond it goes back in your report, never into the diff.', '', `Done-check: ${e.doneCheck}`, '')
   lines.push(...parts.body)
   lines.push(
     '',
@@ -444,6 +444,9 @@ function redteamPrompt(crew) {
     `ADRs: ${e.adrs.join(', ') || 'none'}`,
     `High-impact paths: ${e.highImpact.join(', ') || 'none'}`,
     `Architecture doc: ${e.architecture}`,
+    '',
+    'Each finding names a plausible producer: the real caller or input that would produce the break.',
+    'Class each finding as a real defect or a test gap. Only real defects count in REDTEAM <n> and go under ## Findings; test gaps go under ## Notes and are not fixed.',
   ].join('\n')
 }
 
@@ -458,16 +461,28 @@ async function runRedteam(crew) {
   return text
 }
 
-// rounds repeat until a red team finds nothing; they add nothing to the spend
-async function redteam(crew) {
-  for (;;) {
-    const text = await runRedteam(crew)
-    crew.redteam = text
-    if (redteamCount(text) === 0) return
-    crew.step = 'redteam'
-    await fixBuilder(crew, 'red-team findings', `A red team reported these findings:\n${text}`)
-    await green(crew)
+// the lines of one "## " section of a report, up to the next line starting "## " or the end
+function sectionOf(text, heading) {
+  const out = []
+  let section
+  for (const line of String(text || '').replace(/^﻿/, '').replace(/\r/g, '').split('\n')) {
+    if (line.startsWith('## ')) section = line.trimEnd()
+    else if (section === heading) out.push(line)
   }
+  return out
+}
+
+// one red-team round: real defects go to one fix builder and one green run; test gaps (## Notes) are only handed back
+async function redteam(crew) {
+  const text = await runRedteam(crew)
+  crew.redteam = text
+  crew.deferred = sectionOf(text, '## Notes').filter((l) => l.startsWith('- ')).map((l) => l.slice(2))
+  if (redteamCount(text) === 0) return
+  crew.step = 'redteam'
+  // a report with no ## Findings heading (bullets straight after the REDTEAM line) goes whole, less its ## Notes section
+  const findings = /^## Findings\s*$/m.test(text) ? sectionOf(text, '## Findings').join('\n') : String(text).replace(/\r/g, '').split('\n## Notes')[0]
+  await fixBuilder(crew, 'red-team findings', `A red team reported these findings:\n${findings}`)
+  await green(crew)
 }
 
 async function scope(crew) {
@@ -508,7 +523,10 @@ function earlierReports(crew) {
   const path = (role, n) => `${F.dir}/reports/${crew.slug}/${n === 1 ? `${crew.slug}-${role}` : `${crew.slug}-${role}-${n}`}.md`
   const paths = []
   for (const role of Object.keys(from).sort()) {
-    for (let n = 1; n < from[role]; n++) paths.push(path(role, n))
+    for (let n = 1; n < from[role]; n++) {
+      if (role === 'redteam' && n === from[role] - 1) continue
+      paths.push(path(role, n))
+    }
   }
   const last = from.redteam > 1 ? path('redteam', from.redteam - 1) : null
   return { paths, last }
@@ -539,7 +557,10 @@ function judgePrompt(crew) {
     '',
     `Approved scope: ${e.scope}`,
     '',
-    ...(earlier.paths.length
+    'Check that new code reuses what exists or names its consumer: each new function, export, option or file needs existing code that already does the job or a caller in the diff or in existing code. If there is neither, it is a finding.',
+    "Check the goal file's Non-goals heading against the diff. Work that lands in a non-goal is a finding.",
+    '',
+    ...(earlier.paths.length || earlier.last
       ? [
           'Reports of earlier members (from before this run):',
           ...earlier.paths,
@@ -569,7 +590,7 @@ async function judge(crew) {
       if (!j.verdict) throw new Stop('BLOCKED', `no verdict from two judges:\n${j.text || 'no result'}`, 'judge')
     }
     const unscoped = j.verdict === 'PASS' ? unscopedOf(j.text) : []
-    if (j.verdict === 'PASS' && unscoped.length === 0) return { slug: crew.slug, state: 'passed', head: crew.head, base: crew.e.base, judge: j.label }
+    if (j.verdict === 'PASS' && unscoped.length === 0) return { slug: crew.slug, state: 'passed', head: crew.head, base: crew.e.base, judge: j.label, ...(crew.e.redTeam ? { deferred: crew.deferred || [] } : {}) }
     crew.fails++
     if (spendOf(crew) > F.repairBudget) throw budgetStop(crew, 'judge', j.text)
     const detail = unscoped.length
