@@ -1,0 +1,10 @@
+{
+  "id": "cynic-answer-ship-main",
+  "source": ".git/foundry/40816bb1-1ec8-4755-8d97-0d12599e1e84/decisions.md",
+  "role": "cynic",
+  "input": "Decision text: Ship after marketplace merges: re-run all done-checks on main, validate, check-ignore .env; no history rewrite; PR body lists the delegated-acceptance ADRs and the ADR-0013 departures\nCitation: merge ownership, decisions.md:11\n",
+  "expected": {
+    "keyword": "RECOMMEND",
+    "kind": "answer"
+  }
+}

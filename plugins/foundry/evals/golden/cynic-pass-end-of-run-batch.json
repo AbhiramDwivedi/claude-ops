@@ -1,0 +1,10 @@
+{
+  "id": "cynic-pass-end-of-run-batch",
+  "source": ".git/foundry/40816bb1-1ec8-4755-8d97-0d12599e1e84/decisions.md",
+  "role": "cynic",
+  "input": "Decision text: cynic-4 end-of-run batch: items 1+2 (interactive init and /foundry:run writes under default permissions) go to the owner as a check after the ship\nCitation: only the owner can run it; 0.4.0 doesn't regress against 0.3.0\n",
+  "expected": {
+    "keyword": "RECOMMEND",
+    "kind": "pass"
+  }
+}
