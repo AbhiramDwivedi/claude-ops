@@ -579,12 +579,292 @@ function cmdStart(f: Flags): Obj {
 
 // ==== finish ====
 
+import { utimesSync } from 'node:fs'
+import { NO_HEAD_REASON, NO_PASS_REASON, PATCH_COMMAND, family, headVerdict, judgeRuling, latestJudge, markerOf, patchIdOf, planAtLeastV2, runStart } from '../hooks/register.ts'
+import type { JudgeRuling } from '../hooks/register.ts'
+
+// The merge step's head rule (ADR-0009 step 3), failing closed. headVerdict is fail-open for the stop gate (it passes an undefined head
+// or patch, and a plan below v2), so this refuses first when the judge, head or patch is missing, whatever the plan version, and then
+// asks headVerdict about a v2 view of the plan. Returns {block} to refuse, undefined when the PASS stands.
+export function mergeHeadVerdict(plan: any, judge: JudgeRuling | undefined, head: string | undefined, patch: string | undefined): { block: string } | undefined {
+  if (judge === undefined || judge.verdict !== 'PASS' || judge.unscoped > 0) return { block: NO_PASS_REASON }
+  if (judge.head === undefined || judge.patch === undefined) return { block: NO_HEAD_REASON }
+  if (head === undefined || patch === undefined) return { block: 'Refused: patch id unavailable: the merged head or its patch id could not be computed.' }
+  return headVerdict(planAtLeastV2(plan) ? plan : { ...(isObj(plan) ? plan : {}), version: 2 }, judge, head, patch)
+}
+
+type Audit = { label: string; why: string; slug?: string }
+
+const textOfResult = (r: unknown): string | undefined => {
+  if (typeof r === 'string') return r
+  if (isObj(r) && typeof r.report === 'string') return r.report
+  return r === undefined ? undefined : JSON.stringify(r)
+}
+
+// Record step: files each crew agent's result under reports/, appends spawn and report lines (once), and audits every agent of the run.
+function recordRun(dir: string, wfRun: WfRun, crewSlugs: Set<string>, roles: Obj): Audit[] {
+  const audits: Audit[] = []
+  const events = existsSync(`${dir}/events.jsonl`) ? jsonLines(`${dir}/events.jsonl`) : []
+  for (const a of wfRun.agents) {
+    const parsed = parseLabel(a.label)
+    const facts = transcriptFacts(a.transcript)
+    const agentType = typeof a.meta?.agentType === 'string' ? a.meta.agentType : undefined
+    const slug = parsed !== undefined && crewSlugs.has(parsed.slug) ? parsed.slug : undefined
+    const bad = (why: string): void => void audits.push({ label: a.label, why, ...(slug !== undefined ? { slug } : {}) })
+    if (a.meta === undefined || typeof a.meta.model !== 'string' || a.meta.model === '') bad('the meta file has no model')
+    const fam = family(facts.model)
+    if (fam !== 'opus' && fam !== 'sonnet') bad(`the transcript model family is ${fam}, not opus or sonnet`)
+    if (facts.effort === 'max') bad('effort max')
+    if ((facts.effort === 'high' || facts.effort === 'xhigh') && parsed !== undefined) bad(`effort ${facts.effort} on role ${parsed.role}`)
+    if (parsed !== undefined && (parsed.role === 'judge' || parsed.role === 'redteam') && agentType !== 'foundry:judge') bad(`${parsed.role} ran as ${agentType ?? 'an unknown type'}, not foundry:judge`)
+    if (parsed !== undefined && parsed.role === 'judge' && facts.tools.some((t) => t.name === 'Write' || t.name === 'Edit')) bad('a judge used Write or Edit')
+    if (parsed === undefined) {
+      bad('the label does not parse as <slug>-<role>')
+      continue
+    }
+    if (slug === undefined) {
+      bad(`the label names no running factory crew (slug ${parsed.slug})`)
+      continue
+    }
+    if (!isObj(roles[parsed.role])) {
+      bad(`unknown role ${parsed.role}`)
+      continue
+    }
+    if (!a.hasResult) continue
+    const text = textOfResult(a.result)
+    if (text === undefined) continue
+    const file = `${dir}/reports/${slug}/${a.label}.md`
+    mkdirSync(`${dir}/reports/${slug}`, { recursive: true })
+    if (existsSync(file) && readFileSync(file, 'utf8') !== text) {
+      bad('a report file with different text already exists; not overwritten')
+    } else {
+      if (!existsSync(file)) writeFileSync(file, text)
+      const when = facts.lastTs === undefined ? NaN : Date.parse(facts.lastTs)
+      if (Number.isFinite(when)) utimesSync(file, when / 1000, when / 1000)
+    }
+    const by = `workflow:${wfRun.id}`
+    if (!events.some((e) => e.event === 'spawn' && e.agentId === a.agentId && e.by === by)) {
+      appendEvent(dir, { event: 'spawn', crew: slug, agent: a.label, agentId: a.agentId, type: agentType ?? 'general-purpose', model: facts.model ?? null, effort: facts.effort ?? null, by })
+    }
+    const marker = markerOf(text)
+    if (!events.some((e) => e.event === 'report' && e.crew === slug && e.agent === a.label && (e.marker ?? null) === marker)) {
+      appendEvent(dir, { event: 'report', crew: slug, agent: a.label, marker })
+    }
+  }
+  return audits
+}
+
+// Session audit: every Workflow run of the session at or after the run start, in scope as ADR-0009 "finish, session audit" says.
+function sessionAudit(dir: string, rootDir: string, thisRunId: string, factorySlugs: Set<string>, waived: Set<string>): Audit[] {
+  const audits: Audit[] = []
+  const log = existsSync(`${dir}/decisions.md`) ? readFileSync(`${dir}/decisions.md`, 'utf8') : ''
+  const starts = [...log.matchAll(/^## Run (\S+)/gm)].map((m) => Date.parse(m[1] ?? '')).filter((n) => Number.isFinite(n))
+  const start = starts.length === 0 ? undefined : Math.max(...starts)
+  for (const r of runsOf(rootDir)) {
+    if (waived.has(r.id)) continue
+    const firsts = r.agents.map((a) => Date.parse(transcriptFacts(a.transcript).firstTs ?? '')).filter((n) => Number.isFinite(n))
+    if (start !== undefined && firsts.length > 0 && Math.min(...firsts) < start) continue
+    const foundryRun = r.agents.every((a) => {
+      const p = parseLabel(a.label)
+      return p !== undefined && (p.slug === 'foundry' || factorySlugs.has(p.slug))
+    })
+    const typeOf = (a: RunAgent): string => (typeof a.meta?.agentType === 'string' ? a.meta.agentType : '')
+    if (!foundryRun && !r.agents.some((a) => typeOf(a).startsWith('foundry:'))) continue
+    for (const a of r.agents) {
+      const label = `${r.id}/${a.label}`
+      if (!foundryRun && typeOf(a).startsWith('foundry:')) audits.push({ label, why: `${typeOf(a)} agent in a run that is not foundry's` })
+      if (r.id === thisRunId) continue
+      if (typeof a.meta?.model !== 'string' || a.meta.model === '') audits.push({ label, why: 'the meta file has no model' })
+      else {
+        const fam = family(transcriptFacts(a.transcript).model)
+        if (fam !== 'opus' && fam !== 'sonnet') audits.push({ label, why: `the transcript model family is ${fam}, not opus or sonnet` })
+      }
+    }
+  }
+  return audits
+}
+
+// The git worktrees of the repo as {path, branch}.
+function worktreesOf(repo: string): { path: string; branch: string | undefined }[] {
+  const out: { path: string; branch: string | undefined }[] = []
+  for (const block of run(repo, ['worktree', 'list', '--porcelain']).out.split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/)
+    const p = lines.find((l) => l.startsWith('worktree '))
+    if (p === undefined) continue
+    const b = lines.find((l) => l.startsWith('branch '))
+    out.push({ path: flat(p.slice('worktree '.length)), branch: b === undefined ? undefined : b.slice('branch refs/heads/'.length) })
+  }
+  return out
+}
+
+// The patch id of base...head by PATCH_COMMAND, or undefined when the diff or patch-id fails or is empty.
+function patchOf(wt: string, base: string, head: string): string | undefined {
+  const [diffCmd, idCmd] = PATCH_COMMAND.split(' | ').map((s) => s.replace('<base>', base).replace('<head>', head).split(' '))
+  if (diffCmd === undefined || idCmd === undefined) return undefined
+  const d = spawnSync(diffCmd[0] as string, diffCmd.slice(1), { cwd: wt, encoding: 'utf8', maxBuffer: 1 << 29 })
+  if (d.error || d.status !== 0) return undefined
+  const p = spawnSync(idCmd[0] as string, idCmd.slice(1), { cwd: wt, input: d.stdout, encoding: 'utf8', maxBuffer: 1 << 26 })
+  if (p.error || p.status !== 0) return undefined
+  return patchIdOf(p.stdout)
+}
+
+// The lowest-numbered D/checks/<slug>-<n>.json: the red record. undefined when none.
+function redRecord(dir: string, slug: string): Obj | undefined {
+  const d = `${dir}/checks`
+  if (!existsSync(d)) return undefined
+  const re = new RegExp(`^${slug.replace(/[^a-z0-9-]/g, '\\$&')}-(\\d+)\\.json$`)
+  const found = readdirSync(d).flatMap((n) => {
+    const m = re.exec(n)
+    return m?.[1] === undefined ? [] : [{ n: Number(m[1]), name: n }]
+  }).sort((x, y) => x.n - y.n)[0]
+  if (found === undefined) return undefined
+  try {
+    const v = JSON.parse(readFileSync(`${d}/${found.name}`, 'utf8'))
+    return isObj(v) ? v : undefined
+  } catch {
+    return undefined
+  }
+}
+
+type Outcome = { merged?: true; rework?: string; blocked?: string; refused?: string }
+
+// Merge step for one crew whose newest judge is a clean PASS (ADR-0009 steps 1 to 5). Fails closed: any doubt is a refusal.
+function mergeCrew(f: Flags, dir: string, repo: string, target: string, crew: Obj, ruling: JudgeRuling, audits: Audit[], fails: number): Outcome {
+  const slug: string = crew.slug
+  const wt = crewWorktree(repo, slug)
+  const plan = loadPlan(dir)
+  // step 1: gates
+  const named = audits.filter((a) => a.slug === slug)
+  if (named.length > 0) return { refused: `audit: ${named.map((a) => `${a.label} (${a.why})`).join('; ')}` }
+  if (!existsSync(wt)) return { refused: `no crew worktree at ${wt}` }
+  try {
+    cmdOwnsCheck({ ...f, dir, repo, slug })
+  } catch (e) {
+    return { refused: e instanceof CliError && Array.isArray(e.body.outside) ? `owns-check: outside ${(e.body.outside as string[]).join(', ')}` : `owns-check failed: ${(e as Error).message}` }
+  }
+  const budget = intOr(plan.repairBudget, 2, 0)
+  if (fails > budget) return { refused: `repair budget spent: ${fails} judge FAILs, budget ${budget}` }
+  const red = redRecord(dir, slug)
+  if (red === undefined || !Number.isInteger(red.exit) || red.exit === 0) return { refused: 'no red record: the lowest-numbered checks file is missing or has exit 0' }
+  if (run(wt, ['rev-parse', `refs/heads/foundry-${slug}`]).out !== run(wt, ['rev-parse', 'HEAD']).out) return { refused: `the crew worktree is not on branch foundry-${slug}` }
+  // step 2: merge the target in, never a rebase
+  const m = run(wt, ['merge', '--no-edit', target])
+  if (m.status !== 0) {
+    const conflict = run(wt, ['diff', '--name-only', '--diff-filter=U']).out !== ''
+    run(wt, ['merge', '--abort'])
+    return conflict ? { rework: 'conflict' } : { refused: `git merge ${target} failed: ${m.err || m.out}` }
+  }
+  // step 3: the patch is always computed on the merged head, against the target head just merged in
+  const head = run(wt, ['rev-parse', 'HEAD']).out
+  const base = run(wt, ['merge-base', target, 'HEAD']).out
+  const patch = head === '' || base === '' ? undefined : patchOf(wt, base, head)
+  if (ruling.head === undefined || ruling.patch === undefined || head === '' || patch === undefined) return { refused: 'patch id unavailable' }
+  if (mergeHeadVerdict(plan, ruling, head, patch) !== undefined) return { rework: 'rejudge' }
+  if (head !== ruling.head) {
+    try {
+      cmdCheck({ dir, slug, cwd: wt, expect: 'green' })
+    } catch {
+      return { rework: 'rejudge' }
+    }
+  }
+  // step 4: fast-forward the target
+  const onTarget = worktreesOf(repo).find((w) => w.branch === target)
+  if (onTarget !== undefined) {
+    const dirty = run(onTarget.path, ['status', '--porcelain', '--untracked-files=no']).out
+    if (dirty !== '') return { blocked: `target checked out dirty: ${dirty.split('\n')[0]?.trim().replace(/^\S+\s+/, '')}` }
+    if (run(onTarget.path, ['merge', '--ff-only', `foundry-${slug}`]).status !== 0) return { rework: 'target moved' }
+  } else {
+    const old = run(repo, ['rev-parse', `refs/heads/${target}`])
+    if (old.status !== 0 || run(repo, ['update-ref', `refs/heads/${target}`, head, old.out]).status !== 0) return { rework: 'target moved' }
+  }
+  // step 5: record, then clean up
+  const fresh = loadPlan(dir)
+  const entry = fresh.crews.find((c: Obj) => isObj(c) && c.slug === slug)
+  if (entry !== undefined) entry.status = 'merged'
+  savePlan(dir, fresh)
+  appendDecision(dir, `crew ${slug} merged into ${target} at ${head} | judge PASS on ${ruling.head}, red record exit ${red.exit}, patch ${patch}, done-check green on the merged head`)
+  const own = new Set(fresh.crews.filter(isObj).map((c: Obj) => `foundry-${c.slug}`))
+  for (const w of worktreesOf(repo)) {
+    if (w.path === wt || w.branch === undefined || own.has(w.branch) || !w.branch.startsWith(`foundry-${slug}-`)) continue
+    if (run(repo, ['merge-base', '--is-ancestor', `refs/heads/${w.branch}`, `refs/heads/foundry-${slug}`]).status === 0) run(repo, ['worktree', 'remove', w.path])
+  }
+  run(repo, ['worktree', 'remove', wt])
+  return { merged: true }
+}
+
 function cmdFinish(f: Flags): Obj {
   const repo = repoOf(f)
   need(f, 'transcript')
-  if (settingsOf(repo).merge === 'single') throw usage('single merge mode runs on the lead path')
-  // finish: record, audit and merge steps go here
-  throw usage('finish not built yet')
+  const settings = settingsOf(repo)
+  if (settings.merge === 'single') throw usage('single merge mode runs on the lead path')
+  const dir = dirOf(f)
+  const tdir = flat(need(f, 'transcript')).replace(/\/+$/, '')
+  const resultPath = str(f, 'result')
+  let results: Obj[] | undefined
+  if (resultPath !== undefined) {
+    const v = readJson(flat(resultPath))
+    if (!Array.isArray(v)) throw usage('--result must hold the JSON array wave.js returned')
+    results = v.filter(isObj)
+  }
+  const plan = loadPlan(dir)
+  const roles = readRoles(PLUGIN)
+  const wfRun = runOf(tdir)
+  const factoryCrews: Obj[] = plan.crews.filter((c: Obj) => isObj(c) && typeof c.slug === 'string' && c.status === 'running' && factorySpawned(dir, c.slug) !== undefined)
+  const factorySlugs = new Set(factoryCrews.map((c) => c.slug as string))
+  const inRun = factoryCrews.filter((c) => wfRun.agents.some((a) => parseLabel(a.label)?.slug === c.slug))
+  const out = { merged: [] as string[], rework: [] as Obj[], blocked: [] as Obj[], refused: [] as Obj[], audit: [] as Obj[], incomplete: [] as string[] }
+  const finishWith = (): Obj => {
+    const body = { merged: out.merged, rework: out.rework, blocked: out.blocked, refused: out.refused, audit: out.audit, incomplete: out.incomplete }
+    if (out.refused.length > 0 || out.rework.length > 0 || out.blocked.length > 0 || out.audit.length > 0) throw refuse(body)
+    return body
+  }
+
+  if (results === undefined) {
+    // no result: the liveness rule first, writing nothing while it fails
+    const now = Date.now()
+    for (const c of inRun) if (isLive(factorySpawned(dir, c.slug)?.ts ?? now, tdir, now)) out.refused.push({ slug: c.slug, why: 'run may be live' })
+    if (out.refused.length > 0) return finishWith()
+  }
+
+  const audits = recordRun(dir, wfRun, factorySlugs, roles)
+  for (const a of audits) out.audit.push({ label: a.label, why: a.why })
+
+  if (results === undefined) {
+    const have = existsSync(`${dir}/events.jsonl`) ? jsonLines(`${dir}/events.jsonl`) : []
+    for (const c of inRun) {
+      if (!have.some((e) => e.event === 'incomplete' && e.crew === c.slug && e.run === wfRun.id)) appendEvent(dir, { event: 'incomplete', crew: c.slug, agent: c.slug, run: wfRun.id })
+      out.incomplete.push(c.slug)
+    }
+    return finishWith()
+  }
+
+  // session audit: while an entry stands, nothing merges
+  const log = existsSync(`${dir}/decisions.md`) ? readFileSync(`${dir}/decisions.md`, 'utf8') : ''
+  const waived = new Set([...log.matchAll(/^- [^|]*\|\s*audit waived: ([A-Za-z0-9._-]+)/gm)].map((m) => m[1] as string))
+  const stand = sessionAudit(dir, path.dirname(tdir), wfRun.id, new Set(plan.crews.filter((c: Obj) => isObj(c) && factorySpawned(dir, c.slug) !== undefined).map((c: Obj) => c.slug as string)), waived)
+  for (const a of stand) out.audit.push({ label: a.label, why: a.why })
+  if (stand.length > 0) {
+    const what = `session audit stands, nothing merged: ${stand.map((a) => `${a.label} (${a.why})`).join('; ')}`
+    if (!log.includes(what)) appendDecision(dir, `${what} | the owner rules, then a decision line "audit waived: <run id>" or the offending run goes`)
+    for (const c of inRun) out.refused.push({ slug: c.slug, why: 'session audit' })
+    return finishWith()
+  }
+
+  const since = runStart(plan) ?? 0
+  for (const c of inRun) {
+    const res = results.find((r) => r.slug === c.slug)
+    if (res === undefined || res.state !== 'passed') continue
+    const files = reportsOf(dir, c.slug)
+    const newest = latestJudge(c.slug, files, since)
+    const ruling = newest === undefined ? undefined : judgeRuling(newest.text)
+    if (ruling === undefined || ruling.verdict !== 'PASS' || ruling.unscoped > 0) continue
+    const r = mergeCrew(f, dir, repo, settings.target, c, ruling, audits, judgeFails(c.slug, files, since))
+    if (r.merged) out.merged.push(c.slug)
+    else if (r.rework !== undefined) out.rework.push({ slug: c.slug, why: r.rework })
+    else if (r.blocked !== undefined) out.blocked.push({ slug: c.slug, why: r.blocked })
+    else out.refused.push({ slug: c.slug, why: r.refused ?? 'refused' })
+  }
+  return finishWith()
 }
 
 // ==== main ====
