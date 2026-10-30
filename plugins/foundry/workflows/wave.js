@@ -327,7 +327,7 @@ function validateTasks(tasks, owns) {
     if (!['tester', 'builder', 'writer'].includes(t.role)) errors.push(`task ${t.name} has role ${t.role}; use tester, builder or writer`)
     if (!ROLE_EFFORTS.includes(t.effort)) errors.push(`task ${t.name} has effort ${t.effort}; use low or medium`)
     for (const f of t.files || []) {
-      if (typeof f !== 'string' || /\\|\/\/|^\/|^\.\//.test(f) || f.split('/').some((seg) => seg === '.' || seg === '..')) errors.push(`task ${t.name} lists file ${f}, which is not a canonical repo-relative path; use forward slashes, no leading / or ./, no // and no . or .. segments`)
+      if (typeof f !== 'string' || f === '' || f.endsWith('/') || /\\|\/\/|^\/|^\.\//.test(f) || f.split('/').some((seg) => seg === '.' || seg === '..')) errors.push(`task ${t.name} lists file ${f}, which is not a canonical repo-relative path; use forward slashes, no leading / or ./, no // and no . or .. segments`)
       else if (/[*?[{]/.test(f)) errors.push(`task ${t.name} lists file ${f}, which is a glob; list exact file paths`)
       else if (!owned.some((re) => re.test(f))) errors.push(`task ${t.name} lists file ${f}, which matches none of the crew owns`)
     }
@@ -356,7 +356,8 @@ function validateTasks(tasks, owns) {
       const a = tasks[i]
       const b = tasks[j]
       const bl = (b.files || []).map((f) => String(f).toLowerCase())
-      const shared = (a.files || []).filter((f) => bl.includes(String(f).toLowerCase()))
+      const overlap = (x, y) => x === y || x.startsWith(y + '/') || y.startsWith(x + '/')
+      const shared = (a.files || []).filter((f) => bl.some((g) => overlap(String(f).toLowerCase(), g)))
       if (shared.length && !reach(a.name).has(b.name) && !reach(b.name).has(a.name)) {
         errors.push(`tasks ${a.name} and ${b.name} both change ${shared.join(', ')} with no after chain between them`)
       }
