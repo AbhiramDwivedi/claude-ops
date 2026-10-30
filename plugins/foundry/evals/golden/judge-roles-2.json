@@ -1,0 +1,10 @@
+{
+  "id": "judge-roles-2",
+  "source": ".git/foundry/40816bb1-1ec8-4755-8d97-0d12599e1e84/reports/roles/roles-judge-2.md",
+  "role": "judge",
+  "input": "Rule on the work of the crew \"roles\" against its goal and done-check.\n\nBase: 5831f1b\nHead: 8f85e1d19a97\n\nGoal file: none in goals/ for this crew.\n\nMembers' reports named: none.\n",
+  "expected": {
+    "keyword": "VERDICT",
+    "kind": "FAIL"
+  }
+}
