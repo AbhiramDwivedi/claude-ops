@@ -502,9 +502,22 @@ function unscopedOf(text) {
   return out
 }
 
+// report paths of the crew's earlier members, from labelFrom (same label scheme as nextLabel, without touching the counters)
+function earlierReports(crew) {
+  const from = crew.e.labelFrom || {}
+  const path = (role, n) => `${F.dir}/reports/${crew.slug}/${n === 1 ? `${crew.slug}-${role}` : `${crew.slug}-${role}-${n}`}.md`
+  const paths = []
+  for (const role of Object.keys(from).sort()) {
+    for (let n = 1; n < from[role]; n++) paths.push(path(role, n))
+  }
+  const last = from.redteam > 1 ? path('redteam', from.redteam - 1) : null
+  return { paths, last }
+}
+
 function judgePrompt(crew) {
   const e = crew.e
   const wt = e.worktree
+  const earlier = earlierReports(crew)
   return [
     `Rule on crew ${crew.slug}. Start your report with VERDICT: PASS or VERDICT: FAIL.`,
     `Goal file: ${e.goalFile}`,
@@ -526,6 +539,15 @@ function judgePrompt(crew) {
     '',
     `Approved scope: ${e.scope}`,
     '',
+    ...(earlier.paths.length
+      ? [
+          'Reports of earlier members (from before this run):',
+          ...earlier.paths,
+          ...(earlier.last ? [`Earlier red-team report: ${earlier.last}`] : []),
+          'Read each path. A path that does not exist means no report, never a failed proof.',
+          '',
+        ]
+      : []),
     'A commit with Foundry-Role: resolver that touches a done-check test file is a FAIL, the same as one with Foundry-Role: builder.',
     'State the head SHA and the patch id of the diff under ## Proof checked, as the lines "Head: <sha>" and "Patch: <patch id>".',
   ].join('\n')
