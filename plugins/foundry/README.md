@@ -1,8 +1,10 @@
 # foundry
 
-Hand Claude Code a goal too big for one session, and foundry runs it as several small crews of agents working in parallel, each in its own git worktree. Nothing reaches your branch until a separate judge has checked the work against proof.
+foundry is a Claude Code plugin that runs a large coding goal the way a small engineering team would: an architect plans it, crews build it in parallel, and an independent reviewer signs off before anything merges.
 
-Your main session becomes the foreman. It plans, decides and merges, but writes no feature code, and it is the only agent that talks to you.
+One Claude Code session handles a task that fits in its head. Give it something bigger, such as a feature across several modules, a refactor or a new subsystem, and the same things go wrong. The context fills and compaction drops details. The agent grades its own work. Tests get written to fit the code. Parallel agents edit the same files, and extras nobody asked for creep in.
+
+foundry splits the goal into crews. Each crew owns its files and works in its own git worktree, and test-writers go before builders. A read-only judge that never saw the builder's reasoning must rule PASS on proof, such as test output, before a crew's branch merges. Your main session becomes the foreman: it plans, decides and merges, writes no feature code, and is the only agent that talks to you. You're asked about scope, deploys and pushes, not trivia.
 
 ```
 /plugin marketplace add AbhiramDwivedi/claude-ops
@@ -28,6 +30,22 @@ Each row is a failure that shows up on long agent work, and the part of foundry 
 | Wrong model, wrong bill | Subagents inherit the main model, often the costliest. | Every spawn names its model and effort, or the hooks refuse it. Sonnet writes code; Opus plans and judges. |
 | New asks mid-run | A new request derails the plan or gets lost. | The architect amends the running plan with a new goal, and its crews join without stopping the others. |
 | No memory of what went wrong | Every session starts from zero. | Hooks log spawns, stalls and reports to `events.jsonl`, and `/foundry:retro` turns the counts into config changes. |
+
+## Built on what works in the field
+
+foundry's rules come from practice, not theory: Anthropic's Claude Code guidance, posts from the people who build it, and an outside review of those practices. The [workflow-audit](../workflow-audit) plugin keeps them, with sources, in [catalog/practices.json](../workflow-audit/catalog/practices.json). foundry writes them into its prompts and, where a hook can see the rule, enforces them:
+
+| Practice | Where foundry applies it |
+| --- | --- |
+| Give the agent a runnable check, and demand output as evidence, not a claim | Every crew has a done-check the architect proves once; every report carries command output; the judge rules on that proof. |
+| Have a fresh agent review long unattended work | The judge is a new agent that never saw the build. |
+| State the scope and forbid unasked-for work | Briefs quote the approved decisions; the judge flags anything outside them. |
+| Long contexts get less reliable; start fresh rather than correct a third time | Every task gets a fresh agent, never a resume. After two failed fixes, an Opus agent finds the root cause and a new builder starts from it. |
+| Set the model on every subagent; Sonnet for most coding, Opus for reasoning | The hooks refuse a spawn with no model or effort. Sonnet builds; Opus plans and judges. |
+| Match effort to the task; high effort isn't the default | Judges, red teams and writers run at `medium`; `high` needs your explicit call. |
+| Run parallel work in separate worktrees | One worktree per crew, with file ownership declared in the plan. |
+| Multi-agent work costs many times a chat; save it for work that splits | Small jobs run as leadless crews with no lead and no red team; [What it costs](#what-it-costs) says when to skip foundry. |
+| Put must-always rules in hooks; prompts are only advice | The merge gate, plan gates, model checks and repair budget are hooks. |
 
 ## How work moves
 
