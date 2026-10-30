@@ -792,7 +792,6 @@ function sessionAudit(dir: string, rootDir: string, thisRunId: string, factorySl
     for (const a of r.agents) {
       const label = `${r.id}/${a.label}`
       if (!foundryRun && typeOf(a).startsWith('foundry:')) audits.push({ label, why: `${typeOf(a)} agent in a run that is not foundry's` })
-      if (r.id === thisRunId) continue
       if (typeof a.meta?.model !== 'string' || a.meta.model === '') audits.push({ label, why: 'the meta file has no model' })
       else {
         const fam = family(transcriptFacts(a.transcript).model)
@@ -866,8 +865,12 @@ function mergeCrew(f: Flags, dir: string, repo: string, target: string, crew: Ob
   const red = redRecord(dir, slug)
   if (red === undefined || !Number.isInteger(red.exit) || red.exit === 0) return { refused: 'no red record: the lowest-numbered checks file is missing or has exit 0' }
   if (run(wt, ['rev-parse', `refs/heads/foundry-${slug}`]).out !== run(wt, ['rev-parse', 'HEAD']).out) return { refused: `the crew worktree is not on branch foundry-${slug}` }
-  // step 2: merge the target in, never a rebase
-  const m = run(wt, ['merge', '--no-edit', target])
+  // step 2: resolve the target once, fully qualified (a same-named tag must not win), and merge that commit in, never a rebase
+  const targetRef = `refs/heads/${target}`
+  const resolved = run(repo, ['rev-parse', '--verify', `${targetRef}^{commit}`])
+  if (resolved.status !== 0 || resolved.out === '') return { refused: `target branch ${target} does not resolve` }
+  const oldSha = resolved.out
+  const m = run(wt, ['merge', '--no-edit', oldSha])
   if (m.status !== 0) {
     const conflict = run(wt, ['diff', '--name-only', '--diff-filter=U']).out !== ''
     run(wt, ['merge', '--abort'])
@@ -875,7 +878,7 @@ function mergeCrew(f: Flags, dir: string, repo: string, target: string, crew: Ob
   }
   // step 3: the patch is always computed on the merged head, against the target head just merged in
   const head = run(wt, ['rev-parse', 'HEAD']).out
-  const base = run(wt, ['merge-base', target, 'HEAD']).out
+  const base = run(wt, ['merge-base', oldSha, 'HEAD']).out
   const patch = head === '' || base === '' ? undefined : patchOf(wt, base, head)
   if (ruling.head === undefined || ruling.patch === undefined || head === '' || patch === undefined) return { refused: 'patch id unavailable' }
   if (mergeHeadVerdict(plan, ruling, head, patch) !== undefined) return { rework: 'rejudge' }
@@ -891,11 +894,9 @@ function mergeCrew(f: Flags, dir: string, repo: string, target: string, crew: Ob
   if (onTarget !== undefined) {
     const dirty = run(onTarget.path, ['status', '--porcelain', '--untracked-files=no']).out
     if (dirty !== '') return { blocked: `target checked out dirty: ${dirty.split('\n')[0]?.trim().replace(/^\S+\s+/, '')}` }
-    if (run(onTarget.path, ['merge', '--ff-only', `foundry-${slug}`]).status !== 0) return { rework: 'target moved' }
-  } else {
-    const old = run(repo, ['rev-parse', `refs/heads/${target}`])
-    if (old.status !== 0 || run(repo, ['update-ref', `refs/heads/${target}`, head, old.out]).status !== 0) return { rework: 'target moved' }
-  }
+    if (run(onTarget.path, ['rev-parse', 'HEAD']).out !== oldSha) return { rework: 'target moved' }
+    if (run(onTarget.path, ['merge', '--ff-only', `refs/heads/foundry-${slug}`]).status !== 0) return { rework: 'target moved' }
+  } else if (run(repo, ['update-ref', targetRef, head, oldSha]).status !== 0) return { rework: 'target moved' }
   // step 5: record, then clean up
   const fresh = loadPlan(dir)
   const entry = fresh.crews.find((c: Obj) => isObj(c) && c.slug === slug)
@@ -961,7 +962,7 @@ function cmdFinish(f: Flags): Obj {
   const log = existsSync(`${dir}/decisions.md`) ? readFileSync(`${dir}/decisions.md`, 'utf8') : ''
   const waived = new Set([...log.matchAll(/^- [^|]*\|\s*audit waived: ([A-Za-z0-9._-]+)/gm)].map((m) => m[1] as string))
   const stand = sessionAudit(dir, path.dirname(tdir), wfRun.id, new Set(plan.crews.filter((c: Obj) => isObj(c) && factorySpawned(dir, c.slug) !== undefined).map((c: Obj) => c.slug as string)), waived)
-  for (const a of stand) out.audit.push({ label: a.label, why: a.why })
+  for (const a of stand) if (!out.audit.some((x) => x.label === a.label && x.why === a.why)) out.audit.push({ label: a.label, why: a.why })
   if (stand.length > 0) {
     const what = `session audit stands, nothing merged: ${stand.map((a) => `${a.label} (${a.why})`).join('; ')}`
     if (!log.includes(what)) appendDecision(dir, `${what} | the owner rules, then a decision line "audit waived: <run id>" or the offending run goes`)
