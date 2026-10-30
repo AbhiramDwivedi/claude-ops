@@ -456,9 +456,13 @@ function thisRun(crew: string, f: JudgeFile, since: number): boolean {
   return isJudgeFile(crew, f.name) && !isInterimFile(f.name) && f.mtimeMs >= since
 }
 
-// how many of the crew's judge files this run rule FAIL
+// how many of the crew's judge files this run rule FAIL, or rule PASS with an UNSCOPED finding
 export function judgeFails(crew: string, files: readonly JudgeFile[], since: number): number {
-  return files.filter(f => thisRun(crew, f, since) && judgeRuling(f.text).verdict === 'FAIL').length
+  return files.filter(f => {
+    if (!thisRun(crew, f, since)) return false
+    const r = judgeRuling(f.text)
+    return r.verdict === 'FAIL' || (r.verdict === 'PASS' && r.unscoped > 0)
+  }).length
 }
 
 // the k of <crew>-judge-<k>.md; the bare <crew>-judge.md is 1
