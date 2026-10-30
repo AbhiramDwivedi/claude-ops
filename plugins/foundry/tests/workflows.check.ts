@@ -562,6 +562,9 @@ const NONCANON = [
   ['a dot-dot segment', 'plugins/foundry/../../package.json'],
   ['a leading ./', './plugins/foundry/workflows/wave.js'],
   ['a leading slash', '/plugins/foundry/workflows/wave.js'],
+  ['a trailing slash', 'src/lib/'],
+  ['a bare directory with a trailing slash', 'src/'],
+  ['an empty string', ''],
 ]
 for (const [name, file] of NONCANON) {
   const bad = PLAN(T1, B1, { ...B1, name: 'build-more', files: [file], after: ['write-tests'] })
@@ -586,6 +589,29 @@ t('wave split: files differing only in case count as a shared file; planner-2 er
   has(p, 'build-upper')
   has(p, 'build-lower')
   assert.ok(!had(r, 'a-planner-3'))
+})
+t('wave split: a directory entry src/ is non-canonical even when owns is src/*', async () => {
+  const own = ['src/*', 'tests/*.ts']
+  const bad = PLAN(T1, B1, { ...B1, name: 'build-more', files: ['src/'], after: ['write-tests'] })
+  const r = await runWave([entry('a', { owns: own })], { labels: base('a', { 'a-planner': bad, 'a-planner-2': PLAN() }) })
+  has(call(r, 'a-planner-2').prompt, 'src/')
+  assert.ok(!had(r, 'a-planner-3'))
+  passedShape(r.res[0], 'a', HEAD, 'a-judge', entry('a', { owns: own }))
+})
+t('wave split: a path that is a segment-boundary prefix of another task file counts as shared; planner-2 error names both tasks', async () => {
+  const X = { ...B1, name: 'build-dir', files: ['src/lib'], after: ['write-tests'] }
+  const Y = { ...B1, name: 'build-child', files: ['src/lib/x.js'], after: ['write-tests'] }
+  const r = await runWave([entry('a')], { labels: base('a', { 'a-planner': PLAN(T1, X, Y), 'a-planner-2': PLAN() }) })
+  const p = call(r, 'a-planner-2').prompt
+  has(p, 'build-dir')
+  has(p, 'build-child')
+  assert.ok(!had(r, 'a-planner-3'))
+})
+t('wave split: src/lib and src/library.js are not prefix-related, so no planner-2', async () => {
+  const X = { ...B1, name: 'build-dir', files: ['src/lib'], after: ['write-tests'] }
+  const Y = { ...B1, name: 'build-other', files: ['src/library.js'], after: ['write-tests'] }
+  const r = await runWave([entry('a')], { labels: base('a', { 'a-planner': PLAN(T1, X, Y), 'a-builder': done('feat/b'), 'a-builder-2': done('feat/b2') }) })
+  assert.ok(!had(r, 'a-planner-2'))
 })
 t('wave split: globs accept src/** at depth and tests/*.ts at one level with no planner-2', async () => {
   const r = await runWave([entry('a')], { labels: base('a', { 'a-planner': PLAN(T1, { ...B1, files: ['src/deep/er/x.ts'] }) }) })
