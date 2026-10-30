@@ -1,7 +1,7 @@
 // foundry ADR-0007 section 7: the owner's optional model-eval runner. Never a gate, outside every suite.
 // Run: node plugins/foundry/evals/run-model.ts   (CLAUDE=<path> picks the binary, else `claude`)
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +13,12 @@ const TOOLS: Record<string, string[]> = {
   judge: ['Read', 'Grep', 'Glob', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git rev-parse:*)'],
   cynic: ['Read', 'Grep', 'Glob'],
 }
+
+const BUILT_IN: Record<string, string[]> = { judge: ['Read', 'Grep', 'Glob', 'Bash'], cynic: ['Read', 'Grep', 'Glob'] }
+const DISALLOWED = [
+  'Bash(git diff --output*)', 'Bash(git add:*)', 'Bash(git commit:*)',
+  'Bash(git push:*)', 'Bash(git reset:*)', 'Bash(git checkout:*)',
+]
 
 type Case = { id: string; role: string; input: string; expected: Expected }
 
@@ -63,6 +69,7 @@ const out = mkdtempSync(join(tmpdir(), 'foundry-evals-'))
 
 const results: { id: string; role: string; result: string; expected: string; got: string }[] = []
 let ok = 0
+let childFailed = false
 for (const c of cases) {
   const { body, model, effort } = agent(c.role)
   const tools = TOOLS[c.role]
@@ -73,6 +80,8 @@ for (const c of cases) {
     '--model', model,
     '--effort', effort,
     '--no-session-persistence',
+    '--tools', ...BUILT_IN[c.role],
+    '--disallowedTools', ...DISALLOWED,
     '--output-format', 'text',
     '--allowedTools', ...tools,
   ]
@@ -82,8 +91,15 @@ for (const c of cases) {
   })
   const err = r.error as (Error & { code?: string }) | undefined
   const timedOut = err?.code === 'ETIMEDOUT'
-  if (err && !timedOut) fail(`${c.id}: cannot run ${bin}: ${err.message}`)
+  if (err && !timedOut) {
+    rmSync(out, { recursive: true, force: true })
+    fail(`${c.id}: cannot run ${bin}: ${err.message}`)
+  }
   const report = (r.stdout ?? '').replace(/\r/g, '')
+  if (!timedOut && r.status !== 0 && report === '') {
+    childFailed = true
+    process.stderr.write(r.stderr ?? '')
+  }
   writeFileSync(join(out, `${c.id}.txt`), report)
   const s = timedOut ? { ok: false, got: undefined } : score(report, c.expected)
   const result = timedOut ? 'timeout' : s.ok ? 'ok' : 'miss'
@@ -95,3 +111,4 @@ for (const c of cases) {
 writeFileSync(join(out, 'results.json'), JSON.stringify(results, null, 2) + '\n')
 process.stdout.write(`score ${ok}/${cases.length} at ${head}\n`)
 process.stdout.write(`results ${out}\n`)
+if (childFailed) process.exit(1)
