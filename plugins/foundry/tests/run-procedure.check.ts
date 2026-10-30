@@ -41,8 +41,9 @@ const S6 = section(6)
 const S9 = section(9)
 const README_RAW = raw(PLUGIN, 'README.md')
 const README = norm(README_RAW)
+const CHANGELOG_RAW = raw(PLUGIN, 'CHANGELOG.md')
 const notes11 = (): string => {
-  const m = README_RAW.match(/^## What changed in 0\.11\.0[\s\S]*?(?=^## |(?![\s\S]))/m)
+  const m = CHANGELOG_RAW.match(/^## 0\.11\.0[\s\S]*?(?=^## |(?![\s\S]))/m)
   return m === null ? '' : norm(m[0])
 }
 
@@ -190,16 +191,16 @@ describe('run-procedure: plugin.json and README', () => {
       gone(r, /auto-started/i, `auto-started in: ${r}`)
     }
   })
-  test('README has 0.11.0 release notes', () => {
-    has(README, /What changed in 0\.11\.0/i, 'What changed in 0.11.0 heading')
+  test('CHANGELOG has 0.11.0 release notes', () => {
+    assert.match(CHANGELOG_RAW, /^## 0\.11\.0$/m, '0.11.0 heading in CHANGELOG.md')
   })
-  test('README 0.11.0 notes name the interview wiring and the Workflow run procedure', () => {
+  test('CHANGELOG 0.11.0 notes name the interview wiring and the Workflow run procedure', () => {
     const notes = notes11()
     has(notes, /interview/i, 'interview wiring')
     has(notes, /Workflow/i, 'Workflow')
     has(notes, /run procedure|SKILL\.md|foreman'?s? procedure|plan-args|wave\.js/i, 'Workflow run procedure')
   })
-  test('README 0.11.0 notes name factory-scripts, intake-retro, speed-rules and critical-fixes work', () => {
+  test('CHANGELOG 0.11.0 notes name factory-scripts, intake-retro, speed-rules and critical-fixes work', () => {
     const notes = notes11()
     has(notes, /factory[- ]scripts|factory\.ts|plan\.js|wave\.js/i, 'factory-scripts')
     has(notes, /intake[- ]retro|intake/i, 'intake-retro')
