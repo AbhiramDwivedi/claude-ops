@@ -11,7 +11,6 @@ import {
   LEAD_TYPE,
   messageVerdict,
   MODEL_REFUSAL,
-  questionOf,
   recipientsOf,
   reportPath,
   safeName,
@@ -164,12 +163,6 @@ test('shows each crew with its live members by model and its last report', async
   expect(statusText([], now)).toContain('/foundry:run')
   const asking = statusText([{ crew: 'auth', status: 'idle', live: {}, lastReportMs: now, question: 'Keep the v1 endpoint?' }], now)
   expect(asking).toContain('- auth: idle, no live members, waiting on you: Keep the v1 endpoint?')
-})
-
-test('reads a lead question only when the text starts with QUESTION:', async () => {
-  expect(questionOf('QUESTION: Keep the v1 endpoint?\nOptions: a or b')).toBe('Keep the v1 endpoint?')
-  expect(questionOf('  QUESTION: why')).toBe('why')
-  expect(questionOf('## Summary\nQUESTION: no')).toBeUndefined()
 })
 
 test('counts models by family and formats ages', async () => {

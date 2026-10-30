@@ -33,11 +33,11 @@
       "minimum": 1
     },
     "merge": {
-      "description": "Merge mode of auto-started runs. Default sequential.",
+      "description": "Merge mode of every run; the foreman never asks. Default sequential.",
       "enum": ["sequential", "single"]
     },
     "target": {
-      "description": "Target branch of auto-started runs. Default: the current branch.",
+      "description": "Target branch of every run; the foreman never asks. Default: the current branch.",
       "type": "string",
       "minLength": 1
     },

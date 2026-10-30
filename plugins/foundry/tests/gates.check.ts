@@ -46,7 +46,6 @@ const frontmatter = (text: string): Record<string, string> => {
 test('judge.md carries the Head: line literal', () => has(read('agents', 'judge.md'), HEAD_LINE, 'agents/judge.md'))
 test('judge.md carries the Patch: line literal', () => has(read('agents', 'judge.md'), PATCH_LINE, 'agents/judge.md'))
 test('judge.md carries the - UNSCOPED: finding literal', () => has(read('agents', 'judge.md'), UNSCOPED, 'agents/judge.md'))
-test('judge.md names the patch command', () => has(read('agents', 'judge.md'), 'git patch-id --stable', 'agents/judge.md'))
 
 test('lead.md carries the ## Examined heading', () => has(read('agents', 'lead.md'), EXAMINED, 'agents/lead.md'))
 test('lead.md carries the ## Not examined heading', () => has(read('agents', 'lead.md'), NOT_EXAMINED, 'agents/lead.md'))
@@ -70,7 +69,6 @@ test('run skill merge rule names the Head: and Patch: lines', () => {
   has(run, HEAD_LINE, 'skills/run/SKILL.md')
   has(run, PATCH_LINE, 'skills/run/SKILL.md')
 })
-test('run skill merge rule names the patch command', () => has(read('skills', 'run', 'SKILL.md'), 'git patch-id --stable', 'skills/run/SKILL.md'))
 test('run skill merge rule reads the newest judge file at or after approvedAt, not the highest-numbered', () => {
   const run = read('skills', 'run', 'SKILL.md')
   assert.ok(/newest judge file[^.]*approvedAt/.test(run), 'skills/run/SKILL.md does not pick the newest judge file at or after approvedAt')

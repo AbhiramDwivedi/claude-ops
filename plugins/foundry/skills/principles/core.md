@@ -8,17 +8,17 @@ Applies to every change in every project, whatever its language or domain. It as
    Test: no import path in the diff reaches past another module's entry file into its internals.
 2. Each new file or function belongs to the module whose responsibility it serves, so cohesion stays high.
    Test: every new file sits under a path the module map assigns to a module whose stated responsibility covers it.
-3. Code at a module edge depends on an interface or abstract type, not on another module's concrete class, which keeps coupling loose.
+3. Code at a module edge depends on an interface or abstract type, not on another module's concrete class, to keep coupling loose, when a second implementation or a test double exists or is planned; otherwise rule 12 applies.
    Test: constructor and function parameters that cross a module boundary are typed as interfaces, protocols or function types, not concrete classes.
-4. A class has one reason to change and receives its collaborators instead of constructing them (SOLID: single responsibility, dependency inversion).
+4. A class that mixes I/O with domain logic has one reason to change and receives its collaborators instead of constructing them (SOLID: single responsibility, dependency inversion); otherwise rule 12 applies.
    Test: no new class both does I/O and holds domain logic, and no constructor in the diff calls `new` (or the language's equivalent) on another module's service.
-5. Every seam between modules has an explicit contract: a typed signature, schema or documented interface.
+5. A seam that two or more modules or crews build against has an explicit contract: a typed signature, schema or documented interface; otherwise rule 12 applies.
    Test: each function, endpoint or message that crosses a module boundary in the diff has declared input and output types or a schema file.
-6. Code validates its inputs at the boundary so it can fail fast with a specific error instead of passing bad values on.
+6. Code that takes input from outside the process validates it at that boundary so it can fail fast with a specific error; otherwise rule 12 applies.
    Test: new public functions check required arguments at the top and raise or return a named error, and no `catch` block in the diff swallows an error without rethrowing or logging it.
-7. Operations that can be retried are idempotent: running one twice leaves the same state as running it once.
+7. Operations that something actually retries are idempotent: running one twice leaves the same state as running it once; otherwise rule 12 applies.
    Test: every new write, job or handler that may be retried uses an idempotency key, an upsert, or a check-before-write, and a test runs it twice.
-8. New code paths emit observability signals: a structured log line, metric or trace span at each external call and each error.
+8. New code paths that call a service outside the process or fail in a way an operator must diagnose emit observability signals: a structured log line, metric or trace span; otherwise rule 12 applies.
    Test: each new external call and error branch in the diff logs or records a metric with a stable event name and context fields.
 9. Errors and logs never carry secrets or personal data.
    Test: grep the diff for tokens, passwords, keys and full request bodies inside log, print or error-message calls; none appear.

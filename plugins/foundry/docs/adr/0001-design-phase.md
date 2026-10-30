@@ -143,7 +143,7 @@ The architect splits the goal once, on paper, along the module map. Agents never
 - The judge adds one rubric question: does the diff conform to the architecture doc's principles and module map, and to this run's ADRs? A violation that doesn't affect the done-check is a QUESTION. One that breaks a declared principle is a FAIL.
 - Crews never edit the architecture doc or ADRs. A needed design change goes to the foreman as `PROPOSAL:`.
 - **Mid-run design slice:** when the foreman takes up a design proposal, it handles it like this.
-  - It adds a design crew (`verdict: "design"`) to the earliest wave that hasn't started yet.
+  - It adds a design crew (`verdict: "design"`) to the earliest wave whose crews it doesn't depend on, first in that wave's queue and ahead of the crews that need it. A running crew isn't moved. (Amended 2026-10-29 to match `skills/run/SKILL.md:278`: a new wave after the last would deadlock when a running crew needs the slice.)
   - It moves only the crews that depend on the slice, and haven't started, one wave later. Running crews and crews that don't depend on it keep their wave.
   - The run-level `approval` and `approvedAt` don't change.
   - The slice waits for the owner only when one of section 4's triggers applies. Then the foreman sets the crew's `ownerApproval` to `"pending"`, and to `"approved"` when the owner answers.

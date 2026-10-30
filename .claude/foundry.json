@@ -1,4 +1,6 @@
 {
   "architecture": "docs/architecture.md",
-  "adr": "docs/adr"
+  "adr": "docs/adr",
+  "merge": "sequential",
+  "target": "main"
 }

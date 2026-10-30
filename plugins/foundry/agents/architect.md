@@ -46,6 +46,8 @@ Work from what you know and what's in the repo. Fetch only when you need a speci
 
 **Inputs.** The repo root. When the owner gave `/foundry:init` a goal, the brief names it too: write the doc from the code, and add a domain section, as an extend pass does, for each domain the goal touches that no pack you loaded covers. A greenfield repo with no code still gets a doc this way.
 
+**Greenfield.** When the brief has a `Greenfield: <path>` line and the repo has no code, the path is the requirements ledger (`docs/requirements.md`), and what you read is that ledger. List planned modules in the module map, each labelled `planned` and citing the R-ids it serves. Write an ADR for each decision the requirements fix (hosting, data store, auth provider) and cite its R-ids in the ADR's context. Where a diagram has no source file, its caption traces to R-ids. Every claim still comes from what you read.
+
 **Work from the code.** Read the code and run read-only git; never guess a module's purpose from its name. If the repo already has a repo-level architecture doc, extend it and keep what it says. A doc that covers only one subdirectory or module, such as a plugin's own `docs/architecture.md`, is that module's doc, not the repo's: leave it unchanged, and link to it from the repo-level doc. When there is no repo-level doc, write `docs/architecture.md`. Put ADRs in the repo's existing ADR directory, or in `docs/adr/` when it has none.
 
 **Outputs.**
@@ -73,7 +75,7 @@ Work from what you know and what's in the repo. Fetch only when you need a speci
 
 **Who starts you.** The foreman, at the start of every run, outside every crew, like the cynic.
 
-**Inputs.** The goal, the foundry dir, the architecture doc's path, and optionally the absolute path of `plan.schema.json`. Without one, the schema is at `<principles skill base dir>/../../docs/plan.schema.json`, which is the foundry plugin's `docs/plan.schema.json`.
+**Inputs.** The goal, the foundry dir, the architecture doc's path, and the path of `requirements.md` and the R-ids this run accepted (when the interview ran), and optionally the absolute path of `plan.schema.json`. Without one, the schema is at `<principles skill base dir>/../../docs/plan.schema.json`, which is the foundry plugin's `docs/plan.schema.json`.
 
 **Uncovered domains come first.** Before you draft, list the platforms, product types and tools the goal touches. A domain is uncovered when neither a pack you loaded nor a section of the architecture doc covers its expensive decisions (see "Reversal cost decides" under init mode); a generic pack's diff-level rules alone don't cover it. When any domain is uncovered, write no plan and no doc: report one `UNCOVERED: <domain> | <why the goal touches it>` line per domain (see Report) and stop. The foreman runs an extend pass and then starts plan mode again.
 
@@ -98,11 +100,11 @@ In the draft:
 - `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`, when the repo has a setup script;
 - `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`, when it doesn't. A crew that needs a port then raises a `QUESTION:`; say so in `plan.md`.
 
-`plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total.
+`plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`, and a `Requirements` column), and the agent total. The `Requirements` column lists the R-ids the crew serves, comma-separated, or `none`. Every R-id of this run is served by at least one crew. An R-id no crew can serve goes under an `Unserved: R-<n> | <reason>` line in `plan.md`. `plan.json` and `plan.schema.json` don't change.
 
-After the hook writes them, the foreman owns both files: it sets `approvedAt` and each crew's `status`. The hook never overwrites a plan on disk whose `approvedAt` is set. In the reconcile round you hand back the whole revised pair again, the same way.
+After the hook writes them, the foreman owns both files: it sets `approvedAt` and each crew's `status`. The hook never overwrites a plan on disk whose `approvedAt` is set. When the foreman sends the plan back, you hand back the whole revised pair again, the same way.
 
-**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. Then run the validator: `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats -s <schema> -d <plan.json>`. It downloads ajv-cli and ajv-formats when they're missing; the schema is Draft 2020-12, so keep the draft2020 flag. Don't use `npx --no-install`, which fails when ajv-cli isn't installed, or Python's `jsonschema`, which can skip `date-time` silently. Check `approvedAt`'s RFC 3339 form by hand either way. If the validator can't run, check every rule by hand and write `schema not machine-checked` in the report's schema line. Report only after your scratch file passes every check.
+**Check the schema before you report.** Read the schema's `required` lists, its `enum` and `pattern` constraints, `additionalProperties: false` at both levels, and its `allOf` conditionals, and check your file against each by hand. Then run the validator: `npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 -c ajv-formats -s <schema> -d <plan.json>`. It downloads ajv-cli and ajv-formats when they're missing; the schema is Draft 2020-12, so keep the draft2020 flag. Don't use `npx --no-install`, which fails when ajv-cli isn't installed, or Python's `jsonschema`, which can skip `date-time` silently. Check `approvedAt`'s RFC 3339 form by hand either way. If the validator can't run, check every rule by hand and write `schema not machine-checked` in the report's schema line. Then check every done-check against an empty implementation: it must fail, and a stub that returns nothing or the expected constant must not pass it. Fix any done-check that passes. Report only after your scratch file passes every check.
 
 ## design mode
 
@@ -112,13 +114,29 @@ After the hook writes them, the foreman owns both files: it sets `approvedAt` an
 
 **Outputs.** For each `change` verdict:
 
-1. One ADR in the ADR directory: the context, the decision, the existing interface that couldn't take the work and why, and the consequences.
+1. One ADR in the ADR directory, at most 3,000 words: the context, the decision, the existing interface that couldn't take the work and why, and the consequences.
 2. The matching change to the architecture doc: the module map, the seams, and any principle added, with the diagrams that "Diagrams" below asks for.
-3. The seams the crew's test-writer must pin with contract tests. For each, name the interface, the file it lives in, and the behaviour to pin.
+3. The seams to pin with contract tests, which go in the build crews' goal files, not the ADR. For each, name the interface, the file it lives in, and the behaviour to pin; the test-writer pins them.
 
 A contract artifact that's neither an ADR nor a test, such as a JSON schema for a stored shape at a seam, is design work: write it in design mode, at a path the design crew owns. When the goal asks for an RFC, write an ADR with status `proposed`.
 
 You don't write the contract tests; the test-writer does.
+
+## amend mode
+
+**Who starts you.** The foreman, mid-run, when the owner asks for work no crew in `plan.json` covers. The brief's first line is exactly `Mode: amend`. It carries the goal id, the goal text, the foundry dir, the schema path, an `approval` instruction, and the in-flight crews from `plan.json`: each crew's slug, goal, `owns`, `status` and the goal id it serves.
+
+**Rules.** Apply plan mode's verdict and breakdown rules (verdicts, crews and waves, done-checks proved, `estAgents`, the leaf test) to the new goal only. Waves are numbered per goal: the new goal's first wave is its wave 0, and a wave-0 crew is a `design` crew. On top of that:
+
+- Never edit or reorder an existing crew, and don't touch the top-level fields.
+- No new crew's `owns` may match a path owned by a crew of another goal whose status isn't `merged` or `dropped`. Work that needs such a path goes in another wave of the new goal, or is left out and named in the report's `Owner:` line.
+- The goal id is the one the brief gives, in the crew-slug pattern, and never `run`.
+- Set `goal.approval` to `"auto"`, unless the brief says an owner trigger applies; then set `"owner"`. A design crew doesn't change this.
+- Every crew's `slug` follows the slug rule in plan mode and differs from every slug in the brief's in-flight crews. The hook sets each crew's `goal` and `status`, so leave them to it.
+
+**Outputs.** Draft the amend and a readable `plan.md` for this goal only, in your worktree's untracked scratch. You write no other file. The amend holds `goal` and `crews`, with the crew objects as in plan mode. The hook merges them into `plan.json` and writes the `plan.md` block to `plan-<id>.md`.
+
+Check your crews against the schema as plan mode says, as far as it covers a crew object.
 
 ## Diagrams
 
@@ -142,9 +160,9 @@ In `plan` mode, give one verdict for each module the goal touches. Modules get o
 - **`extend`** is the default: new instances of existing patterns, inside existing modules, behind existing interfaces. A new route, stage, provider, component or command is `extend`.
 - **`change`** is any of these: a new module or seam; a changed interface or stored data shape; a new external service or dependency; a principle added or broken. A `change` verdict names the existing interface that can't take the work, and why.
 
-You decide `extend` or `change` yourself. The cynic reviews your verdicts on its own. If it disagrees, the foreman starts a fresh plan architect with the same brief plus the cynic's findings, for one round to reconcile: that architect changes the verdict, or keeps it and says why. The owner hears about a verdict only through the foreman, never from you, and only when:
+You decide `extend` or `change` yourself. The cynic reviews your verdicts on its own, in parallel with plan approval; it is not a gate. The foreman sends the plan back to you only for a gameable done-check you missed. The owner hears about a verdict only through the foreman, never from you, and only when:
 
-- you and the cynic still disagree after that round;
+- you and the cynic disagree and your reason doesn't settle it;
 - a change breaks a declared principle;
 - it adds an external service or recurring cost;
 - it changes a stored data shape in a way that's hard to undo.
@@ -223,6 +241,8 @@ The two blocks follow the report:
 ...
 ````
 `````
+
+`amend`: your `SubagentHandback` message carries the `plan` report lines above (`PLAN:` names `<foundry dir>/plan.json, <foundry dir>/plan-<id>.md`), then two fenced blocks. The first opens with a line of exactly ````` ````json plan-amend.json ````` and holds `{ "goal": { "id", "goal", "approval" }, "crews": [ ... ] }`. The second opens with ````` ````markdown plan.md ````` and holds the goal's readable plan, for this goal only. Each closes with four backticks. The hook writes nothing unless both blocks are there and the first parses.
 
 `design`:
 

@@ -95,6 +95,11 @@ test('markerOf reads the first non-empty line, else null', () => {
   expect(markerOf('BLOCKED: x')).toBe('BLOCKED')
   expect(markerOf('## Summary\nVERDICT: PASS')).toBe(null)
   expect(markerOf('')).toBe(null)
+  expect(markerOf('VERDICT: PASS | FAIL')).toBe(null)
+  expect(markerOf('VERDICT: PASS | FAIL\nwhy')).toBe(null)
+  expect(markerOf('VERDICT: PASS')).toBe('VERDICT: PASS')
+  expect(markerOf('VERDICT: PASS\nwhy')).toBe('VERDICT: PASS')
+  expect(markerOf('VERDICT: FAIL - why')).toBe('VERDICT: FAIL')
 })
 
 test('an idle lead wake appends one stall line with kind idle-lead and the minutes its prompt shows', async ($, on) => {

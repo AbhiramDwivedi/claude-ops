@@ -43,6 +43,7 @@ Per run (`runs`), then the dir-wide keys. Be brief; a table or short list per ru
 - **Leftovers** (`leftovers`): this session's agents whose `worktree-agent-<id>` branch or `.claude/worktrees/agent-<id>` folder is still present, read from git and the disk. Report `count` and the names. `"not recorded"` means the dir isn't `<git common dir>/foundry/<session>`, there's no event log, or git couldn't run; say so and never write 0.
 - **Leftover details** (`leftoverDetails`): one entry per leftover. Per entry, report its `id`, `head`, `dirty`, `inMain` and `skip`; write a `null` value as none. When the key is `"not recorded"`, say "not recorded".
 - **Plan** (`plan`): crews, waves, the `estAgents` total, and `status` counts. `agentCap` is retired (0.7.0); an old plan.json may still carry it, and when it does not the script says "not recorded". Mention it only if it is a number. It describes the last run only.
+- **Goals** (`goals`, only when present): report one row per goal with its crews, `estAgents`, status counts and decisions. A goal with crews but 0 decisions is reported as is. It is not an anomaly and gets no `CAUSE:` line.
 
 Wherever the JSON says `"not recorded"`, write "not recorded". Never turn it into zero, and never guess a number. If `split` is `"not recorded"`, say the dir couldn't be split into runs: the counts are for the whole dir, and the event-derived ones (spawns, stalls, escalations, judges) weren't recorded. If `eventsSkipped` is above 0, say how many event lines were skipped; `eventsOutsideRuns` events fell before the first run heading.
 
@@ -72,6 +73,8 @@ Propose a change only when a count or a section 3 `CAUSE:` line supports it, and
 
 - `.claude/foundry.json`: `roles` (a job's agent type, for example a job whose judge rejections or stalls cluster on one model), `deploy`, `writingSkill`, `promptOverrides`. Keep to keys the schema declares (`foundry-config.schema.json`).
 - `.claude/foundry/prompts/<role>.md` for the roles `lead`, `judge`, `cynic`, `writer`, `devops`, `architect`: a line a role keeps missing, and the `promptOverrides` entry that points to the file. A prompt file adds to the role's prompt; it never replaces it.
+
+Retro may propose removing a rule, and each proposed rule names the rule it replaces, or says `none`. A removal needs a count or `CAUSE:` line like any other proposal.
 
 If the counts support nothing, say so and stop. Don't invent changes.
 

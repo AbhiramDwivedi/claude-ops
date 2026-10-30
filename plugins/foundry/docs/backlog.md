@@ -86,6 +86,15 @@ Proposal:
 
 Add from Clarity: state logical relations with connectors, not by placing sentences side by side; chain paragraphs (test: cover the page and predict what comes next); give the strongest objection its own paragraph; name who did it; revise by reordering as well as cutting; interview the author when TODOs would outnumber facts. Credit Clarity in `craft.md`. Keep the existing rule against question openers. One agent can do this; it doesn't need a crew.
 
+## Waiting on data
+
+Each item waits on something foundry doesn't have yet.
+
+- **Change-failure rate in retro.** It needs real post-merge history: which merged crews were later reverted or fixed. Foundry hands off before the push, so it records none. The Rejected list already has "post-merge follow-ups" for the same reason. Wait until a project's own history can supply the count.
+- **Mutation testing.** The check that a test fails when the code is wrong needs a runner, and there is no mutation testing runner for TypeScript that foundry can use. Wait for one.
+- **The prune run and the word budget.** A run that deletes prompt rules, and a word budget that caps a prompt's length, both need to know which rules fire and what the evals score. Foundry has neither the eval results nor rule-firing data yet. Wait until the owner's eval runs and retro's counts supply them.
+- **Consolidating the release-named test files.** Merging the test files named for releases is safe only when the evals and mutation data show which tests catch what. Until then a merge could drop a check nothing else covers.
+
 ## Rejected
 
 - Unmeasured stretch goals ("2x or don't stop"). Allowed only as a number the judge re-measures.

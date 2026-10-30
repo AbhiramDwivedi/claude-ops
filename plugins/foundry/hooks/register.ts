@@ -1,5 +1,7 @@
 import type { AgentInfo, ClassicResult, EngineInterface, Register, Timer, ToolCallResult } from 'claude-code'
 
+import { amendPlan, goalLine, goalOf, RUN_GOAL } from './intake.ts'
+
 // the agent type every crew lead runs as; only a lead the main thread started heads a crew
 export const LEAD_TYPE = 'foundry:lead'
 // marks text this mod wrote
@@ -208,6 +210,7 @@ export type ReportMarker = (typeof MARKERS)[number]
 // the marker a report's first non-empty line starts with, or null
 export function markerOf(text: string): ReportMarker | null {
   const first = text.split('\n').find(l => l.trim() !== '')?.trimStart() ?? ''
+  if (/^VERDICT: (PASS|FAIL) \| /.test(first)) return null // the template line, not a verdict
   return MARKERS.find(m => first.startsWith(m)) ?? null
 }
 
@@ -279,7 +282,7 @@ export function effortVerdict(callerId: string | undefined, effort: unknown, age
 }
 
 // plan.json as the hooks read it (ADR-0001 s8): only the fields the gates and /foundry use, each left unchecked
-export type Plan = { approval: unknown; approvedAt: unknown; maxParallelCrews: unknown; crews: unknown[]; version: unknown; repairBudget: unknown }
+export type Plan = { approval: unknown; approvedAt: unknown; maxParallelCrews: unknown; crews: unknown[]; version: unknown; repairBudget: unknown; goal: unknown; goals: unknown }
 type PlanCrew = Record<string, unknown>
 
 const DEFAULT_CAP = 4
@@ -301,7 +304,7 @@ export function parsePlan(text: string): Plan | undefined {
     return undefined
   }
   if (!isRecord(value) || !Array.isArray(value.crews)) return undefined
-  return { approval: value.approval, approvedAt: value.approvedAt, maxParallelCrews: value.maxParallelCrews, crews: value.crews, version: value.version, repairBudget: value.repairBudget }
+  return { approval: value.approval, approvedAt: value.approvedAt, maxParallelCrews: value.maxParallelCrews, crews: value.crews, version: value.version, repairBudget: value.repairBudget, goal: value.goal, goals: value.goals }
 }
 
 // The plan entry a lead's name is gated as. A name that is a plan slug is that crew. Otherwise the successor rule: a
@@ -319,32 +322,44 @@ export function planCrewFor(plan: Plan, name: string): { slug: string; crew: Pla
   return base === undefined ? undefined : { slug: m[1], crew: base }
 }
 
-// Why the plan refuses starting the lead `name`, or undefined to let it start. The gates, first match wins: run-level
-// approval, crew-level approval, the wave gate, the parallel cap. The crew being started is every entry with the
-// target's slug (the schema allows duplicate slugs; wave and ownerApproval come from the first). None of them counts
-// as running, since its own entry may already say running (a restart, or a successor gated as its base), and none of
-// them is in the earlier-wave check, so a crew can't hold itself back.
-export function planVerdict(plan: Plan, name: string): { deny: string } | undefined {
+// Why the plan refuses starting the lead `name`, and what /foundry says that crew waits for, or undefined when it may
+// start. The gates, first match wins (ADR-0010 s3): run approval, a reserved goal id, a crew goal the plan doesn't
+// have, goal approval, crew approval, the wave gate within the crew's goal, the parallel cap across goals. The crew
+// being started is every entry with the target's slug (the schema allows duplicate slugs; wave and ownerApproval come
+// from the first). None of them counts as running, since its own entry may already say running (a restart, or a
+// successor gated as its base), and none of them is in the earlier-wave check, so a crew can't hold itself back.
+export function gateOf(plan: Plan, name: string): { deny: string; waits: string } | undefined {
   const target = planCrewFor(plan, name)
   if (target === undefined) return undefined
-  const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
-  if (plan.approval === 'owner' && plan.approvedAt === null) return refuse(`this run changes the design; get the owner's approval first`)
-  if (target.crew.ownerApproval === 'pending') return refuse(`${target.slug} waits for the owner's approval`)
+  const stop = (deny: string, waits: string) => ({ deny, waits })
+  if (plan.approval === 'owner' && plan.approvedAt === null) return stop(`this run changes the design; get the owner's approval first`, `waits for the owner's approval of the plan`)
+  const goals = Array.isArray(plan.goals) ? plan.goals.filter(isRecord) : []
+  if (goals.some(g => g.id === RUN_GOAL)) return stop(`goal id run is reserved for the run's first goal; rename it in plan.json`, `waits for a fix: goal id run is reserved`)
+  const goal = goalOf(target.crew)
+  const entry = goals.find(g => g.id === goal)
+  if (goal !== RUN_GOAL && entry === undefined) return stop(`${target.slug} names goal ${goal}, which isn't in the plan`, `waits for a fix: goal ${goal} isn't in the plan`)
+  if (entry !== undefined && entry.approval === 'owner' && entry.approvedAt === null) return stop(`goal ${goal} changes the design; get the owner's approval first`, `waits for the owner's approval of goal ${goal}`)
+  if (target.crew.ownerApproval === 'pending') return stop(`${target.slug} waits for the owner's approval`, `waits for the owner's approval`)
   const others = plan.crews.filter(isRecord).filter(c => c.slug !== target.slug)
   const wave = target.crew.wave
   if (isWave(wave)) {
-    const open = others.filter(c => isWave(c.wave) && c.wave < wave && c.status !== 'merged' && c.status !== 'dropped')
+    const open = others.filter(c => goalOf(c) === goal && isWave(c.wave) && c.wave < wave && c.status !== 'merged' && c.status !== 'dropped')
     if (open.length > 0) {
       const lowest = Math.min(...open.map(c => c.wave as number))
-      const slugs = open.filter(c => c.wave === lowest).map(c => planField(c.slug))
-      return refuse(`wave ${lowest} isn't merged yet: ${slugs.join(', ')}`)
+      const list = open.filter(c => c.wave === lowest).map(c => planField(c.slug)).join(', ')
+      return stop(`wave ${lowest} ${goal === RUN_GOAL ? '' : `of goal ${goal} `}isn't merged yet: ${list}`, `waits for wave ${lowest} to merge: ${list}`)
     }
   }
   const max = plan.maxParallelCrews
   const cap = typeof max === 'number' && Number.isInteger(max) && max >= 1 ? max : DEFAULT_CAP
   const running = others.filter(c => c.status === 'running').length
-  if (running >= cap) return refuse(`${running} crews running, the cap is ${cap}; start ${target.slug} when one merges`)
+  if (running >= cap) return stop(`${running} crews running, the cap is ${cap}; start ${target.slug} when one merges`, `waits for a free slot: ${running} of ${cap} running`)
   return undefined
+}
+
+export function planVerdict(plan: Plan, name: string): { deny: string } | undefined {
+  const gate = gateOf(plan, name)
+  return gate === undefined ? undefined : { deny: `${MARK} Refused: ${gate.deny}` }
 }
 
 // a plan field as /foundry prints it: a string or a number as is, anything else (missing included) as ?
@@ -352,29 +367,48 @@ function planField(v: unknown): string {
   return typeof v === 'string' || isWave(v) ? String(v) : '?'
 }
 
-// the lines /foundry shows above the 0.2.1 output: one per crew, by wave, ties in the plan's queue order
+// the lines /foundry shows above the 0.2.1 output: one per crew, by wave, ties in the plan's queue order; with goals,
+// grouped under a line per goal (ADR-0010 s5)
 export function planLines(plan: Plan): string[] {
   const waiting = plan.approval === 'owner' && plan.approvedAt === null ? ', waiting for the owner' : ''
-  const lines = [`Plan (${plan.crews.length} crews, approval ${planField(plan.approval)}${waiting}):`]
+  const goals = Array.isArray(plan.goals) ? plan.goals : []
+  const grouped = goals.length > 0
+  const counts = grouped ? `${plan.crews.length} crews, ${1 + goals.length} goals` : `${plan.crews.length} crews`
+  const lines = [`Plan (${counts}, approval ${planField(plan.approval)}${waiting}):`]
   const order = (c: unknown) => (isRecord(c) && isWave(c.wave) ? c.wave : Number.POSITIVE_INFINITY)
   const sorted = plan.crews.map((c, i) => ({ c, i })).sort((a, b) => order(a.c) - order(b.c) || a.i - b.i)
-  for (const { c } of sorted) {
+  const crewLine = (c: unknown) => {
     const crew = isRecord(c) ? c : {}
-    const pending = crew.ownerApproval === 'pending' ? `, waits for the owner's approval` : ''
-    lines.push(`- wave ${planField(crew.wave)}: ${planField(crew.slug)}, ${planField(crew.verdict)}, ${planField(crew.status)}${pending}`)
+    const planned = crew.status === 'planned'
+    const gate = planned ? gateOf(plan, planField(crew.slug)) : undefined
+    const suffix = planned ? `, ${gate === undefined ? 'ready to start' : gate.waits}` : ''
+    return `- wave ${planField(crew.wave)}: ${planField(crew.slug)}, ${planField(crew.verdict)}, ${planField(crew.status)}${suffix}`
+  }
+  if (!grouped) {
+    for (const { c } of sorted) lines.push(crewLine(c))
+    return lines
+  }
+  const known: unknown[] = [RUN_GOAL, ...goals.map(g => (isRecord(g) ? g.id : undefined))]
+  const ids = [...known]
+  for (const c of plan.crews) if (!ids.includes(goalOf(c))) ids.push(goalOf(c))
+  for (const id of ids) {
+    const mine = sorted.filter(({ c }) => goalOf(c) === id)
+    if (known.includes(id)) {
+      const entry = id === RUN_GOAL ? plan : goals.find(g => isRecord(g) && g.id === id)
+      const e = isRecord(entry) ? entry : {}
+      const owner = e.approval === 'owner' && e.approvedAt === null ? ', waiting for the owner' : ''
+      const done = mine.every(({ c }) => isRecord(c) && (c.status === 'merged' || c.status === 'dropped')) ? ', done' : ''
+      lines.push(`Goal ${planField(id)} (approval ${planField(e.approval)}${owner}${done}): ${typeof e.goal === 'string' ? goalLine(e.goal) : ''}`)
+    } else {
+      lines.push(`Goal ${planField(id)} (not in the plan):`)
+    }
+    for (const { c } of mine) lines.push(crewLine(c))
   }
   return lines
 }
 
 export function reportNote(who: string, path: string): string {
   return `${MARK} If ${who}'s report does not reach you, read ${path} once it stops.`
-}
-
-// the first line of a lead's question to the person, or undefined when the text is not one
-export function questionOf(text: string): string | undefined {
-  const trimmed = text.trimStart()
-  if (!trimmed.startsWith(QUESTION)) return undefined
-  return trimmed.slice(QUESTION.length).split('\n')[0]?.trim() ?? ''
 }
 
 // The tags a lead's message to main, or its report, can start with, and what /foundry shows for each.
@@ -463,9 +497,13 @@ function thisRun(crew: string, f: JudgeFile, since: number): boolean {
   return isJudgeFile(crew, f.name) && !isInterimFile(f.name) && f.mtimeMs >= since
 }
 
-// how many of the crew's judge files this run rule FAIL
+// how many of the crew's judge files this run rule FAIL, or rule PASS with an UNSCOPED finding
 export function judgeFails(crew: string, files: readonly JudgeFile[], since: number): number {
-  return files.filter(f => thisRun(crew, f, since) && judgeRuling(f.text).verdict === 'FAIL').length
+  return files.filter(f => {
+    if (!thisRun(crew, f, since)) return false
+    const r = judgeRuling(f.text)
+    return r.verdict === 'FAIL' || (r.verdict === 'PASS' && r.unscoped > 0)
+  }).length
 }
 
 // the k of <crew>-judge-<k>.md; the bare <crew>-judge.md is 1
@@ -577,6 +615,69 @@ export function mainCallVerdict(plan: Plan | undefined, callerId: string | undef
   return typeof effort === 'string' && EFFORTS.includes(effort) ? undefined : { deny: MAIN_EFFORT_REFUSAL }
 }
 
+// ADR-0009 Decision 6. The role table a foundry Workflow script is given (Decision 2): opus or sonnet, low or medium
+// effort, no lead, devops or integrator, keys that match ^[a-z]+$. Undefined means the table is allowed.
+export function workflowRoleVerdict(roles: unknown): { deny: string } | undefined {
+  const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
+  if (!isRecord(roles)) return refuse('the Workflow needs a roles table in args.foundry.roles')
+  for (const [key, role] of Object.entries(roles)) {
+    if (!/^[a-z]+$/.test(key)) return refuse(`Workflow role "${key}" is not a lowercase name`)
+    if (key === 'lead' || key === 'devops' || key === 'integrator') return refuse(`a Workflow never runs a ${key} role`)
+    if (!isRecord(role)) return refuse(`Workflow role ${key} is not an object`)
+    if (role.agentType === 'foundry:lead' || role.agentType === 'foundry:devops' || role.agentType === 'foundry:integrator') return refuse(`Workflow role ${key} never runs as ${role.agentType}`)
+    if (role.model !== 'opus' && role.model !== 'sonnet') return refuse(`Workflow role ${key} needs model opus or sonnet`)
+    if (role.effort !== 'low' && role.effort !== 'medium') return refuse(`Workflow role ${key} needs effort low or medium`)
+  }
+  return undefined
+}
+
+// ADR-0009 Decision 6. Whether a Workflow call may start while a plan is on. Pure: the handler reads the files.
+export function workflowCallVerdict(
+  plan: Plan | undefined,
+  input: { script?: unknown; scriptPath?: unknown; scriptText?: unknown; args?: unknown; pluginDir: string; pluginScriptTexts: readonly (string | undefined)[] },
+): { deny: string } | undefined {
+  if (!planAtLeastV2(plan)) return undefined
+  const refuse = (reason: string) => ({ deny: `${MARK} Refused: ${reason}` })
+  if (input.script !== undefined && input.scriptPath !== undefined) return refuse('a Workflow call gives either script or scriptPath, not both')
+  const flat = (v: string) => v.replace(/\\/g, '/')
+  const dir = flat(input.pluginDir)
+  const path = typeof input.scriptPath === 'string' ? flat(input.scriptPath) : undefined
+  const text = typeof input.scriptText === 'string' ? input.scriptText : undefined
+  // pluginScriptTexts is positional: index 0 is plan.js's text, index 1 is wave.js's. An undefined entry matches nothing.
+  const isPlanJs = (path !== undefined && path === `${dir}/workflows/plan.js`) || (text !== undefined && input.pluginScriptTexts[0] !== undefined && text === input.pluginScriptTexts[0])
+  const isWaveJs = (path !== undefined && path === `${dir}/workflows/wave.js`) || (text !== undefined && input.pluginScriptTexts[1] !== undefined && text === input.pluginScriptTexts[1])
+  const byPath = path !== undefined && (path === `${dir}/workflows/plan.js` || path === `${dir}/workflows/wave.js`)
+  const byText = text !== undefined && input.pluginScriptTexts.some((t) => t !== undefined && t === text)
+  if (!byPath && !byText) {
+    if (input.scriptPath !== undefined && text === undefined) return refuse(ONLY_FROM_PLUGIN)
+    if (text === undefined || text.includes('foundry:')) return refuse(ONLY_FROM_PLUGIN)
+    return undefined
+  }
+  const args = input.args
+  const foundry = isRecord(args) ? args.foundry : undefined
+  if (!isRecord(foundry)) return refuse('a foundry Workflow needs args.foundry')
+  const roles = workflowRoleVerdict(foundry.roles)
+  if (roles !== undefined) return roles
+  if (isPlanJs && isWaveJs) return refuse('the script matches both plan.js and wave.js')
+  const shown = typeof foundry.kind === 'string' ? `"${foundry.kind}"` : JSON.stringify(foundry.kind)
+  if (isPlanJs && foundry.kind !== 'plan') return refuse(`plan.js runs only with kind "plan", not ${shown}`)
+  if (isWaveJs && foundry.kind !== 'wave') return refuse(`wave.js runs only with kind "wave", not ${shown}`)
+  if (foundry.kind === 'plan') return plan.approvedAt ? refuse('the plan is already approved; a plan Workflow would replace it') : undefined
+  if (foundry.kind !== 'wave') return refuse('a foundry Workflow runs only with kind "plan" or "wave"')
+  const crews = foundry.crews
+  if (!Array.isArray(crews)) return refuse('a wave Workflow needs args.foundry.crews as a list')
+  for (const entry of crews) {
+    const slug = isRecord(entry) ? entry.slug : undefined
+    if (typeof slug !== 'string') return refuse('a wave Workflow crew has no slug')
+    const target = planCrewFor(plan, slug)
+    if (target === undefined || target.crew.status !== 'running') return refuse(`${slug} is not a running crew in the plan`)
+    const verdict = planVerdict(plan, slug)
+    if (verdict !== undefined) return verdict
+  }
+  return undefined
+}
+const ONLY_FROM_PLUGIN = `foundry agents run in a Workflow only from the plugin's plan.js and wave.js`
+
 export function stallText(label: string, crew: string, minutes: number): string {
   return `${STALLED} ${label} in crew ${crew}, no activity for ${minutes}m. Check /foundry and message the ${crew} lead. Read its transcript tail before you stop it; a resumed agent may be compacting.`
 }
@@ -665,12 +766,6 @@ export function isDecisionLog(path: string, sessionId: string): boolean {
 
 export function limitResetText(resetsAt: string): string {
   return `${LIMIT_RESET} the five-hour usage window reset at ${resetsAt}. Check /foundry and message each lead whose crew isn't done to resume.`
-}
-
-// the first line of a judge's report past VERDICT:, or undefined when it has none
-export function verdictOf(text: string): string | undefined {
-  const first = text.trimStart().split('\n')[0] ?? ''
-  return first.startsWith('VERDICT:') ? first.slice('VERDICT:'.length).trim() : undefined
 }
 
 // a crew's judge report files: <crew>-judge.md and <crew>-judge-<n>.md
@@ -804,9 +899,9 @@ type State = {
   models: Map<string, string>
   // agents whose report was captured from their hand-back; their next stop leaves the file alone, once
   handedBack: Set<string>
-  planArchitects: Set<string>
+  planArchitects: Map<string, 'plan' | 'amend'>
   planRoute: Promise<unknown>
-  pendingPlanCalls: Set<string>
+  pendingPlanCalls: Map<string, 'plan' | 'amend'>
   // each pending hand-back's message, by agent: what a lead's stop is judged on
   handBacks: Map<string, string>
   // leads whose pending hand-back was held back from the report file by the Examined check (ADR-0004 s6); the stop
@@ -858,7 +953,7 @@ async function rootOf($: $, state: State): Promise<string | undefined> {
 
 // The plan-file route (ADR-0015 s9): the inner lines of the first block that opens with exactly `open` and ends at the
 // next line that is exactly four backticks, joined with a newline. Undefined when there is no such block.
-function fencedBlock(message: string, open: string): string | undefined {
+export function fencedBlock(message: string, open: string): string | undefined {
   const lines = message.split('\n').map(l => l.replace(/\r$/, ''))
   const start = lines.indexOf(open)
   if (start < 0) return undefined
@@ -916,6 +1011,50 @@ async function routePlanFiles($: $, state: State, message: string): Promise<void
   }
 }
 
+// An amend-mode architect's hand-back (ADR-0010 s2): the goal merged into the approved plan.json, its readable plan
+// written to plan-<id>.md. Shares the plan route's chain, so the two never interleave. Says why in the debug log when it
+// writes nothing.
+function writeAmendFiles($: $, state: State, message: string): Promise<void> {
+  const run = state.planRoute.catch(() => undefined).then(() => routeAmendFiles($, state, message))
+  state.planRoute = run.catch(() => undefined)
+  return run
+}
+
+async function routeAmendFiles($: $, state: State, message: string): Promise<void> {
+  const nothing = (reason: string) => logRule($, `plan-amend route wrote nothing: ${reason}`)
+  const json = fencedBlock(message, '````json plan-amend.json')
+  const md = fencedBlock(message, '````markdown plan.md')
+  if (json === undefined || md === undefined) return nothing(json === undefined ? 'no plan-amend.json block' : 'no plan.md block')
+  const dir = await rootOf($, state)
+  if (dir === undefined) return nothing('no foundry dir')
+  let amend: unknown
+  try {
+    amend = JSON.parse(json.startsWith('﻿') ? json.slice(1) : json)
+  } catch {
+    return nothing('the plan-amend.json block is not JSON')
+  }
+  // read inside the serialised route, right before the write, so the foreman's approval edits count
+  let existing: unknown
+  try {
+    if (await $.fs.exists(planPath(dir))) {
+      const text = String(await $.fs.read(planPath(dir)))
+      existing = JSON.parse(text.startsWith('﻿') ? text.slice(1) : text)
+    }
+  } catch {
+    existing = undefined
+  }
+  const merged = amendPlan(existing, amend, new Date(await $.clock.now()).toISOString())
+  if ('reason' in merged) return nothing(merged.reason)
+  await $.fs.write(planPath(dir), JSON.stringify(merged.plan, null, 2) + '\n')
+  const crews = Array.isArray(merged.plan.crews) ? merged.plan.crews.filter(c => goalOf(c) === merged.id).length : 0
+  await logRule($, `plan-amend route added goal ${merged.id}: ${crews} crews`)
+  try {
+    await $.fs.write(`${dir}/plan-${merged.id}.md`, md)
+  } catch (err) {
+    await logRule($, `plan-amend route wrote plan.json but not plan-${merged.id}.md: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
 // The session's plan, read fresh on every call so the foreman's edits count at once; never written here. Undefined
 // when there is no foundry dir or no readable plan.
 async function planOf($: $, state: State): Promise<Plan | undefined> {
@@ -926,6 +1065,18 @@ async function planOf($: $, state: State): Promise<Plan | undefined> {
 
 // how long the idle prompt waits on the plan read before it names the 0.2.1 successor instead
 const PLAN_READ_MS = 2000
+
+// The plugin dir, from this module's own path (<plugin>/hooks/register.ts); undefined when it can't be worked out.
+function pluginDirOf(): string | undefined {
+  try {
+    let p = decodeURIComponent(new URL('..', import.meta.url).pathname)
+    if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1)
+    p = p.replace(/\/+$/, '')
+    return p === '' ? undefined : p
+  } catch {
+    return undefined
+  }
+}
 
 // The plan as planOf reads it, or undefined when the read hasn't settled within `ms` on the engine clock, so a hung
 // read never holds up the heartbeat pass that awaits it. The timer is cancelled once the read settles; a read that
@@ -1146,18 +1297,6 @@ async function lastModified($: $, dir: string): Promise<number | undefined> {
   return last
 }
 
-// the verdict on the first line of the crew's latest judge report (highest k in -judge-<k>.md; bare -judge.md is k=1), if it has one
-async function judgeOf($: $, dir: string, crew: string): Promise<string | undefined> {
-  if (!(await $.fs.exists(dir))) return undefined
-  let latest: { name: string; k: number } | undefined
-  for (const f of await $.fs.list(dir)) {
-    if (f.kind !== 'file' || isInterimFile(f.name) || !isJudgeFile(crew, f.name)) continue
-    const k = Number(/-(\d+)\.md$/.exec(f.name)?.[1] ?? 1)
-    if (latest === undefined || k > latest.k) latest = { name: f.name, k }
-  }
-  return latest === undefined ? undefined : verdictOf(String(await $.fs.read(`${dir}/${latest.name}`)))
-}
-
 // One debug line naming the rule that refused or sent back, and whom; never report text (P7, P8). Waited for, so
 // the line lands before the call it explains returns, but at most EVENT_WAIT_MS: a hung log never holds a call.
 async function logRule($: $, line: string): Promise<void> {
@@ -1290,6 +1429,8 @@ async function statusOf($: $, state: State): Promise<string> {
   const dir = await rootOf($, state)
   const now = await $.clock.now()
   const crews: CrewStatus[] = []
+  const plan = await safely($, 'plan lines', () => planOf($, state))
+  const since = runStart(plan) ?? 0
   for (const lead of all.filter(isLead)) {
     const crew = crewName(lead)
     const counts: Record<string, number> = {}
@@ -1309,7 +1450,10 @@ async function statusOf($: $, state: State): Promise<string> {
     }
     const reports = dir === undefined ? undefined : reportDir(dir, crew)
     const lastReportMs = reports === undefined ? undefined : await lastModified($, reports)
-    const judge = reports === undefined ? undefined : await safely($, 'judge verdict', () => judgeOf($, reports, crew))
+    const judge = reports === undefined ? undefined : await safely($, 'judge verdict', async () => {
+      const latest = latestJudge(crew.toLowerCase(), await judgeFilesOf($, reports, crew, since, false), since)
+      return latest === undefined ? undefined : judgeRuling(String(await $.fs.read(latest.path))).verdict
+    })
     crews.push({
       crew,
       status: listedIds.has(lead.id) ? lead.status : 'ended',
@@ -1327,7 +1471,6 @@ async function statusOf($: $, state: State): Promise<string> {
   const log = dir === undefined ? undefined : messagesPath(dir)
   const text = statusText(crews, now, log !== undefined && (await $.fs.exists(log)) ? log : undefined, dir)
   // the plan's crews go above the 0.2.1 lines; with no readable plan the output is exactly 0.2.1's
-  const plan = await safely($, 'plan lines', () => planOf($, state))
   return plan === undefined ? text : [...planLines(plan), text].join('\n')
 }
 
@@ -1548,9 +1691,9 @@ export const register: Register = on => {
     labels: new Map(),
     models: new Map(),
     handedBack: new Set(),
-    planArchitects: new Set(),
+    planArchitects: new Map(),
     planRoute: Promise.resolve(),
-    pendingPlanCalls: new Set(),
+    pendingPlanCalls: new Map(),
     handBacks: new Map(),
     withheld: new Set(),
     waiting: new Map(),
@@ -1599,7 +1742,11 @@ export const register: Register = on => {
     const id = started.agentId
     // a plan-mode architect's spawn is bound by its Agent call's tool_use_id, never by order (ADR-0015 s9)
     const call = (e as unknown as { tool_use_id?: unknown }).tool_use_id
-    if (id !== undefined && typeof call === 'string' && state.pendingPlanCalls.delete(call)) state.planArchitects.add(id)
+    const mode = typeof call === 'string' ? state.pendingPlanCalls.get(call) : undefined
+    if (id !== undefined && typeof call === 'string' && mode !== undefined) {
+      state.pendingPlanCalls.delete(call)
+      state.planArchitects.set(id, mode)
+    }
     if (id !== undefined) {
       const label = e.name !== undefined && e.name !== '' ? e.name : id
       state.labels.set(id, label)
@@ -1699,10 +1846,11 @@ export const register: Register = on => {
     }
     // a plan-mode architect from the main session (ADR-0015 s9): its hand-back is the plan to write. Marked before the
     // call runs, since a foreground agent spawns and hands back inside it; agent.spawn binds the id by this tool_use_id.
-    const planCall = e.agentId === undefined && e.subagent_type === 'foundry:architect' && typeof e.prompt === 'string' && e.prompt.split('\n')[0].replace(/[\r ]+$/, '') === 'Mode: plan'
+    const first = e.agentId === undefined && e.subagent_type === 'foundry:architect' && typeof e.prompt === 'string' ? e.prompt.split('\n')[0].replace(/[\r ]+$/, '') : undefined
+    const planCall: 'plan' | 'amend' | undefined = first === 'Mode: plan' ? 'plan' : first === 'Mode: amend' ? 'amend' : undefined
     const callId = (e as unknown as { tool_use_id?: unknown }).tool_use_id
-    const pending = planCall && typeof callId === 'string' && callId !== '' ? callId : undefined
-    if (pending !== undefined) state.pendingPlanCalls.add(pending)
+    const pending = planCall !== undefined && typeof callId === 'string' && callId !== '' ? callId : undefined
+    if (pending !== undefined && planCall !== undefined) state.pendingPlanCalls.set(pending, planCall)
     let result: Awaited<ReturnType<typeof next>>
     try {
       result = await next(e)
@@ -1712,7 +1860,7 @@ export const register: Register = on => {
     if (result.deny !== undefined) return result
     const raw = (result.result as { agentId?: unknown } | undefined)?.agentId
     const id = typeof raw === 'string' ? raw : undefined
-    if (planCall && id !== undefined) state.planArchitects.add(id)
+    if (planCall !== undefined && id !== undefined) state.planArchitects.set(id, planCall)
     if (caller?.crew === undefined && !startsLead) return result
     // the name agent.spawn recorded, which the report file will carry
     const name = (id === undefined ? undefined : state.labels.get(id)) ?? (typeof e.name === 'string' && e.name !== '' ? e.name : id)
@@ -1733,6 +1881,41 @@ export const register: Register = on => {
       by: caller?.label ?? MAIN,
     })
     return note === undefined ? result : withNote(result, note)
+  }).catch(failOpen)
+
+  on('tool.call', { tool: 'Workflow' }, async ($, e, next) => {
+    // ADR-0009 s6: on a v>=2 plan, the main session's Workflow calls run foundry agents only from the plugin's scripts
+    if (e.agentId === undefined) {
+      const refused = await safely($, 'Workflow gate', async () => {
+        const plan = await planWithin($, state, PLAN_READ_MS)
+        if (!planAtLeastV2(plan)) return undefined
+        const readText = async (path: unknown): Promise<string | undefined> => {
+          if (typeof path !== 'string') return undefined
+          try {
+            const text = String(await $.fs.read(path))
+            return text === '' ? undefined : text
+          } catch {
+            return undefined
+          }
+        }
+        const pluginDir = pluginDirOf()
+        const texts = pluginDir === undefined ? [undefined, undefined] : await Promise.all([`${pluginDir}/workflows/plan.js`, `${pluginDir}/workflows/wave.js`].map(readText))
+        const script: unknown = e.script
+        const scriptPath: unknown = e.scriptPath
+        const verdict = workflowCallVerdict(plan, {
+          script,
+          scriptPath,
+          scriptText: typeof script === 'string' ? script : await readText(scriptPath),
+          args: e.args,
+          pluginDir: pluginDir ?? ' ',
+          pluginScriptTexts: texts, // positional: [plan.js text, wave.js text]
+        })
+        if (verdict !== undefined) await logRule($, `Workflow gate refused a call: ${verdict.deny}`)
+        return verdict
+      })
+      if (refused !== undefined) return refused
+    }
+    return next(e)
   }).catch(failOpen)
 
   // Every tool call is activity, the main session's included. A report sent through the hand-back tool is the agent's
@@ -1777,8 +1960,11 @@ export const register: Register = on => {
     }
     const passed = await next(e)
     // the plan-file route runs only for a hand-back that went through, not denied and not an error
-    if (passed.deny === undefined && !(passed as { isError?: unknown }).isError && state.planArchitects.has(id)) {
+    const route = state.planArchitects.get(id)
+    if (passed.deny === undefined && !(passed as { isError?: unknown }).isError && route === 'plan') {
       await safely($, 'plan-file route', () => writePlanFiles($, state, message))
+    } else if (passed.deny === undefined && !(passed as { isError?: unknown }).isError && route === 'amend') {
+      await safely($, 'plan-amend route', () => writeAmendFiles($, state, message))
     }
     return passed
   }).catch(failOpen)

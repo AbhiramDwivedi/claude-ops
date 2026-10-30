@@ -39,7 +39,7 @@ What the terms mean here: a **module** is a plugin directory, plus the marketpla
   Amended for foundry 0.8.0, accepted by the owner with [foundry ADR-0005](../plugins/foundry/docs/adr/0005-growth-model.md) on 2026-10-29: the architect and the writer get `WebFetch` and `WebSearch` on by default (its section 3), and fetches pass no allowlist today (section 11). The narrowing point is foundry's `fetchVerdict` hook, which sees every web fetch in the session and is where a guardrail goes later.
 - **P10. No secrets in source.** (core 11) Test: `gitleaks detect`, or a grep for key patterns, finds nothing new. The untracked `.env` at the root stays untracked.
 - **P11. Build for a current caller.** (core 12) Test: every new option, extension point or exported function has a caller in the same diff or in existing code (tests count only for a test seam).
-- **P12. A behaviour change ships with a test that fails without it.** (core 13) Tests run with `claude plugin test plugins/<name>` for the mods and `python -m unittest discover -s plugins/<name>/tests` for kit and workflow-audit (root `README.md`, "Develop"), and `node --test plugins/foundry/tests/packs.check.ts` for foundry's principle packs.
+- **P12. A behaviour change ships with a test that fails without it.** (core 13) Tests run with `claude plugin test plugins/<name>` for the mods and `python -m unittest discover -s plugins/<name>/tests` for kit and workflow-audit (root `README.md`, "Develop"), `node --test plugins/foundry/tests/packs.check.ts` for foundry's principle packs, and `node --test plugins/foundry/tests/contract-evals.check.ts plugins/foundry/tests/evals*.check.ts` for foundry's evals ([foundry ADR-0007](../plugins/foundry/docs/adr/0007-behaviour-evals.md)). The evals command names its files on purpose: during a run, the `tests/*.check.ts` glob also picks up contract checks that are red by design.
   Test: the diff adds or changes a test under the plugin's `tests/`, and reverting the source change makes it fail.
 - **P13. Dead code goes in the change that kills it.** (core 14) A renamed user setting is the exception: the old name keeps working, marked deprecated (P17).
   Test: no function, file, constant or setting the diff stops using is left behind, unless it is a documented deprecated alias.
@@ -83,10 +83,12 @@ Model calls here are Claude Code's own: every agent, skill and the headless cata
 - **P24. The model reads summaries, not raw transcripts.** (ai 12, adapted; ADR-0004) Transcript text reaches a prompt only through a script's redacted, size-bounded output.
   Test: no new skill or agent prompt tells the model to open `~/.claude/projects/**.jsonl`.
 - **P25. Tests need no network and no model.** (ai 10) Test: `claude plugin test` and the unittest suites pass offline, with no API key set.
-- **P26. Agent work has a budget enforced in code.** (ai 13, adapted) subagent-limits caps subagent context (`nudgeAtK`, `stopAtK`); foundry caps parallel crews (`maxParallelCrews`; the `agentCap` total was retired in 0.7.0); the catalog refresh caps spend (`BUDGET_USD`).
+- **P26. Agent work has a budget enforced in code.** (ai 13, adapted) subagent-limits caps subagent context (`nudgeAtK`, `stopAtK`); foundry caps parallel crews (`maxParallelCrews`; the `agentCap` total was retired in 0.7.0); the catalog refresh caps spend (`BUDGET_USD`); foundry's model eval runner is bounded by its fixed case list and a per-case timeout, with no USD cap, by the owner's ruling of 2026-10-29 ([foundry ADR-0007](../plugins/foundry/docs/adr/0007-behaviour-evals.md), section 7).
   Test: a new feature that starts agents or headless runs is covered by one of these caps or adds its own, enforced by a hook or the script.
+- **P34. foundry's judge and cynic prompts have a checked-in eval set and a code grader.** (ai 2 and ai 3, for `plugins/foundry/agents/judge.md` and `agents/cynic.md` only; [foundry ADR-0007](../plugins/foundry/docs/adr/0007-behaviour-evals.md)) The golden cases are `plugins/foundry/evals/golden/*.json`, one per file under `evals/case.schema.json`, each taken from a real run file and holding the `VERDICT:` or `RECOMMEND:` line it expects. A fixed judge or cynic failure adds a case. `evals/score.ts` grades in code and rules `VERDICT:` lines through the merge gate's own `judgeRuling`. `evals/snippets.ts` runs the shell snippets ADR-0007's `## Snippets` list names in a temp git repo, inside the suite. The model runner, `evals/run-model.ts`, is an optional tool the owner runs by hand; no suite or done-check runs it. No rule requires an eval run when a prompt changes.
+  Test: a diff that fixes a judge or cynic ruling adds a `golden/*.json` case; a diff that moves or rewords a listed snippet updates its `## Snippets` line; `node --test plugins/foundry/tests/contract-evals.check.ts plugins/foundry/tests/evals*.check.ts` passes offline.
 
-Dropped: ai 1, 2 and 3 (evals with checked-in baselines and graders). There is no eval set; prompt changes are checked by the hook tests and by acceptance runs, as foundry's 0.3.0 commits show ("acceptance friction fixes"). This is a known gap, not a choice to keep. Ai 6 and 7 (tracing and one client wrapper): Claude Code makes every model call and writes the transcript, which workflow-audit reads. Ai 14 (latency budget with fallback): no plugin makes a model call it could time out; foundry's 15-minute stall wake (`STALL_MS`) is the nearest thing.
+Dropped: ai 1 (an eval run with every prompt change), by the owner's ruling of 2026-10-29: the work targets subscription users, nothing in the suites may need a model or the owner present, and the owner runs the model evals by hand, never as a gate (foundry ADR-0007). Ai 2 and 3 for every prompt except foundry's judge and cynic (P34): the other prompts are checked by the hook tests, the wording checks and acceptance runs, as foundry's 0.3.0 commits show ("acceptance friction fixes"). Ai 6 and 7 (tracing and one client wrapper): Claude Code makes every model call and writes the transcript, which workflow-audit reads. Ai 14 (latency budget with fallback): no plugin makes a model call it could time out; foundry's 15-minute stall wake (`STALL_MS`) is the nearest thing.
 
 ### Frontend
 
@@ -329,8 +331,13 @@ foundry's internals are in its [module doc](../plugins/foundry/docs/architecture
 | `foundry:init` (`/foundry:init`) | `skills/init/SKILL.md` | Finds the doc via `.claude/foundry.json`. With no doc, starts `foundry:architect` in `init` mode and shows the owner the result; from 0.8.0 a goal given with `/foundry:init` goes to the architect, which also covers the domains the goal names (foundry ADR-0005, section 4). Then reads kit's manifest and proposes the other `.claude/foundry.json` keys (`roles`, `deploy`, `writingSkill`, `promptOverrides`, `repairBudget`) and a foreman section for `CLAUDE.md`, writing only what the owner approves |
 | `foundry:principles` | `skills/principles/SKILL.md` and `core.md`, `service.md`, `frontend.md`, `data.md`, `ai.md`, `infra.md`, `library.md` | The principle packs; `tests/packs.check.ts` checks their form, run with `node --test plugins/foundry/tests/packs.check.ts` because `claude plugin test` gives tests no file system |
 | `foundry:lead`, `judge`, `cynic`, `writer`, `devops`, `architect` | `agents/*.md` | Crew roles; models in ADR-0011 |
+| evals (0.10.0) | `evals/score.ts`, `evals/snippets.ts`, `evals/golden/*.json`, `evals/case.schema.json` | The judge and cynic golden set, its code scorer, and the prompt-snippet runner; run with `node --test plugins/foundry/tests/contract-evals.check.ts plugins/foundry/tests/evals*.check.ts` ([foundry ADR-0007](../plugins/foundry/docs/adr/0007-behaviour-evals.md)) |
+| eval runner (0.10.0) | `evals/run-model.ts` | `node plugins/foundry/evals/run-model.ts`: runs the golden set through `claude -p` (binary from `CLAUDE`), one case at a time with a per-case timeout, and prints a score. Optional; the owner runs it by hand, and no suite or done-check does |
 | `/foundry` | `hooks/register.ts`, `command.run` | Prints crew status |
 | hooks | `hooks/register.ts` (via `hooks/hooks.json`) | Message rules, model and effort on crew `Agent` calls, plan gates, report capture, lead stop gate, heartbeat and stall wakes, limit-reset wake; (0.8.0) the fetch gate, `fetchVerdict`, on every `WebFetch` and `WebSearch` call; table in the module doc, "Hooks" |
+| `factory.ts` (designed in foundry ADR-0009, not built yet) | `bin/factory.ts` | The workflow factory's CLI: `node <plugin>/bin/factory.ts <command> [flags]`, run by the foreman and, inside the scripts, by the `runner` agent, for the plan checks, crew start, done-check runs, the record step, the session audit and merges on the Workflow path; one-line JSON output per command |
+| workflow scripts (designed in foundry ADR-0009, not built yet) | `workflows/roles.json`, `workflows/plan.js`, `workflows/wave.js` | The roles table (model and effort per role) and the two scripts the foreman passes to the `Workflow` tool: `plan.js` runs the plan-mode architect and the cynic, `wave.js` runs a wave's crews without leads |
+| `foundry:crew-planner` (designed in foundry ADR-0009, not built yet) | `agents/crew-planner.md` | Splits one workflow crew's goal into member tasks for `wave.js`; it can't assign the judge |
 
 `skills/run/SKILL.md` calls `foundry:init` through the Skill tool when the doc is missing (section 0). That is the only skill-to-skill call inside foundry; across plugins, the lead's load of `subagent-limits:split-work` is the only one in the repo.
 
@@ -338,12 +345,19 @@ foundry's internals are in its [module doc](../plugins/foundry/docs/architecture
 
 | File | Written by | Read by |
 | --- | --- | --- |
-| `<repo>/.claude/foundry.json` | `foundry:init` via the architect (keys `architecture`, `adr`); the owner adds `maxParallelCrews`, `merge`, `target` | the run skill and the architect. The hooks don't read it. |
+| `<repo>/.claude/foundry.json` | `foundry:init` via the architect (keys `architecture`, `adr`); the owner adds `maxParallelCrews`, `merge`, `target`. This repo's file has only `architecture` and `adr` today; it gains `"merge": "sequential"` and `"target": "main"` when foundry ADR-0009's `run-procedure` work lands, and from then `factory.ts settings` reads merge mode and target from it (missing `merge` is `sequential`, missing `target` the current branch) and the foreman never asks | the run skill and the architect; (designed in ADR-0009, not built yet) `factory.ts`. The hooks don't read it. |
+| `requirements.md` (designed in foundry ADR-0008, not built yet) | the foreman, with Edit or Write, during the `foundry:interview` skill (`interview/cli.ts` only reads) | the plan-mode architect; where it lives is an open owner decision: ADR-0008 recommends the repo, `<dir of the architecture key>/requirements.md` (`docs/requirements.md` here), against the session's foundry dir |
 | the architecture doc and ADR directory it names | the architect (`init` and `design` modes) | the architect, leads, judges, cynic |
 | `<git common dir>/foundry/<session id>/` | foreman (`decisions.md`, `plan.md`, `goals/`), architect (draft `plan.json`, `plan.md`, until 0.5.1; from 0.6.0 the hooks write them from its hand-back), hooks (`reports/`, `messages*.jsonl`) | foreman, hooks, `/foundry`; layout in the module doc, "On disk" (ADR-0006) |
 | `plan.json` | architect (0.5.1), or the hooks from the plan-mode architect's hand-back with `approvedAt: null` (0.6.0, ADR-0015 item 9); then the foreman | hooks (plan gates); contract `docs/plan.schema.json`, example `docs/plan.example.json`, rules in foundry ADR-0001 section 8 |
 
 Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
+
+**Designed, not built yet** (the module doc has the detail):
+
+- [foundry ADR-0008](../plugins/foundry/docs/adr/0008-owner-interview.md): the `foundry:interview` skill (`skills/interview/SKILL.md`, with `interview/ledger.ts` and `interview/cli.ts`) has the foreman ask the owner about a goal before planning and write `requirements.md`. Two owner decisions are open: whether unasked questions are filled with defaults, and where `requirements.md` lives.
+- [foundry ADR-0009](../plugins/foundry/docs/adr/0009-workflow-factory.md): the Workflow path, `factory.ts` plus the `workflows/` scripts, runs crews without leads, behind a new hook gate on `Workflow` calls. Two owner decisions are open: whether red-team rounds share `repairBudget`, and whether the Workflow path becomes the default.
+- [foundry ADR-0010](../plugins/foundry/docs/adr/0010-mid-run-intake.md).
 
 **Seams with other plugins**
 
@@ -377,6 +391,36 @@ Plugin state: `foundry.limitReset` (`types/index.d.ts`, ADR-0007).
 - retro gains one more top-level key, `leftoverDetails`; `leftovers` and every other key keep their shape. It is `"not recorded"` whenever `leftovers` is, else an array sorted by `id` with exactly the keys `id`, `branch`, `folder`, `head`, `dirty`, `inMain` and `skip` per entry. `skip` is the reason worktrees' `decideSelfClean` (`plugins/worktrees/hooks/register.ts:734-752`) would give for the checks retro can see, copied without an import (P1, ADR-0001); foundry ADR-0006 records the drift risk.
 - The red team starts with `git reset --hard <sha>` in its own worktree instead of `git checkout --detach <sha>`, cleans the worktree before it reports, and never commits, so the sweep can remove its branch after the crew merges.
 - The retro skill gains a root-cause step: one `CAUSE: <anomaly> | <evidence> | <fix location>` line per leftover, judge fail, stall, overrule or spent budget, read from git, the disk, `decisions.md`, judge verdict and finding lines and the plugin's own files (P24).
+
+**0.10.0: behaviour evals** (design in [foundry ADR-0007](../plugins/foundry/docs/adr/0007-behaviour-evals.md), proposed 2026-10-29 by the `eval-design` crew; not repo ADR-0007):
+
+- foundry gains `plugins/foundry/evals/`: `case.schema.json`, `golden/<id>.json` (one case per file), `score.ts`, `snippets.ts` and `run-model.ts`. It holds no `*.test.ts`, so `claude plugin test` loads none of it; its checks are `tests/contract-evals.check.ts` and `tests/evals*.check.ts`, run with `node --test`.
+- `score.ts` imports `judgeRuling` from `hooks/register.ts`, the hooks module's entry file, so an eval rules a `VERDICT:` line the way the merge gate does. Nothing in `hooks/` imports from `evals/`.
+- `snippets.ts` reads the prompt files ADR-0007's `## Snippets` list names (`agents/judge.md`, `agents/lead.md`, `skills/run/SKILL.md`) and runs each snippet in a `mkdtemp` git repo. Moving or rewording a listed snippet means editing that list in the same change.
+- `run-model.ts` is the owner's optional tool: `claude -p` with a fixed `--allowedTools` list per role, the role's prompt from the checkout, and a per-case timeout. It writes its results to a temp dir, never into the checkout, `.git/` or `.claude/`; the owner gives the score line to the foreman for `decisions.md`.
+- The golden cases are curated from `<git common dir>/foundry/<run-id>/` files, and each `source` names one as `.git/foundry/<run-id>/<path>`. Only `evals-build`'s done-check reads those run dirs; no suite does (P25).
+
+```mermaid
+flowchart LR
+  tests["tests/contract-evals.check.ts, evals*.check.ts<br/>[node --test]"]
+  score["evals/score.ts<br/>[module: TS]"]
+  snip["evals/snippets.ts<br/>[module: TS]"]
+  hooks["hooks/register.ts<br/>[hooks module: TS]"]
+  prompts["agents/judge.md, lead.md, skills/run/SKILL.md<br/>[prompt files]"]
+  golden[("evals/golden/*.json<br/>[stored cases]")]
+  model["evals/run-model.ts<br/>[script: Node, owner only]"]
+  claude["claude -p<br/>[CLI]"]
+  tests -->|"score(report, expected)"| score
+  tests -->|"parse, extract, run"| snip
+  tests -->|"reads cases"| golden
+  score -->|"judgeRuling"| hooks
+  snip -->|"snippet text"| prompts
+  model -->|"cases"| golden
+  model -->|"role prompt, input"| claude
+  model -->|"report"| score
+```
+
+*foundry's evals and what they read (0.10.0, as designed).* Traces to: `plugins/foundry/docs/adr/0007-behaviour-evals.md` sections 4 to 7; `plugins/foundry/hooks/register.ts:506` (`judgeRuling`); `plugins/foundry/tests/gates.check.ts:90` (the same import under `node`).
 
 ## Seams
 
@@ -462,6 +506,7 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 - [foundry ADR-0002](../plugins/foundry/docs/adr/0002-kit-manifest-and-config.md), accepted 2026-10-27: foundry init builds on kit's manifest; new `foundry.json` keys; ports from worktrees' slots.
 - [foundry ADR-0003](../plugins/foundry/docs/adr/0003-event-log-and-retro.md), accepted 2026-10-27: the event log, the `decisions.md` grammar and `scripts/retro.py`.
 - [foundry ADR-0006](../plugins/foundry/docs/adr/0006-leftover-causes.md), proposed 2026-10-29: retro's `leftoverDetails` key, the red team's reset and clean end state, and the retro skill's root-cause step (foundry 0.9.0).
+- [foundry ADR-0007](../plugins/foundry/docs/adr/0007-behaviour-evals.md), proposed 2026-10-29: behaviour evals for the judge and cynic prompts (golden cases, a code scorer, a prompt-snippet runner in the suite, an owner-run model runner); ai 2 and 3 adopted for those prompts, ai 1 not (foundry 0.10.0).
 
 ## Open questions
 
@@ -471,5 +516,4 @@ Traces to: `docs/adr/0005-worktree-layout-and-setup-contract.md`, `docs/adr/0006
 - TODO: whether plugin.json `dependencies` enforces a version range, blocks loading when the dependency is missing, or needs the same marketplace. Probing it means installing plugins. ADR-0012 uses no `dependencies`, so nothing depends on the answer yet.
 - TODO: a kit-free way for a plugin to declare its own read-only types (plugin state is the candidate, ADR-0012). Deferred until a second plugin needs it; without kit the owner sets worktrees' `noIsolateAgents`.
 - TODO: report files are named per crew, so a later run in the same session dir that reuses a crew name can leave a stale, higher-numbered judge file (foundry ADR-0003, consequences).
-- TODO: there is no eval set for the prompts (AI principles, dropped rules).
 - TODO: the scheduler that runs `scripts/catalog-refresh/run.sh` is not recorded in the repo (ADR-0010).
