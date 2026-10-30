@@ -10,7 +10,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { test } from 'node:test'
@@ -22,6 +22,12 @@ const RUN_MODEL = join(PLUGIN, 'evals', 'run-model.ts')
 const STUB = join(PLUGIN, 'tests', 'fixtures', 'claude-stub', 'claude.mjs')
 const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 const rm = (p: string) => rmSync(p, { recursive: true, force: true, maxRetries: 10 })
+
+// Every `--` flag run-model may pass, plus `-p`. Mirrors ADR-0007 section 7, with `--tools` and `--disallowedTools`
+// added on the lead's word. Anything else on the command line (a permission mode) fails the argv test.
+const ALLOWED_FLAGS = ['--system-prompt', '--model', '--effort', '--no-session-persistence', '--output-format', '--allowedTools',
+  '--tools', '--disallowedTools']
+const ONE_VALUE = ['--system-prompt', '--model', '--effort', '--output-format']
 
 const JUDGE_TOOLS = 'Read Grep Glob Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(git rev-parse:*)'
 const CYNIC_TOOLS = 'Read Grep Glob'
@@ -66,9 +72,10 @@ function tree(dir: string): string[] {
 }
 
 // Runs run-model as a child. Returns the result, the stub's call logs in call order, and the results dir it printed.
-function run(env: Record<string, string> = {}, args: string[] = [], opts: { claude?: string } = {}) {
+function run(env: Record<string, string> = {}, args: string[] = [], opts: { claude?: string; cwd?: string; runModel?: string } = {}) {
   // A missing run-model.ts also exits non-zero; without this guard the refusal tests would pass for the wrong reason.
-  assert.ok(existsSync(RUN_MODEL), `${RUN_MODEL} does not exist`)
+  const runModel = opts.runModel ?? RUN_MODEL
+  assert.ok(existsSync(runModel), `${runModel} does not exist`)
   const logDir = mkdtempSync(join(tmpdir(), 'foundry-stublog-'))
   let outDir: string | undefined
   try {
@@ -76,8 +83,8 @@ function run(env: Record<string, string> = {}, args: string[] = [], opts: { clau
     delete childEnv.CLAUDE_STUB_REPLY
     Object.assign(childEnv, env)
     for (const k of Object.keys(childEnv)) if (k.startsWith('GIT_')) delete childEnv[k]
-    const r = spawnSync(process.execPath, [RUN_MODEL, ...args], {
-      cwd: ROOT, env: childEnv, encoding: 'utf8', windowsHide: true, timeout: 120000, maxBuffer: 64 * 1024 * 1024,
+    const r = spawnSync(process.execPath, [runModel, ...args], {
+      cwd: opts.cwd ?? ROOT, env: childEnv, encoding: 'utf8', windowsHide: true, timeout: 120000, maxBuffer: 64 * 1024 * 1024,
     })
     const stdout = (r.stdout ?? '').replace(/\r/g, '')
     const m = stdout.split('\n').map((l) => l.match(/(\S*foundry-evals-[^\s"'`]*)/)).find(Boolean)
@@ -242,4 +249,187 @@ test('run-model: a missing binary never prints a score with a passing case', () 
     for (const m of rows) assert.notEqual(m[2], 'ok', `${claude}: ${m[0]}`)
     assert.ok(r.status !== 0 || rows.length > 0, 'a silent exit 0 is no answer')
   }
+})
+
+// ---- Red-team gap tests ----
+
+// Splits one logged argv into flag -> value tokens. Fails on any token that is not -p, an allowed flag or a value.
+function parseArgv(argv: string[], id: string) {
+  const flags: Record<string, string[]> = {}
+  let cur: string | undefined
+  for (const t of argv) {
+    if (t === '-p') { cur = undefined; continue }
+    if (t.startsWith('-')) {
+      assert.ok(ALLOWED_FLAGS.includes(t), `${id}: flag ${t} is not in the allowed set`)
+      flags[t] = []
+      cur = t
+      continue
+    }
+    assert.ok(cur, `${id}: stray argument ${JSON.stringify(t).slice(0, 80)}`)
+    flags[cur].push(t)
+    if (ONE_VALUE.includes(cur)) cur = undefined
+  }
+  return flags
+}
+
+test('run-model: argv carries only the allowed flags (no --permission-mode, no write tool via --tools)', () => {
+  const { r, calls } = run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.ok(calls.length >= 1)
+  for (const [i, { argv }] of calls.entries()) {
+    const flags = parseArgv(argv, `call ${i + 1}`)
+    for (const f of ['--tools', '--allowedTools']) {
+      const v = (flags[f] ?? []).join(' ')
+      for (const bad of ['Write', 'Edit', 'NotebookEdit']) assert.ok(!v.includes(bad), `call ${i + 1}: ${f} has ${bad}`)
+    }
+  }
+})
+
+test('run-model: --tools and --disallowedTools carry the exact values (judge: Read Grep Glob Bash; cynic: Read Grep Glob)', () => {
+  const all = cases()
+  const { r, calls } = run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(calls.length, all.length)
+  const DISALLOWED = ['Bash(git diff --output*)', 'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git push:*)', 'Bash(git reset:*)', 'Bash(git checkout:*)']
+  for (const [i, c] of all.entries()) {
+    const flags = parseArgv(calls[i].argv, c.id)
+    assert.deepEqual(flags['--tools'], c.role === 'judge' ? ['Read', 'Grep', 'Glob', 'Bash'] : ['Read', 'Grep', 'Glob'], `${c.id}: --tools`)
+    assert.deepEqual(flags['--disallowedTools'], DISALLOWED, `${c.id}: --disallowedTools`)
+    assert.equal(flags['--allowedTools'].join(' '), c.role === 'judge' ? JUDGE_TOOLS : CYNIC_TOOLS, `${c.id}: --allowedTools`)
+  }
+})
+
+// Snapshot of <root>/.claude: path -> kind. Skips the contents of subdirs of .claude/worktrees (live agent worktrees).
+function claudeSnap(root: string) {
+  const out = new Map<string, string>()
+  const base = join(root, '.claude')
+  const wt = norm(join(base, 'worktrees'))
+  const walk = (d: string) => {
+    if (!existsSync(d)) return
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name)
+      const key = norm(p)
+      if (norm(d) === wt) {
+        out.set(key, e.isDirectory() ? (existsSync(join(p, '.git')) ? 'dir+git' : 'dir') : 'file')
+        continue
+      }
+      out.set(key, e.isDirectory() ? 'dir' : 'file')
+      if (e.isDirectory()) walk(p)
+    }
+  }
+  walk(base)
+  return out
+}
+
+const CLAUDE_BASE = claudeSnap(ROOT)
+const COMMON_BASE = new Set(readdirSync(COMMON))
+
+test('run-model: writes nothing under .claude (worktrees excepted) and no run output in the git common dir', () => {
+  const all = cases()
+  // Baselines come from module load, before any run in this file: an earlier test's run must not hide a leak.
+  const before = CLAUDE_BASE
+  const commonBefore = COMMON_BASE
+  const { r } = run()
+  assert.equal(r.status, 0, r.stderr)
+  const wt = norm(join(ROOT, '.claude', 'worktrees'))
+  const bad: string[] = []
+  for (const [p, kind] of claudeSnap(ROOT)) {
+    if (before.has(p)) continue
+    if (p === wt) continue
+    if (!p.startsWith(`${wt}/`)) bad.push(`${p} (${kind})`)
+    else if (kind !== 'dir+git') bad.push(`${p} (${kind})`)
+  }
+  assert.deepEqual(bad, [], 'new paths under .claude')
+  const ids = all.map((c) => c.id)
+  const leaked = readdirSync(COMMON).filter(
+    (n) => !commonBefore.has(n) && (n.includes('foundry-evals') || n.includes('results') || ids.some((id) => n.includes(id))))
+  assert.deepEqual(leaked, [], 'new run output in the git common dir')
+})
+
+test('run-model: honours no environment variable that filters cases', () => {
+  const all = cases()
+  const filt = Object.fromEntries(['EVAL_ONLY', 'EVALS_CASE', 'CASE', 'FOUNDRY_EVAL_CASES', 'ONLY'].map((k) => [k, 'judge-roles-1']))
+  const { r, stdout, calls } = run(filt)
+  assert.equal(r.status, 0, r.stderr)
+  const { rows, scoreLine } = parse(stdout)
+  assert.deepEqual(rows.map((m) => m[1]), all.map((c) => c.id))
+  assert.equal(calls.length, all.length)
+  assert.equal(Number(scoreLine?.[2]), all.length)
+})
+
+test('run-model: model and effort come from each agent frontmatter, not a constant', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'foundry-copy-'))
+  try {
+    const base = join(tmp, 'plugins', 'foundry')
+    mkdirSync(join(base, 'hooks'), { recursive: true })
+    mkdirSync(join(base, 'agents'), { recursive: true })
+    cpSync(join(PLUGIN, 'evals'), join(base, 'evals'), { recursive: true })
+    cpSync(join(PLUGIN, 'hooks', 'register.ts'), join(base, 'hooks', 'register.ts'))
+    for (const a of ['judge', 'cynic']) cpSync(join(PLUGIN, 'agents', `${a}.md`), join(base, 'agents', `${a}.md`))
+    const jp = join(base, 'agents', 'judge.md')
+    writeFileSync(jp, readFileSync(jp, 'utf8').replace(/^model:.*$/m, 'model: sonnet').replace(/^effort:.*$/m, 'effort: low'))
+    const env = { ...process.env }
+    for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k]
+    for (const args of [['init', '-q'], ['config', 'user.name', 'copy'], ['config', 'user.email', 'copy@example.invalid'],
+      ['config', 'commit.gpgsign', 'false'], ['add', '-A'], ['commit', '-q', '-m', 'copy']]) {
+      const g = spawnSync('git', args, { cwd: tmp, env, encoding: 'utf8', windowsHide: true })
+      assert.equal(g.status, 0, `git ${args.join(' ')}: ${g.stderr}`)
+    }
+    const all = cases()
+    const { r, calls } = run({}, [], { runModel: join(base, 'evals', 'run-model.ts'), cwd: tmp })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(calls.length, all.length)
+    for (const [i, c] of all.entries()) {
+      const { argv } = calls[i]
+      const val = (f: string) => argv[argv.indexOf(f) + 1]
+      assert.equal(val('--model'), c.role === 'judge' ? 'sonnet' : 'opus', `${c.id}: model`)
+      assert.equal(val('--effort'), c.role === 'judge' ? 'low' : 'medium', `${c.id}: effort`)
+    }
+  } finally {
+    rm(tmp)
+  }
+})
+
+test('run-model (source check): the per-case timeout is CASE_TIMEOUT_MS = 600000 and reaches the case spawn', () => {
+  // A source check because a live 600-second test is too slow and no override of the timeout is allowed.
+  const text = readFileSync(RUN_MODEL, 'utf8')
+  assert.ok(text.includes('CASE_TIMEOUT_MS = 600000'), 'CASE_TIMEOUT_MS = 600000')
+  const chunk = text.split('spawnSync(').slice(1).find((c) => c.includes('input: c.input'))
+  assert.ok(chunk, 'no spawnSync call passing the case input')
+  assert.ok(chunk.includes('timeout: CASE_TIMEOUT_MS'), 'timeout: CASE_TIMEOUT_MS missing from the case spawn')
+})
+
+test('run-model: runs claude in the repo root even when started from a subdirectory', () => {
+  const { r, calls } = run({}, [], { cwd: PLUGIN })
+  assert.equal(r.status, 0, r.stderr)
+  assert.ok(calls.length >= 1)
+  for (const c of calls) assert.equal(norm(realpathSync.native(c.cwd)), norm(realpathSync.native(ROOT)))
+})
+
+test('run-model: a child that exits non-zero with no stdout scores miss got=none, forwards its stderr and exits non-zero', () => {
+  const all = cases()
+  const { r, stdout } = run({ CLAUDE_STUB_EXIT: '3', CLAUDE_STUB_STDERR: 'auth: not logged in' })
+  assert.notEqual(r.status, 0, 'exit code must be non-zero')
+  assert.ok((r.stderr ?? '').includes('auth: not logged in'), `stderr was: ${r.stderr}`)
+  const { rows, scoreLine } = parse(stdout)
+  assert.equal(rows.length, all.length)
+  for (const m of rows) assert.deepEqual([m[2], m[4]], ['miss', 'none'], m[1])
+  assert.ok(scoreLine, 'score line is still printed')
+  assert.equal(Number(scoreLine[1]), 0)
+})
+
+test('run-model: a missing binary leaves no foundry-evals-* dir in os.tmpdir()', async () => {
+  const list = () => readdirSync(tmpdir()).filter((n) => n.startsWith('foundry-evals-'))
+  const before = new Set(list())
+  const missing = join(tmpdir(), `foundry-no-such-claude-${process.pid}`, 'claude')
+  run({}, [], { claude: missing })
+  const fresh = () => list().filter((n) => !before.has(n)).map((n) => join(tmpdir(), n))
+    .filter((p) => { try { return statSync(p).isDirectory() && readdirSync(p).length === 0 } catch { return false } })
+  const first = fresh()
+  // A concurrent test file may be mid-run with a just-created, still empty dir; a leak stays empty.
+  await new Promise((res) => setTimeout(res, 2000))
+  const now = fresh()
+  const stuck = first.filter((p) => now.includes(p))
+  for (const p of stuck) rm(p)
+  assert.deepEqual(stuck, [], 'empty foundry-evals-* dir left behind')
 })
