@@ -1,9 +1,9 @@
 // foundry ADR-0007 section 7: the owner's optional model-eval runner. Never a gate, outside every suite.
 // Run: node plugins/foundry/evals/run-model.ts   (CLAUDE=<path> picks the binary, else `claude`)
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { score } from './score.ts'
 import type { Expected } from './score.ts'
@@ -29,13 +29,28 @@ function fail(msg: string): never {
   process.exit(1)
 }
 
-function git(...args: string[]): string {
+function gitEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
   for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k]
-  const r = spawnSync('git', args, { cwd: here, encoding: 'utf8', env, windowsHide: true, shell: false })
+  return env
+}
+
+function git(...args: string[]): string {
+  const r = spawnSync('git', args, { cwd: here, encoding: 'utf8', env: gitEnv(), windowsHide: true, shell: false })
   if (r.status !== 0) fail(`git ${args.join(' ')} failed: ${r.stderr ?? r.error?.message ?? ''}`)
   return r.stdout.trim()
 }
+
+// Each case runs in a throwaway detached worktree of HEAD with the golden cases removed, so the model cannot read
+// the expected answers. Best effort and never exits; it also runs from the exit hook, so fail() leaves nothing behind.
+let live = ''
+function dropWorktree(wt: string): void {
+  const run = (...a: string[]) => spawnSync('git', a, { cwd: here, encoding: 'utf8', env: gitEnv(), windowsHide: true, shell: false })
+  run('worktree', 'remove', '--force', wt)
+  rmSync(wt, { recursive: true, force: true })
+  run('worktree', 'prune')
+}
+process.on('exit', () => { if (live) dropWorktree(live) })
 
 // Frontmatter sits between the first two --- lines; the body is what follows.
 function agent(role: string): { body: string; model: string; effort: string } {
@@ -61,7 +76,7 @@ const cases: Case[] = readdirSync(dir)
   .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 if (cases.length === 0) fail('no golden cases')
 
-const top = git('rev-parse', '--show-toplevel')
+const common = resolve(here, git('rev-parse', '--git-common-dir'))
 const head = git('rev-parse', 'HEAD')
 const bin = process.env.CLAUDE || 'claude'
 const script = /\.(?:js|mjs|cjs)$/.test(bin)
@@ -85,10 +100,27 @@ for (const c of cases) {
     '--output-format', 'text',
     '--allowedTools', ...tools,
   ]
+  live = mkdtempSync(join(tmpdir(), 'foundry-evals-wt-'))
+  const wt = live
+  git('worktree', 'add', '--detach', wt, 'HEAD')
+  rmSync(join(wt, 'plugins', 'foundry', 'evals', 'golden'), { recursive: true, force: true })
+  // Files under .git/foundry are copied in and named by relative path, so the input points nowhere outside the tree.
+  c.input = c.input.replace(/\S*\.git[\\/]foundry[^\s"'`)]*/g, (p) => {
+    const rel = p.replace(/\\/g, '/').replace(/^.*?\.git\//, '')
+    const src = join(common, rel)
+    const name = basename(rel)
+    if (existsSync(src)) {
+      mkdirSync(join(wt, 'inputs'), { recursive: true })
+      copyFileSync(src, join(wt, 'inputs', name))
+    }
+    return `inputs/${name}`
+  })
   const r = spawnSync(script ? process.execPath : bin, script ? [bin, ...args] : args, {
-    cwd: top, input: c.input, encoding: 'utf8', shell: false, windowsHide: true,
+    cwd: wt, input: c.input, encoding: 'utf8', shell: false, windowsHide: true,
     timeout: CASE_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 * 1024,
   })
+  dropWorktree(wt)
+  live = ''
   const err = r.error as (Error & { code?: string }) | undefined
   const timedOut = err?.code === 'ETIMEDOUT'
   if (err && !timedOut) {
