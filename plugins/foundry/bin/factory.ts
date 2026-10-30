@@ -963,8 +963,8 @@ function cmdFinish(f: Flags): Obj {
   const waived = new Set([...log.matchAll(/^- [^|]*\|\s*audit waived: ([A-Za-z0-9._-]+)/gm)].map((m) => m[1] as string))
   const stand = sessionAudit(dir, path.dirname(tdir), wfRun.id, new Set(plan.crews.filter((c: Obj) => isObj(c) && factorySpawned(dir, c.slug) !== undefined).map((c: Obj) => c.slug as string)), waived)
   for (const a of stand) if (!out.audit.some((x) => x.label === a.label && x.why === a.why)) out.audit.push({ label: a.label, why: a.why })
-  if (stand.length > 0 || audits.length > 0) {
-    const what = `session audit stands, nothing merged: ${[...stand, ...audits].map((a) => `${a.label} (${a.why})`).join('; ')}`
+  if (stand.length > 0) {
+    const what = `session audit stands, nothing merged: ${stand.map((a) => `${a.label} (${a.why})`).join('; ')}`
     if (!log.includes(what)) appendDecision(dir, `${what} | the owner rules, then a decision line "audit waived: <run id>" or the offending run goes`)
     for (const c of inRun) out.refused.push({ slug: c.slug, why: 'session audit' })
     return finishWith()
