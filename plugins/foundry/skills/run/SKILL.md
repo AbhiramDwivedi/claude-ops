@@ -27,6 +27,8 @@ When the run starts, before its first decision line, append its heading to `<fou
 
 Under it, append one line per decision: time, decision, reason, the cynic's recommendation (or "none"), and the outcome, in the form `- HH:MM | decision | reason | cynic's recommendation | followed`. The outcome is `followed`, `followed (deferred)` or `overruled: <reason>`. Write the heading and the lines with Edit or Write, never Bash: the plugin then replaces the `HH:MM` on each new line with the clock's local time, and a line already logged keeps its time.
 
+A goal added mid-run (section 7) shares the run's heading. Every decision line about it starts its decision field with `[<id>] `, for example `- HH:MM | [intake] intake-gates status running | ... | none | followed`; lines about the run's first goal carry no tag.
+
 ### Build only approved scope
 
 Approved scope is the approved plan and the goal files, plus every decision logged in `decisions.md`: an owner ruling, your decision after a cynic, or a lead's proposal that went through the path in section 7. When two decisions cover the same item, the latest one stands. These rules hold the same for you, every lead and member, every red team and every judge:
@@ -251,6 +253,7 @@ Start leads by wave, and within a wave in queue order:
 2. Start every crew in the current wave at once, in the order of the `crews` array, in one message, so they run in parallel. Never put more crews in that message than `maxParallelCrews` (default 4) minus the crews already `running`. Before you send it, set each of those crews' `status` to `"running"` in `plan.json`. There is no batch hold inside a wave: crews with disjoint owned files never wait for each other.
 3. When a crew merges, start the next queued crew of its wave. The moment a wave's last crew merges, start the next wave's crews in the same turn. Don't pause or ask the owner between waves. End every turn by starting any crew the hooks allow.
 4. A crew with at most 2 members and no red team has no lead. As foreman you run it directly: its test-writer, builder and judge, in that order, in the crew's worktree, under the lead's rules for members (`agents/lead.md`). Name the members `<slug>-testwriter`, `<slug>-builder` and `<slug>-judge`. No lead is the root of their tree, so the plugin saves no report for them, and no budget, plan, wave or cap hook gates them. You save the judge's hand-back verbatim at `<foundry dir>/reports/<slug>/<slug>-judge.md` (`-judge-2.md`, and so on); the merge gate then reads that file, with the judge's Head and Patch rules unchanged. You count its FAILs against `repairBudget` yourself, and you apply the wave and `maxParallelCrews` rules yourself, since the hooks check only `foundry:lead` starts. Before the merge, start a fresh Sonnet member (the next unused name, such as `<slug>-builder-2`) in the crew's worktree to run `git merge <target>` into the crew branch (never rebase) and re-run the checks. Record the target head it merged in as the crew's base for the Patch check, in place of the lead's `## Branch` line, and start a fresh judge on the merged head when the Head and Patch rules require one. When the fast-forward is refused, go back to this merge-in step. Merge only on a `VERDICT: PASS`.
+5. When the plan has added goals (section 7, "Take a new goal mid-run"), each goal runs its own wave sequence, so a new goal's wave 0 can start while the first goal is mid-wave. Start the planned crews whose `/foundry` wait text is `ready to start`, in the order of the `crews` array, at most `maxParallelCrews` minus the crews already `running`. All goals share that one cap.
 
 ```
 Agent({
@@ -298,6 +301,10 @@ When `plan.json` holds the crew's slug, the plugin checks each `foundry:lead` yo
 - `<running> crews running, the cap is <cap>; start <slug> when one merges`: `maxParallelCrews` crews are already running. Start this crew when one of them merges.
 - `this run changes the design; get the owner's approval first`: `approval` is `"owner"` and `approvedAt` is null. Get the owner's approval (section 5), then set `approvedAt`.
 - `<slug> waits for the owner's approval`: the crew's `ownerApproval` is `"pending"`. Wait for the owner's answer, then set it to `"approved"`.
+- `wave <n> of goal <id> isn't merged yet: <slugs>`: the same wave gate for a crew of an added goal; it looks only at earlier waves of that goal. Wait for the crews it names.
+- `<slug> names goal <id>, which isn't in the plan`: the crew's `goal` matches no `goals` entry (and isn't `run`). Fix the crew's `goal` or add the goal through "Take a new goal mid-run"; don't start the lead until the plan is right.
+- `goal <id> changes the design; get the owner's approval first`: the goal's `approval` is `"owner"` and its `approvedAt` is null. Get the owner's approval of that goal (section 7), then set `goals[i].approvedAt`.
+- `goal id run is reserved for the run's first goal; rename it in plan.json`: a `goals` entry has the id `run`, and the hook refuses every crew until it's renamed. Rename the goal's id and the `goal` field of its crews in `plan.json`.
 
 Never change `plan.json` just to get past a refusal. Set `approvedAt`, `ownerApproval` and `status` only when what they record is true.
 
@@ -331,6 +338,21 @@ The plugin also sends you prompts:
 On a `stalled:` or `idle lead:` prompt, read the agent's transcript tail before any TaskStop: a resumed agent may be compacting, and it looks idle while it does.
 
 `/foundry` shows each crew's status, its live members by model, and when it last reported or what it is waiting on you for, with its report folder.
+
+### Take a new goal mid-run
+
+After `approvedAt` is set, the owner may ask for work no crew in `plan.json` covers. Take it as a new goal in the same run. The foreman does this:
+
+1. **Recognise it.** A new goal is an owner message asking for work no crew covers. The request is the owner's ruling on frozen scope, so ask no scope question. A change to an in-flight crew's work isn't a new goal; it takes the `PROPOSAL:` path. A lead can't start a goal. Your own idea goes to a cynic, then to the owner, under "Build only approved scope" rule 2, and becomes a goal only on the owner's yes. Before `approvedAt` is set, fold the request into the plan with a fresh plan architect instead. Never tell the owner to open another session.
+2. **Acknowledge and log.** Tell the owner in one line that you take the request as goal `<id>` and that running crews continue. Log `- HH:MM | [<id>] goal added: <goal on one line> | owner request mid-run | none | followed`. Pick `<id>` from the goal's words, in the crew-slug pattern, unique among goal ids, never `run`.
+3. **Run a short altitude and depth pass** (sections 1-2), asking only what the goal leaves open.
+4. **Start the amend architect.** Name it `architect-amend-<id>` (`model: "opus"`, `effort: "medium"`, foreground). The brief's first line is exactly `Mode: amend`. It carries the goal id and text, the foundry dir, the schema path, `approval: auto`, and the in-flight crews from `plan.json` (slug, goal, `owns`, `status`, the goal id each serves). Create a marker first with `mktemp "<foundry dir>/plan-mark.XXXXXX"`, as in section 4. After the hand-back, run `find "<foundry dir>/plan.json" "<foundry dir>/plan-<id>.md" -newer "<marker path>"`, then `rm "<marker path>"`. Both files must be listed. The debug log says why one is missing: `foundry: plan-amend route wrote nothing: <reason>`.
+5. **Check the amendment** against section 4's send-back list, applied to the new goal's crews. Also check that no new crew's `owns` overlaps a path owned by a crew of another goal that isn't `merged` or `dropped`. To send it back, start a fresh amend architect under the next unused name, with the same brief plus what's wrong.
+6. **Run the cynic.** Start a fresh cynic, as in "Have a cynic review the verdicts", on the new goal's verdicts and its collisions with the other goals' crews. Its `Owner:` line says whether one of the owner triggers in section 4 applies to the goal. On a disagreement, run one reconcile round under `architect-amend-<id>-2` with the same brief plus the findings; the route replaces the still-unapproved goal. If the cynic finds an owner trigger after the route wrote `approval: "auto"`, set that goal's `approval` to `"owner"` in `plan.json` and leave its `approvedAt` null until the owner answers. The owner hears about a verdict only on the section 4 triggers.
+7. **Approve and freeze the goal's scope.** An `owner` goal is one where an owner trigger applies, as for a mid-run design slice; a design crew alone doesn't make it one. For an `auto` goal, set `goals[i].approvedAt` to your log time (read the clock as in section 5) and start. For an `owner` goal, show the goal's crews in section 5's table, wait for the owner's yes, then set `goals[i].approvedAt`; the hook holds the goal's crews until then. The merge mode and target are the run's and are never asked again. Never edit the top-level `approval` and `approvedAt`, or another goal's entry. "Build only approved scope" applies to the goal from its `approvedAt`.
+8. **Start the crews** by section 6's start rule. Write goal files and briefs as in section 6; a lead's brief also names its goal id.
+
+A mid-run design slice (above) stays for a lead's design `PROPOSAL:` within one goal: the slice joins the proposing crew's goal, with its `goal` field set to that id.
 
 ## 8. Collect the reports
 
