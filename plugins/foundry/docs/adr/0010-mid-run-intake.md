@@ -2,6 +2,8 @@
 
 Status: proposed, 2026-10-29. Written by the design crew `intake-design` (a mid-run design slice in wave 1), for the foundry release after 0.10.0. It becomes accepted when the foreman merges this crew. Not repo ADR-0010.
 
+Amended 2026-10-30, for the owner's ruling (decisions.md, 19:51): "Approvals are not a mandatory step. If there is a reason for human oversight, ask for approval only then". A goal's `approval` is `"owner"` only when an owner trigger of run/SKILL.md section 4 applies to it, and `"auto"` otherwise, whether or not the goal has a wave-0 crew. The schema row for `goals[].approval`, the amend refusal on `approval` against wave 0, and the first Owner decision below are changed to match. The code has no such refusal (`hooks/intake.ts:41-42` checks only that `approval` is `auto` or `owner`).
+
 VERDICT: change. The interface that can't take the work is `plan.json` with its plan-file route and gates (`docs/plan.schema.json`; `hooks/register.ts` `Plan`, `planVerdict`, `planLines`, `keepReason`, `routePlanFiles`). It holds one goal, has no way to append crews once `approvedAt` is set, and runs one global wave sequence, so a goal added mid-run either waits for every crew already in flight or is hand-edited into a wave it doesn't belong to.
 
 ## Context
@@ -37,7 +39,7 @@ What happens today, checked against the code at `fa0fa9f`:
 | `goals[].id` | goal object, required | string, the crew-slug pattern `^(?!.*-[0-9]+$)[a-z0-9]+(?:-[a-z0-9]+)*$`, `maxLength: 100`, `not: {"const": "run"}` | The goal's handle in `/foundry`, in crews' `goal` field and in `decisions.md` tags. |
 | `goals[].goal` | required | string, `minLength: 1` | The goal as the owner gave it. |
 | `goals[].addedAt` | required | string, `format: date-time` | When the hook appended it (its clock, RFC 3339 UTC, `Z`). |
-| `goals[].approval` | required | `"auto"` or `"owner"` | `"owner"` exactly when the goal has a crew in its wave 0, as for a run (section 5 of run/SKILL.md). |
+| `goals[].approval` | required | `"auto"` or `"owner"` | `"owner"` only when an owner trigger of section 4 of run/SKILL.md applies to the goal, else `"auto"`. A wave-0 crew doesn't by itself make it `"owner"`. |
 | `goals[].approvedAt` | required | string `date-time` or `null` | Null until the foreman logs (auto) or the owner approves (owner). A conditional mirrors the top-level one: `approval: "auto"` requires a string, so an auto goal on disk fails the schema until the foreman logs it, exactly as an auto plan does today. |
 | `crews[].goal` | crew, optional, v3 only | string, crew-slug pattern | The id of the goal the crew serves. Absent means `run`, and `"run"` written out means the same and is always valid; no `goals` entry is needed for it. |
 | `crews[].after` | crew, optional, v3 only | array of crew-slug strings, `minItems: 1`, `uniqueItems: true` | Crews, in any goal, that must be `merged` or `dropped` before this crew starts. It is the only cross-goal ordering. |
@@ -59,7 +61,6 @@ Waves are numbered per goal: an added goal's first wave is its wave 0. The exist
 - `goal.id` fails the slug pattern or is `run`; `goal.goal` isn't a non-empty string; `goal.approval` isn't `auto` or `owner`;
 - `crews` isn't a non-empty array of objects, or a crew's `slug` fails the pattern, repeats within the amend, or equals a slug of an existing crew outside this goal;
 - an `after` entry names no crew in the existing plan or the amend;
-- `goal.approval` is `"owner"` and no amend crew has `wave: 0`, or `"auto"` and one has;
 - `goal.id` already exists in `goals` and that goal has `approvedAt` set (`goal <id> is approved`) or any crew of it isn't `planned` (`goal <id> has started crews`).
 
 On success it returns the existing object with these changes only. Each amend crew gets `goal` set to the id and `status` set to `"planned"`, whatever the hand-back carried. `version` becomes `3`. Then one of two paths applies:
@@ -98,7 +99,7 @@ run/SKILL.md gains `### Take a new goal mid-run`, in section 7 after "Run a mid-
 2. **Acknowledge and log.** The foreman tells the owner in one line that it takes the request as goal `<id>` and that running crews continue. It logs `- HH:MM | [<id>] goal added: <goal on one line> | owner request mid-run | none | followed`. It picks `<id>` from the goal's words, in the crew-slug pattern, unique among goal ids, never `run`.
 3. **Short altitude and depth pass** (sections 1-2), asking only what the goal leaves open.
 4. **Amend architect.** It starts `architect-amend-<id>` (`model: "opus"`, `effort: "medium"`, foreground, first line `Mode: amend`) with a fresh `mktemp` marker, as in section 4. After the hand-back it runs `find "<foundry dir>/plan.json" "<foundry dir>/plan-<id>.md" -newer "<marker>"`, then `rm` the marker. Both files must be listed; the debug log line `foundry: plan-amend route ...` says why one is missing.
-5. **Check the amendment** against section 4's send-back list, with `approval` checked against the goal's own wave 0. It also checks that no new crew's `owns` overlaps an unmerged crew of another goal unless `after` names it.
+5. **Check the amendment** against section 4's send-back list. It also checks that no new crew's `owns` overlaps an unmerged crew of another goal unless `after` names it.
 6. **Cynic.** A cynic reviews the new goal's verdicts and the cross-goal collisions, exactly as in "Have a cynic review the verdicts". On disagreement, one reconcile round runs under `architect-amend-<id>-2` with the same brief plus the findings. The route replaces the still-unapproved goal (section 2). The owner hears about a verdict only on the section-4 triggers.
 7. **Approve and freeze the goal's scope** with section 5's rules applied to the goal. For an `auto` goal, the foreman sets `goals[i].approvedAt` to its log time and starts. For an `owner` goal, it shows the goal's crews in the section-5 table, waits for the owner, then sets `goals[i].approvedAt`. Merge mode and target are the run's and are never asked again. The top-level `approval` and `approvedAt` and the other goals' entries are never edited. "Build only approved scope" applies per goal, from that goal's `approvedAt`.
 8. **Start** per section 3 above. Goal files and lead briefs are written as in section 6; a lead's brief also names its goal id.
@@ -204,7 +205,7 @@ No principle is added or broken.
 
 ## Owner decisions
 
-- When a goal you add mid-run has a design (wave-0) crew, should it wait for you to approve its plan before it starts, the same rule as at run start? Recommended: yes. A goal with no design crew starts at once and shows up in the end-of-run report, as an extend-only run does today. "No" would let added designs start without your review, which is faster but skips the one look you get today.
+- When a goal you add mid-run has a design (wave-0) crew, should it wait for you to approve its plan before it starts? Recommended: no, unless there is a reason for human oversight. Approvals are not a mandatory step. A goal waits for you only when an owner trigger of section 4 applies; otherwise it starts at once and shows up in the end-of-run report.
 
 ## Files touched
 
