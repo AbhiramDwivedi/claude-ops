@@ -2,7 +2,7 @@
   "id": "judge-roles-4",
   "source": ".git/foundry/40816bb1-1ec8-4755-8d97-0d12599e1e84/reports/roles/roles-judge-4.md",
   "role": "judge",
-  "input": "Rule on the work of the crew \"roles\" against its goal and done-check.\n\nBase: 5831f1b\nHead: 72dbdcf451a6753c3f8db32f19dfebf37a69e0ac\n\nGoal file: none in goals/ for this crew.\n\nMembers' reports named: none.\n",
+  "input": "Rule on the work of the crew \"roles\" against its goal and done-check.\n\nBase: 5831f1b\nHead: 72dbdcf451a6753c3f8db32f19dfebf37a69e0ac\n\nGoal file: none in goals/ for this crew.\n\nMembers' reports named: none.\n\nDone-check output (as quoted by the judge file):\n- `claude plugin validate plugins/foundry`: \"✔ Validation passed\", one ICON_MISSING warning\n- `claude plugin test plugins/foundry`: \"34 pass, 0 fail, Ran 34 tests across 2 files\"\n",
   "expected": {
     "keyword": "VERDICT",
     "kind": "FAIL"
