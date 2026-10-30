@@ -76,6 +76,19 @@ test('roles: a lead role is refused even on opus/medium', () => {
 test('roles: a devops role is refused even on sonnet/low', () => {
   isDeny(workflowRoleVerdict(withRole('devops', { agentType: 'foundry:devops', model: 'sonnet', effort: 'low', isolation: 'none' })))
 })
+test('roles: an integrator role is refused even on opus/medium', () => {
+  refused(workflowRoleVerdict(withRole('integrator', { agentType: 'general-purpose', model: 'opus', effort: 'medium', isolation: 'worktree' })))
+})
+test('roles: an integrator role is refused even on sonnet/low', () => {
+  refused(workflowRoleVerdict(withRole('integrator', { agentType: 'general-purpose', model: 'sonnet', effort: 'low', isolation: 'none' })))
+})
+for (const key of ['builder', 'judge']) {
+  for (const agentType of ['foundry:lead', 'foundry:devops', 'foundry:integrator']) {
+    test(`roles: key ${key} with agentType ${agentType} is refused even with an allowed model and effort`, () => {
+      refused(workflowRoleVerdict(withRole(key, { ...ROLES[key], agentType, model: 'sonnet', effort: 'low' })))
+    })
+  }
+}
 for (const key of ['red-team', 'judge2', 'Judge', 'JUDGE', 'red_team', '']) {
   test(`roles: role key ${JSON.stringify(key)} is refused`, () => {
     isDeny(workflowRoleVerdict(withRole(key, ROLES.judge)))
@@ -169,6 +182,35 @@ test('call: a foreign scriptPath that could not be read is refused with that tex
 })
 test('call: a foreign script without foundry: is undefined', () => {
   assert.equal(workflowCallVerdict(plan(), call({ scriptPath: '/x/other.js', scriptText: NOT_FOUNDRY, args: undefined })), undefined)
+})
+
+// ---- script and scriptPath together (ADR-0009 Decision 6) ----
+
+test('call: script identical to plan.js plus scriptPath plan.js, valid args, is refused', () => {
+  refused(workflowCallVerdict(plan(), call({ script: PLAN_JS, scriptPath: `${PLUGIN}/workflows/plan.js`, scriptText: PLAN_JS })))
+})
+test('call: script identical to plan.js plus a foreign scriptPath is refused', () => {
+  refused(workflowCallVerdict(plan(), call({ script: PLAN_JS, scriptPath: '/x/other.js', scriptText: PLAN_JS })))
+})
+test('call: foreign script plus the plugin wave.js scriptPath is refused', () => {
+  refused(workflowCallVerdict(plan(), call({ script: FOREIGN, scriptPath: `${PLUGIN}/workflows/wave.js`, scriptText: FOREIGN, args: waveArgs() })))
+})
+test('call: a script without foundry: plus a foreign scriptPath is refused', () => {
+  refused(workflowCallVerdict(plan(), call({ script: NOT_FOUNDRY, scriptPath: '/x/other.js', scriptText: NOT_FOUNDRY, args: undefined })))
+})
+test('call: script and scriptPath together, no plan, is undefined', () => {
+  assert.equal(workflowCallVerdict(undefined, call({ script: FOREIGN, scriptPath: `${PLUGIN}/workflows/wave.js`, scriptText: FOREIGN })), undefined)
+})
+test('call: script and scriptPath together, version 1 plan, is undefined', () => {
+  assert.equal(workflowCallVerdict(plan({ version: 1 }), call({ script: FOREIGN, scriptPath: `${PLUGIN}/workflows/wave.js`, scriptText: FOREIGN })), undefined)
+})
+test('call: script alone (scriptPath undefined) with a foreign foundry: text is still refused', () => {
+  refused(workflowCallVerdict(plan(), call({ script: FOREIGN, scriptPath: undefined, scriptText: FOREIGN })))
+})
+
+test('call: a plugin plan.js call whose roles hold builder as foundry:lead is refused', () => {
+  const roles = withRole('builder', { ...ROLES.builder, agentType: 'foundry:lead' })
+  refused(workflowCallVerdict(plan(), call({ args: { foundry: { kind: 'plan', roles } } })))
 })
 
 test('call: args absent is refused for a foundry script', () => {
