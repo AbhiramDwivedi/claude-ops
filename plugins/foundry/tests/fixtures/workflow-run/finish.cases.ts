@@ -160,7 +160,7 @@ test('record step: reports, mtimes and schema-valid events for every crew label'
   assert.equal(sb.model, 'claude-sonnet-5-5')
   assert.equal(sb.effort, 'medium')
   assert.equal(sj.model, 'claude-opus-5-5')
-  const reports = ev.filter((e) => e.event === 'report')
+  const reports = readEvents(w.env.dir).filter((e) => e.event === 'report' && e.crew === 's' && ['s-builder', 's-judge'].includes(e.agent))
   assert.equal(reports.length, 2)
   assert.ok(reports.some((e) => e.marker === 'VERDICT: PASS'))
   for (const e of readEvents(w.env.dir)) assert.deepEqual(validateEvent(e), [], JSON.stringify(e))
