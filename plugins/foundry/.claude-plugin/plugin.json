@@ -1,6 +1,6 @@
 {
   "name": "foundry",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "types": "./types/index.d.ts",
   "description": "Runs several crews of agents in parallel from the main session: each crew's lead delegates to your project's agents in its own worktree, and the crews' branches merge one at a time or into one integration branch",
   "author": {

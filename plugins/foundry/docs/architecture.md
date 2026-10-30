@@ -389,7 +389,7 @@ Everything for a session lives under one folder:
                              architect's hand-back, and never over a plan that is already approved (ADR-0015 item 9)
   goals/<slug>.md            foreman: each crew's goal, done-check, owned files, high-impact paths
   reports/<crew>/<agent>.md  plugin: each crew agent's last report, judges' included
-  reports/<crew>/<agent>.interim.md  plugin: a lead's interim stop
+  reports/<crew>/<agent>.interim.md  plugin: a lead's interim stop, or a judge's follow-up
   messages.jsonl             plugin: lead-to-lead messages
   messages.<n>.jsonl         plugin: the log rolled over, past 3 MiB
   scratch/                   0.3.0, architect: plan-mode scratch output
@@ -708,6 +708,8 @@ A lead's stop is checked against its hand-back, else its last message. It goes t
 `[foundry] Not done yet: finish with your report, in the sections Summary, Branch, Changes, Proof, Checks run and Open questions (each a "## " heading), or, if you cannot finish, start your final message with CHECKPOINT:, BLOCKED:, QUESTION: or PROPOSAL:.`
 
 The gate sends a stop back at most twice in a row (`LEAD_STOP_BLOCKS`), then lets the next one through, so a lead can't loop forever. A stop while the lead still has work out is interim and always goes through: a descendant is live, or a background task belonging to a descendant is running or pending. A stop excused by an unanswered tag is interim too. An interim stop's text is saved to `<agent>.interim.md` and doesn't change the report file, its tag or the lead's idle period. A stop the gate sends back is saved nowhere. The gate applies to `foundry:lead` agents only.
+
+A report that already holds a ruling (its first line starts `VERDICT: PASS`, `VERDICT: FAIL` or `REDTEAM`) is never overwritten by a later stop of the same agent that has no ruling of its own: that text goes to `<agent>.interim.md`, logs no `report` event and spends no repair budget. A resumed judge that rules again replaces the file. The merge gate and `/foundry` read the ruling from the report file, so a judge answering a follow-up question can no longer erase its verdict.
 
 From 0.5.0, on a v2 or later plan, an untagged text that passes by its `## Proof` section gets two more checks, in this order:
 

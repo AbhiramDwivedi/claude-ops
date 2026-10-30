@@ -1174,6 +1174,14 @@ async function stopperOf($: $, state: State, id: string, type: string | undefine
   return { lead, descendants: lead ? descendantsOf(id, all) : [] }
 }
 
+const RULINGS: ReadonlySet<string> = new Set(['VERDICT: PASS', 'VERDICT: FAIL', 'REDTEAM'])
+
+const isRuling = (text: string) => RULINGS.has(markerOf(text) ?? '')
+
+async function heldRuling($: $, path: string): Promise<boolean> {
+  return (await safely($, 'report read', async () => (await $.fs.exists(path)) && isRuling(String(await $.fs.read(path))))) === true
+}
+
 // `tags` false: an interim stop's text goes to <label>.interim.md, leaving the report alone, and neither sets nor
 // clears what /foundry shows
 async function writeReport($: $, state: State, crew: Crew, id: string, text: string, tags = true) {
@@ -1182,6 +1190,9 @@ async function writeReport($: $, state: State, crew: Crew, id: string, text: str
   // an agent started before the mod loaded has no spawn name on record: its listed name, else its id
   const known = state.known.get(id)
   const label = state.labels.get(id) ?? (known === undefined ? id : labelOf(known))
+  // a report that holds a ruling is kept: a later stop by the same agent with no ruling of its own (a resumed judge's
+  // follow-up) is interim, since the merge gate and /foundry read the ruling from this file. A new ruling replaces it.
+  if (tags && !isRuling(text) && (await heldRuling($, reportPath(dir, crew.crew, label)))) tags = false
   await $.fs.write(tags ? reportPath(dir, crew.crew, label) : interimPath(dir, crew.crew, label), text)
   if (tags) await logEvent($, state, { event: 'report', crew: crew.crew, agent: label, marker: markerOf(text) })
   // a judge's FAIL that spends the crew's repair budget is recorded once more, as its own event (ADR-0004 s5)

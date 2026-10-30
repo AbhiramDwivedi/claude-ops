@@ -2,6 +2,10 @@
 
 Newest first. The [README](README.md) covers what foundry does and how to use it.
 
+## 0.11.1
+
+- **A judge's verdict is no longer overwritten.** When a judge was resumed after ruling, its next hand-back replaced `<crew>-judge.md`, which the merge gate reads. It happened three times in one run. Now a stop with no ruling of its own, from an agent whose report already holds `VERDICT: PASS`, `VERDICT: FAIL` or `REDTEAM`, goes to `<agent>.interim.md` with no `report` event and no budget spend. A new ruling still replaces the file (`hooks/register.ts`, `writeReport`).
+
 ## 0.11.0
 
 Two wiring changes and four merged pieces. Text checks show the rules are written into the prompts, not that a live foreman obeys them.

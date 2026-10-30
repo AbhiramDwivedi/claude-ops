@@ -250,6 +250,57 @@ test('C3 flow: /foundry dates the last report from <label>.md, not from a newer 
   expect(line).toContain('last report 40m ago')
 })
 
+// a judge resumed after its ruling must not overwrite it: the merge gate reads the ruling from <label>.md
+const JUDGE = `${ROOT}/reports/auth/auth-judge.md`
+const JUDGE_INTERIM = `${ROOT}/reports/auth/auth-judge.interim.md`
+const FAIL = 'VERDICT: FAIL\n\n## Findings\n- the done-check still fails on the token refresh path'
+const PASS = 'VERDICT: PASS\n\n## Findings\n- none; the refresh test now advances the clock'
+const reportEvents = (w: ReturnType<typeof world>) =>
+  (w.files.get(`${ROOT}/events.jsonl`) ?? '')
+    .split('\n')
+    .filter(l => l.trim() !== '')
+    .map(l => JSON.parse(l) as Record<string, unknown>)
+    .filter(e => e.event === 'report' && e.agent === 'auth-judge')
+const withJudge = (w: ReturnType<typeof world>) => w.agents.push(agent('J1', 'foundry:judge', 'auth-judge', 'L1'))
+
+test('C3 flow: a judge follow-up with no ruling goes to the interim file and leaves the verdict', async ($, on) => {
+  const w = quiet(world($, on))
+  withJudge(w)
+  await handBack($, 'J1', FAIL)
+  expect(w.files.get(JUDGE)).toBe(FAIL)
+  await handBack($, 'J1', 'The refresh test fails because the clock is not advanced past the expiry.')
+  expect(w.files.get(JUDGE)).toBe(FAIL)
+  expect(w.files.get(JUDGE_INTERIM)).toBe('The refresh test fails because the clock is not advanced past the expiry.')
+  // the follow-up logs no report event, so it neither counts as a ruling nor spends the budget again
+  expect(reportEvents(w).map(e => e.marker)).toEqual(['VERDICT: FAIL'])
+})
+
+test('C3 flow: a resumed judge that rules again replaces its verdict', async ($, on) => {
+  const w = quiet(world($, on))
+  withJudge(w)
+  await handBack($, 'J1', FAIL)
+  await handBack($, 'J1', PASS)
+  expect(w.files.get(JUDGE)).toBe(PASS)
+  expect(w.files.has(JUDGE_INTERIM)).toBe(false)
+})
+
+test('C3 flow: a red-team report is kept the same way', async ($, on) => {
+  const w = quiet(world($, on))
+  withJudge(w)
+  await handBack($, 'J1', 'REDTEAM: 2 breaks found in the token refresh path')
+  await handBack($, 'J1', 'Break 1 is the null token case, which the refresh path never checks.')
+  expect(w.files.get(JUDGE)).toBe('REDTEAM: 2 breaks found in the token refresh path')
+  expect(w.files.get(JUDGE_INTERIM)).toBe('Break 1 is the null token case, which the refresh path never checks.')
+})
+
+test('C3 flow: a report with no ruling is still replaced by the next one', async ($, on) => {
+  const w = quiet(world($, on))
+  withJudge(w)
+  await handBack($, 'J1', 'Looking at the diff now.')
+  await handBack($, 'J1', FAIL)
+  expect(w.files.get(JUDGE)).toBe(FAIL)
+})
+
 test('C3 flow: the judge line ignores *.interim.md files', async ($, on) => {
   const w = world($, on)
   const put = (name: string, text: string, age: number) => {
