@@ -516,16 +516,136 @@ function ensureWorktree(repo: string, slug: string, target: string): string {
   return wt
 }
 
+type StartCtx = { dir: string; repo: string; roles: Obj; settings: { merge: string; target: string; source: string }; plan: Obj; scriptPath: string; arch: string; adrs: string[] }
+const NEED_TRANSCRIPT = 'start needs --transcript T (a Workflow run dir; the runs root is its parent) to read the runs of this session'
+
+// A crew entry for wave.js; `resume`, `tasks`, `done` and `answers` are the restart facts (fresh start: null and empty).
+function crewEntry(c: StartCtx, crew: Obj, wt: string, extra: { resume: string | null; tasks?: unknown[]; done?: string[]; answers?: unknown[] }): Obj {
+  const slug = String(crew.slug)
+  const goalFile = `${c.dir}/goals/${slug}.md`
+  const sections = goalSections(existsSync(goalFile) ? readFileSync(goalFile, 'utf8') : '')
+  return {
+    slug, wave: crew.wave, goalFile, goal: (sections[''] ?? '').replace(/^# .*\n?/, '').trim(), owns: crew.owns ?? [], doneCheck: crew.doneCheck ?? '',
+    highImpact: (sections['High-impact paths'] ?? '').split('\n').map((l) => l.replace(/^\s*[-*]\s*/, '').replace(/`/g, '').trim()).filter((l) => l !== '' && !/^none\.?$/i.test(l)),
+    redTeam: /^(yes|true)\b/i.test(sections['Red team'] ?? ''), scope: sections['Approved scope'] ?? '', worktree: wt, branch: `foundry-${slug}`,
+    base: baseOf(wt, c.settings.target), architecture: c.arch, adrs: c.adrs, resume: extra.resume, tasks: extra.tasks ?? [], done: extra.done ?? [], answers: extra.answers ?? [],
+    spent: spentOf(c.dir, slug), labelFrom: labelFromOf(c.dir, slug),
+  }
+}
+function waveOut(c: StartCtx, entries: Obj[], leads: Obj[], refused: Obj[], stale: Obj[], unfinished: Obj[]): Obj {
+  return {
+    foundry: { kind: 'wave', dir: c.dir, repo: c.repo, plugin: PLUGIN, target: c.settings.target, repairBudget: intOr(c.plan.repairBudget, 2, 0), roles: c.roles, scriptPath: c.scriptPath, crews: entries },
+    leads, refused, stale, unfinished,
+  }
+}
+
+// The runs of this session: the dirs next to the transcript dir T (T's parent is the runs root).
+const runsNextTo = (transcript: string): WfRun[] => runsOf(path.dirname(flat(transcript).replace(/\/+$/, '')))
+const eventsOf = (dir: string): Obj[] => (existsSync(`${dir}/events.jsonl`) ? jsonLines(`${dir}/events.jsonl`) : [])
+
+type CrewState = { kind: 'none' } | { kind: 'unfinished'; run: string | null } | { kind: 'returned' } | { kind: 'live' } | { kind: 'stale'; wfRun: WfRun | undefined; since: string }
+// The state of a running workflow crew, read from files (ADR-0009 "start, stale runs"); `none` when rule 1 fails.
+// runs undefined means no --transcript was given: nothing can be read, so the crew fails closed as unfinished.
+function crewState(dir: string, crew: Obj, runs: WfRun[] | undefined, events: Obj[], now: number): CrewState {
+  const slug = String(crew.slug)
+  const spawn = factorySpawned(dir, slug)
+  if (crew.status !== 'running' || spawn === undefined) return { kind: 'none' }
+  if (runs === undefined) return { kind: 'unfinished', run: null }
+  const holding = runs.filter((r) => r.agents.some((a) => parseLabel(a.label)?.slug === slug)).sort((a, b) => newestMtime(a.dir) - newestMtime(b.dir) || (a.id < b.id ? -1 : 1))
+  const newest = holding[holding.length - 1]
+  if (newest !== undefined) {
+    if (!events.some((e) => e.event === 'spawn' && e.crew === slug && e.by === `workflow:${newest.id}`)) return { kind: 'unfinished', run: newest.id }
+    if (!events.some((e) => e.event === 'incomplete' && e.crew === slug && e.run === newest.id)) return { kind: 'returned' }
+  }
+  if (isLive(String(spawn.ts), newest?.dir, now)) return { kind: 'live' }
+  return { kind: 'stale', wfRun: newest, since: String(spawn.ts) }
+}
+
+// The tasks of the highest-numbered `<slug>-planner*` result in a run.
+function plannerTasks(wfRun: WfRun | undefined, slug: string): unknown[] {
+  let best = 0
+  let tasks: unknown[] = []
+  for (const a of wfRun?.agents ?? []) {
+    const p = parseLabel(a.label)
+    if (p === undefined || p.slug !== slug || p.role !== 'planner' || !a.hasResult || p.n < best) continue
+    let r = a.result
+    if (typeof r === 'string') {
+      try {
+        r = JSON.parse(r)
+      } catch {
+        continue
+      }
+    }
+    if (isObj(r) && Array.isArray(r.tasks)) {
+      best = p.n
+      tasks = r.tasks
+    }
+  }
+  return tasks
+}
+// Names of the tasks whose member result is DONE and whose branch is an ancestor of the crew branch (git decides, not the report).
+function doneTasks(wfRun: WfRun | undefined, slug: string, wt: string): string[] {
+  const done: string[] = []
+  for (const a of wfRun?.agents ?? []) {
+    const r = a.result
+    if (parseLabel(a.label)?.slug !== slug || !isObj(r) || r.marker !== 'DONE' || typeof r.branch !== 'string' || typeof r.task !== 'string') continue
+    if (run(wt, ['merge-base', '--is-ancestor', r.branch, `foundry-${slug}`]).status === 0 && !done.includes(r.task)) done.push(r.task)
+  }
+  return done
+}
+
+// start --slug S --resume answers|merge-ready|stale: one crew entry, or a refusal {slug, why}.
+function cmdStartResume(f: Flags, c: StartCtx, slug: string, kind: string): Obj {
+  if (!['answers', 'merge-ready', 'stale'].includes(kind)) throw usage(`--resume needs answers, merge-ready or stale, got ${kind}`)
+  const transcript = str(f, 'transcript') ?? ''
+  if ((kind === 'answers' || kind === 'stale') && transcript === '') throw usage(`--resume ${kind} needs --transcript T: ${NEED_TRANSCRIPT}`)
+  let answers: unknown[] = []
+  if (kind === 'answers') {
+    const a = readJson(need(f, 'answers'))
+    if (!Array.isArray(a) || !a.every((x) => isObj(x) && typeof x.at === 'string' && typeof x.text === 'string')) throw usage('--answers must be a JSON array of {"at","text"}')
+    answers = a
+  }
+  const crew = c.plan.crews.find((x: unknown) => isObj(x) && x.slug === slug)
+  if (crew === undefined || crew.status !== 'running' || factorySpawned(c.dir, slug) === undefined) throw refuse({ slug, why: kind === 'stale' ? 'not stale' : 'not restartable' })
+  let wfRun: WfRun | undefined
+  if (kind === 'stale') {
+    const st = crewState(c.dir, crew, runsNextTo(transcript), eventsOf(c.dir), Date.now())
+    if (st.kind === 'returned' || st.kind === 'none') throw refuse({ slug, why: 'not stale' })
+    if (st.kind === 'unfinished') throw refuse({ slug, why: 'run not finished' })
+    if (st.kind === 'live') throw refuse({ slug, why: 'run may be live' })
+    wfRun = st.wfRun
+  } else if (kind === 'answers') wfRun = runOf(transcript)
+  const wt = ensureWorktree(c.repo, slug, c.settings.target)
+  // A stale crew whose branch has no commit beyond the base starts from step 1.
+  const noWork = kind === 'stale' && Number(run(wt, ['rev-list', '--count', `${baseOf(wt, c.settings.target)}..HEAD`]).out) === 0
+  const rebuild = kind !== 'merge-ready' && !noWork
+  const entry = crewEntry(c, crew, wt, { resume: kind, tasks: rebuild ? plannerTasks(wfRun, slug) : [], done: rebuild ? doneTasks(wfRun, slug, wt) : [], answers })
+  if (kind === 'stale') {
+    appendEvent(c.dir, { event: 'spawn', crew: slug, agent: slug, agentId: null, type: 'workflow-crew', model: null, effort: null, by: 'factory' })
+    appendDecision(c.dir, `restarted stale workflow crew ${slug} | its wave.js run died; same worktree and branch; ${entry.spent} repair round(s) already spent`)
+  }
+  return waveOut(c, [entry], [], [], [], [])
+}
+
 function cmdStart(f: Flags): Obj {
   const dir = dirOf(f)
   const repo = repoOf(f)
-  // start: resumes and stale rules go here
-  if (f.resume !== undefined || f.slug !== undefined) throw usage('start --slug and --resume are not built yet')
-  const waveArg = need(f, 'wave')
   const roles = rolesWithTypes(PLUGIN, listOf(f, 'type'))
-  const noWorkflow = f['no-workflow'] === true
   const settings = settingsOf(repo)
   const plan = loadPlan(dir)
+  const scriptPath = scriptPathFor(PLUGIN, 'wave.js', str(f, 'scripts-dir'))
+  const arch = archPath(repo, plan.architecture)
+  const adrDir = `${path.posix.dirname(arch)}/adr`
+  const adrs = existsSync(adrDir) ? readdirSync(adrDir).filter((n) => n.endsWith('.md')).sort().map((n) => `${adrDir}/${n}`) : []
+  const ctx: StartCtx = { dir, repo, roles, settings, plan, scriptPath, arch, adrs }
+  const slugFlag = str(f, 'slug')
+  const resumeFlag = str(f, 'resume')
+  if (slugFlag !== undefined || resumeFlag !== undefined) {
+    if (!slugFlag || !resumeFlag) throw usage('start --slug and --resume go together')
+    return cmdStartResume(f, ctx, slugFlag, resumeFlag)
+  }
+  const waveArg = need(f, 'wave')
+  const noWorkflow = f['no-workflow'] === true
   const crews: Obj[] = plan.crews.filter(isObj)
   const open = crews.filter((c) => c.status === 'planned' || c.status === 'running').map((c) => c.wave).filter((w) => typeof w === 'number')
   if (open.length === 0) throw refuse({ error: 'no wave has a planned or running crew' })
@@ -533,10 +653,7 @@ function cmdStart(f: Flags): Obj {
   if (waveArg !== 'next' && Number(waveArg) !== next) throw refuse({ error: `wave ${waveArg} is not the next wave: ${next}` })
   const cap = intOr(plan.maxParallelCrews, 4, 1)
   let slots = cap - crews.filter((c) => c.status === 'running').length
-  const scriptPath = scriptPathFor(PLUGIN, 'wave.js', str(f, 'scripts-dir'))
-  const arch = archPath(repo, plan.architecture)
-  const adrDir = `${path.posix.dirname(arch)}/adr`
-  const adrs = existsSync(adrDir) ? readdirSync(adrDir).filter((n) => n.endsWith('.md')).sort().map((n) => `${adrDir}/${n}`) : []
+  const wasRunning = crews.filter((c) => c.status === 'running')
   const leads: Obj[] = []
   const refused: Obj[] = []
   const entries: Obj[] = []
@@ -545,8 +662,7 @@ function cmdStart(f: Flags): Obj {
     if (slots <= 0) break
     const slug = String(crew.slug)
     const goalFile = `${dir}/goals/${slug}.md`
-    const text = existsSync(goalFile) ? readFileSync(goalFile, 'utf8') : ''
-    const sections = goalSections(text)
+    const sections = goalSections(existsSync(goalFile) ? readFileSync(goalFile, 'utf8') : '')
     const { engine, reason } = engineOf(sections, settings.merge, noWorkflow)
     if (engine === 'lead') {
       leads.push({ slug, reason })
@@ -564,17 +680,20 @@ function cmdStart(f: Flags): Obj {
     appendEvent(dir, { event: 'spawn', crew: slug, agent: slug, agentId: null, type: 'workflow-crew', model: null, effort: null, by: 'factory' })
     appendDecision(dir, `started workflow crew ${slug} in wave ${next} | worktree foundry-${slug} from ${settings.target}; the cap leaves ${slots - 1} slot(s)`)
     slots--
-    entries.push({
-      slug, wave: crew.wave, goalFile, goal: (sections[''] ?? '').replace(/^# .*\n?/, '').trim(), owns: crew.owns ?? [], doneCheck: crew.doneCheck ?? '',
-      highImpact: (sections['High-impact paths'] ?? '').split('\n').map((l) => l.replace(/^\s*[-*]\s*/, '').replace(/`/g, '').trim()).filter((l) => l !== '' && !/^none\.?$/i.test(l)),
-      redTeam: /^(yes|true)\b/i.test(sections['Red team'] ?? ''), scope: sections['Approved scope'] ?? '', worktree: wt, branch: `foundry-${slug}`,
-      base: baseOf(wt, settings.target), architecture: arch, adrs, resume: null, tasks: [], done: [], answers: [], spent: 0, labelFrom: {},
-    })
+    entries.push(crewEntry(ctx, crew, wt, { resume: null }))
   }
-  return {
-    foundry: { kind: 'wave', dir, repo, plugin: PLUGIN, target: settings.target, repairBudget: intOr(plan.repairBudget, 2, 0), roles, scriptPath, crews: entries },
-    leads, refused, stale: [], unfinished: [],
+  // Running workflow crews that were already running before this call. --transcript T names the runs root (its parent); without it nothing can be read.
+  const transcript = str(f, 'transcript')
+  const runs = transcript ? runsNextTo(transcript) : undefined
+  const events = eventsOf(dir)
+  const stale: Obj[] = []
+  const unfinished: Obj[] = []
+  for (const crew of wasRunning) {
+    const st = crewState(dir, crew, runs, events, Date.now())
+    if (st.kind === 'stale') stale.push({ slug: crew.slug, since: st.since })
+    else if (st.kind === 'unfinished') unfinished.push({ slug: crew.slug, run: st.run })
   }
+  return waveOut(ctx, entries, leads, refused, stale, unfinished)
 }
 
 // ==== finish ====
