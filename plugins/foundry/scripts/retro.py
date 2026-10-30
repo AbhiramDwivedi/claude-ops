@@ -179,6 +179,7 @@ def new_run(started, goal, start_dt):
         "_judges": {"pass": 0, "fail": 0},
         "_budget_crews": set(),
         "_fetches": {"total": 0, "perAgent": {}},
+        "_goals": {},
     }
 
 
@@ -188,6 +189,9 @@ def classify_time(token):
     if re.fullmatch(DATE, token):
         return "dateOnly"
     return "clock"
+
+
+GOAL_TAG = re.compile(r"^\[([a-z0-9]+(?:-[a-z0-9]+)*)\] ")
 
 
 def read_decisions(path):
@@ -226,6 +230,9 @@ def read_decisions(path):
         d["total"] += 1
         d[classify_time(m.group(1))] += 1
         fields = rest.split("|")
+        tag = GOAL_TAG.match(fields[0].strip())
+        if tag:
+            cur["_goals"][tag.group(1)] = cur["_goals"].get(tag.group(1), 0) + 1
         cyn = CYNIC_FIELD.match(fields[-2].strip()) if len(fields) >= 4 else None
         if cyn:
             n = int(cyn.group(2) or 1)
@@ -408,6 +415,52 @@ def read_plan(directory):
         status[key] = status.get(key, 0) + 1
     return {"crews": len(crews), "waves": len(waves), "estAgents": est,
             "agentCap": plan.get("agentCap") if good_int(plan.get("agentCap")) else "not recorded", "status": status}
+
+
+def goal_of(crew):
+    """A crew's goal: its `goal` when a string, else `run` (the same rule as goalOf in intake.ts)."""
+    g = crew.get("goal")
+    return g if isinstance(g, str) else "run"
+
+
+def read_goals(directory, last):
+    """Per-goal rows (run first, then plan goals in order), or None when plan.json has no non-empty `goals` array."""
+    try:
+        with open(os.path.join(directory, "plan.json"), "rb") as fh:
+            text = fh.read().decode("utf-8", errors="replace").lstrip("﻿")
+    except OSError:
+        return None
+    plan = loads(text)
+    if not isinstance(plan, dict) or not isinstance(plan.get("goals"), list) or not plan["goals"]:
+        return None
+    entries = [g for g in plan["goals"] if isinstance(g, dict) and isinstance(g.get("id"), str)]
+    ids = {g["id"] for g in entries}
+    crews = plan.get("crews")
+    crews = [c for c in crews if isinstance(c, dict)] if isinstance(crews, list) else []
+    tagged = last["_goals"]
+    run_total = last["decisions"]["total"] - sum(n for t, n in tagged.items() if t in ids)
+    top = plan.get("goal")
+    rows = [("run", top if isinstance(top, str) else NR, NR, run_total)]
+    for g in entries:
+        text_ = g.get("goal")
+        added = g.get("addedAt")
+        rows.append((g["id"], text_ if isinstance(text_, str) else NR,
+                     added if isinstance(added, str) else NR, tagged.get(g["id"], 0)))
+    out = []
+    for gid, goal_text, added, n in rows:
+        est = 0
+        status = {}
+        mine = [c for c in crews if goal_of(c) == gid]
+        for c in mine:
+            e = c.get("estAgents")
+            if good_int(e):
+                est += e
+            st = c.get("status")
+            key = st if isinstance(st, str) and st else "unset"
+            status[key] = status.get(key, 0) + 1
+        out.append({"id": gid, "goal": goal_text, "addedAt": added, "crews": len(mine),
+                    "estAgents": est, "status": status, "decisions": n})
+    return out
 
 
 GIT_TIMEOUT = 30
@@ -733,7 +786,8 @@ def retro(directory):
             "openOwnerActions": owner_open,
         })
     left = leftovers(directory, event_files)
-    return {
+    goals = read_goals(directory, runs[-1] if has_headings else pre)
+    result = {
         "retro": 1,
         "dir": directory,
         "split": "headings" if has_headings else NR,
@@ -745,6 +799,9 @@ def retro(directory):
         "leftovers": left,
         "leftoverDetails": leftover_details(directory, event_files, left),
     }
+    if goals is not None:
+        result["goals"] = goals
+    return result
 
 
 def main(argv):
