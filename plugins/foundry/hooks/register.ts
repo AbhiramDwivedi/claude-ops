@@ -210,6 +210,7 @@ export type ReportMarker = (typeof MARKERS)[number]
 // the marker a report's first non-empty line starts with, or null
 export function markerOf(text: string): ReportMarker | null {
   const first = text.split('\n').find(l => l.trim() !== '')?.trimStart() ?? ''
+  if (/^VERDICT: (PASS|FAIL) \| /.test(first)) return null // the template line, not a verdict
   return MARKERS.find(m => first.startsWith(m)) ?? null
 }
 
