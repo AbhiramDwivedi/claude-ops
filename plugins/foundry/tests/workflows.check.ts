@@ -558,7 +558,7 @@ const PF_OWNS = ['plugins/foundry/**', './plugins/**', '/plugins/**', 'src/**', 
 const NONCANON = [
   ['a dot segment', 'plugins/foundry/workflows/./wave.js'],
   ['a double slash', 'plugins/foundry//workflows/wave.js'],
-  ['a backslash', 'plugins/foundry/workflows\wave.js'],
+  ['a backslash', 'plugins/foundry/workflows\\wave.js'],
   ['a dot-dot segment', 'plugins/foundry/../../package.json'],
   ['a leading ./', './plugins/foundry/workflows/wave.js'],
   ['a leading slash', '/plugins/foundry/workflows/wave.js'],
