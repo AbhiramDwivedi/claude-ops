@@ -26,6 +26,11 @@ export function amendPlan(existing: unknown, amend: unknown, now: string): { pla
   if (!isRecord(existing) || !Array.isArray(existing.crews) || typeof existing.approvedAt !== 'string') {
     return refuse(`the plan isn't approved; give the goal to the plan architect instead`)
   }
+  const version = existing.version
+  if (typeof version !== 'number' || version < 2) {
+    const shown = typeof version === 'number' ? String(version) : version === undefined ? 'missing' : JSON.stringify(version)
+    return refuse(`the plan is version ${shown}; re-plan it in plan mode before adding a goal`)
+  }
   if (!isRecord(amend)) return refuse('the amend block is not an object')
   const goal = amend.goal
   if (!isRecord(goal)) return refuse('the amend has no goal object')
