@@ -25,7 +25,7 @@ Return only this JSON, no prose around it:
 ```
 
 - `name`: unique and short.
-- `files`: the paths the task writes.
+- `files`: the files the task writes, each a file path and never a directory, even when the task will create new files: name each one.
 - `reads`: the exact files, functions and line ranges the member reads (`src/a.ts:40-90`, `parse()` in `src/b.ts`). Never "the codebase".
 - `brief`: the task's goal, the approved scope quoted word for word, what it must not touch, the check to run and what done means.
 - `after`: names of tasks that must finish first. Empty when none.
@@ -34,6 +34,7 @@ Return only this JSON, no prose around it:
 ## Rules the workflow checks
 
 - Every path in `files` falls inside the crew's `owns`. `*` matches one path segment; `**` matches any depth.
+- Every path in `files` is a canonical repo-relative file path: no `\`, no `//`, no leading `/` or `./`, no `.` or `..` segment, no trailing /, never empty. Paths are compared case-insensitively, and a path that is a directory prefix of another task's path counts as the same file.
 - Two tasks may share a file only along an `after` chain: one is after the other, directly or through others.
 - Every builder is `after` every tester.
 - Every builder's done-check is one it cannot edit: code the crew doesn't own, or tests a tester writes first. So tests come from a tester task, and builders come after it.
