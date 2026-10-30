@@ -59,6 +59,8 @@ For each item it returns `RECOMMEND: answer | defer | pass`, a reason, and a sug
 
 The plan is built on the project's architecture doc. Its path is the `architecture` key of `<repo>/.claude/foundry.json`, where `<repo>` is `git rev-parse --show-toplevel` in the session's working directory. If that file is missing, or the doc it names doesn't exist, run the `foundry:init` skill with the Skill tool before anything else. It starts the architect in `init` mode, shows the owner what the architect wrote, and stops. Then ask the owner whether to go on with the run, and continue at section 1 when they say yes. If init stopped because `.claude/foundry.json` is invalid or has no `architecture` key, the run can't go on: tell the owner, and stop until they fix the file.
 
+**Greenfield repo.** A repo is greenfield when `git ls-files -- . ':!docs/**' ':!.claude/**' ':!README*' ':!LICENSE*' ':!.gitignore' ':!.gitattributes'` prints nothing. When init is missing and the repo is greenfield, don't run init first. Ask section 1's altitude question, then run the interview ("Interview the owner", section 1) with size `large` and requirements path `docs/requirements.md`; its fact-finder runs only when `docs/` has files, which it reads as specs. The interview commits the file. Then run `foundry:init` with the arg `Greenfield: <repo>/docs/requirements.md`, and continue at section 2.
+
 Read the rest of `.claude/foundry.json` now. Each key the owner hasn't set takes its default: `maxParallelCrews` 4, `merge` `sequential`, `target` the current branch. The newer keys are optional too, and leaving one out keeps 0.3.0 behaviour:
 
 - `roles` maps a job (`build`, `test`, `review`, `search`, `docs`, `deploy`) to a full agent type, such as `build: kit:builder`. You use it in sections 3 and 4.
@@ -79,6 +81,15 @@ Crews work in worktrees, which see only committed files. If the architecture doc
 ## 1. Check the altitude
 
 Ask the owner once whether the goal is the end, or one step toward a bigger outcome. If it is a step, describe the bigger version in two or three sentences and what it would add to the plan. The owner picks one. Don't ask again.
+
+### Interview the owner
+
+The foundry is seeded and adapts to what the task needs, and the interview is where it finds out. Run the `foundry:interview` skill with the Skill tool, with the args `<goal> | <foundry dir>/interview.json | <requirements path>`, and go on to section 2 when it returns. The requirements path is `<dir of the architecture key>/requirements.md`: `docs/requirements.md` when `architecture` is `docs/architecture.md`, and also when there is no `.claude/foundry.json`.
+
+- The skill sizes the goal, asks only what the repo can't answer, writes `requirements.md` as numbered requirements, runs `check` until it prints `OK:` and commits the file alone on the target. Crews work in worktrees that see only committed files, so the commit comes before section 4. A small goal gets one requirement from the goal text and no questions.
+- `requirements.md` is committed with no names, emails, user paths or private infrastructure. The interview tells the owner so when it asks about hosting or integrations, and describes those by type.
+- You never answer a question meant for the owner, and neither does a cynic or the architect.
+- **Early stop.** When the owner stops the interview, it fills each unasked branch with its default: you turn the branch's `Recommend` rule into a concrete answer from the facts, and that answer becomes a requirement with `Source: default`. The message that starts the run on its own names every default filled (section 5).
 
 ## 2. Run a short depth pass
 
@@ -105,7 +116,19 @@ When the work needs an agent type none of these provides, members run as `genera
 
 ## 4. Have the architect draft the plan
 
-A crew is one lead and the members it delegates to. You don't split the goal yourself. Start the architect in `plan` mode, outside every crew, like the cynic:
+A crew is one lead and the members it delegates to. You don't split the goal yourself.
+
+**Workflow path.** Use it when the session has the Workflow tool and the owner has opted in to workflows. It replaces the Agent call below, the marker-file `find` check and the send-back rounds:
+
+1. Write the brief below, first line `Mode: plan`, to `<foundry dir>/plan-brief.md`.
+2. Run `node <plugin>/bin/factory.ts plan-args --dir <foundry dir> --repo <repo> --brief-file <foundry dir>/plan-brief.md`. Every factory command takes absolute `--dir` and `--repo`, and prints one JSON object. Add `--type tester=<agent type> --type builder=<agent type>` from your picks in section 3 when the roles table's default (`general-purpose`) isn't what you want.
+3. Run `Workflow({ scriptPath: <scriptPath from that output>, args: <that output> })`, the `Workflow(plan.js)` call. It runs the architect, then the cynic's review of the verdicts, with one reconcile round when the cynic disagrees. It returns `architectLabel`, the `REVIEW:` lines, the `Owner:` items and `stillDisagree`. Copy the lines into `decisions.md`. If it returns `uncovered` instead, run the extend pass below, then repeat from step 2.
+4. Run `plan-write --dir <foundry dir> --transcript <the plan.js run's transcript dir> --label <architectLabel>`. It writes `plan.json` (with `approvedAt: null`) and `plan.md` from that agent's result.
+5. Run `plan-check --dir <foundry dir>`. On a failed `plan-check`, resume once: rerun `plan-args` with `--fix <file holding the errors>`, then `Workflow(plan.js)`, `plan-write` and `plan-check` again. A second failure goes to the owner with the errors.
+
+The send-back reasons below stay. `plan-check` applies the approval, slug, status and file-overlap rules and lists crews whose done-check is not proved (`unproved`); the cynic and you apply the rest, and you act on them with a fresh run of the architect. The cynic review below is already part of `plan.js`. Without Workflow, or when the owner has not opted in, take the lead path: the rest of this section.
+
+**Lead path.** Start the architect in `plan` mode, outside every crew, like the cynic:
 
 ```
 Agent({
@@ -121,6 +144,7 @@ Agent({
 Run it in the foreground. The plugin doesn't save its report, so read its hand-back directly. The brief's first line is exactly `Mode: plan`; foundry's hook takes the plan from the hand-back only for an architect you start with that first line. After it, the brief gives:
 
 - the goal the owner chose in section 1, and your depth-pass answers;
+- when the interview ran: the requirements path, `requirements.md`, and the R-ids this run accepted (`requirements` in `<foundry dir>/interview.json`);
 - the foundry dir. The architect doesn't write there: it hands `plan.json` and `plan.md` back as two fenced blocks in its report, and foundry's hook writes them to `<foundry dir>/plan.json` and `<foundry dir>/plan.md`;
 - the architecture doc's path, from `.claude/foundry.json`;
 - `maxParallelCrews`, from `.claude/foundry.json` or the defaults;
@@ -135,7 +159,8 @@ Check the draft before anyone sees it. To send it back, start a fresh plan archi
 - `approval` is wrong: it must be `"owner"` when the plan has a wave-0 crew and `"auto"` when it has none. Only you check this, here at plan time; the hooks don't;
 - two crews own the same file. Work that must share files goes in one crew, or in two waves;
 - a crew has a done-check it can game: it should run code the crew doesn't own, or tests a test-writer writes before the builder starts, which the builder may not edit;
-- a crew can't run its done-check with its own access (`doneCheckProved` is false).
+- a crew can't run its done-check with its own access (`doneCheckProved` is false);
+- an R-id of this run is neither served by a crew in the `Requirements` column nor listed under `Unserved:` in `plan.md`.
 
 The architect never writes check code; a done-check is a test command; a check that needs logic is a contract test written by a crew's Sonnet test-writer.
 
@@ -184,30 +209,41 @@ Write `approvedAt` with Edit, as an RFC 3339 date-time with a time-zone offset, 
 
 **Extend-only run (no wave-0 crew, `approval: "auto"`).** Don't ask the owner anything:
 
-1. Take the merge mode and target from `merge` and `target` in `.claude/foundry.json`. Without them, the merge mode is `sequential` and the target is the current branch.
-2. Log which merge mode and target you used, and where each came from.
+1. Run `node <plugin>/bin/factory.ts settings --repo <repo>`. It prints the merge mode, the target and their source (`.claude/foundry.json`, `default` or `mixed`); an unset `merge` is `sequential` and an unset `target` is the current branch.
+2. Log the merge mode and target, and where each came from.
 3. Overwrite the architect's `approvedAt` with now, the time of the log line in step 2.
 4. Add the merge mode, the target and the members you chose to `plan.md`.
-5. Go to section 6. The owner sees the plan in the end-of-run report.
+5. Go to section 6. The owner sees the plan in the end-of-run report. When the interview filled defaults, the message that starts the run names them in exactly this form: `Defaults filled: R-<n> (<branch id>), ...`.
 
 **Run with a wave 0 (`approval: "owner"`).** Leave `approvedAt` null and show the plan as a table, with the ADRs the wave-0 crews will write:
 
-| Crew | Wave | Verdict | Goal | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Est. agents | Resources (ports line; DB or temp dir) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `auth` | 1 | `extend` | Session refresh on the API | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, medium), `foundry:judge` (opus, medium) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | 6 | `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`; temp dir `.tmp/auth` |
+| Crew | Wave | Verdict | Goal | Requirements | Members (type, model, effort) | Skills | Owns | High-impact paths | Red team (yes/no) | Done-check (not gameable) | Est. agents | Resources (ports line; DB or temp dir) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `auth` | 1 | `extend` | Session refresh on the API | R-1, R-3 | `kit:test-writer` (sonnet, medium), `kit:builder` (sonnet, medium), red team `foundry:judge` in red-team mode (opus, medium), `foundry:judge` (opus, medium) | `api-conventions` | `src/auth/**`; `tests/auth/refresh.test.ts` for the test-writer only | `src/auth/session.ts` | yes | `tests/auth/refresh.test.ts`, written by the test-writer before the builder starts; the builder may not edit it | 6 | `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`; temp dir `.tmp/auth` |
 
-Ask the owner two more things:
+Under the table, list each `Unserved:` id from `plan.md` with its reason, and each requirement with `Source: default`, so the owner sees what was filled in. Dropping an unserved id is the owner's ruling; record it with `Status: dropped` in `requirements.md`.
 
-- **Merge mode.** `sequential`: crews merge into the target one at a time, each with what merged before it merged into its branch by its lead, one reviewable merge per crew. `single`: all crew branches merge into one integration branch with one PR; use it when every merge to the target triggers something expensive, such as a deploy per merge.
-- **Target branch**: the branch the work lands on. Offer the current branch as the default.
+**Merge mode and target.** You never ask the owner for the merge mode or the target branch. In both kinds of run, run `node <plugin>/bin/factory.ts settings --repo <repo>`, show its result in the plan table as information, and log it. `single` comes only from the `merge` config key or the owner's own words in the run's request, never from a question. A `single` run puts every crew on the lead path. `sequential` lands crews on the target one at a time; `single` merges every crew branch into one integration branch with one PR.
 
-When the owner approves, set `approvedAt` to now and add the merge mode, the target and the members to `plan.md`. Later waves start as earlier ones merge, with no further pause.
+When the owner approves, set `approvedAt` to now and add the merge mode, the target and the members to `plan.md`. On the Workflow path, `node <plugin>/bin/factory.ts approve --dir <foundry dir> --by owner` (or `--by auto`) sets `approvedAt` and logs the decision; run `--by owner` only after the owner's yes. Later waves start as earlier ones merge, with no further pause.
 
 Either way, expand the scope here, once: the altitude, the depth pass and the red teams are where it grows. Once you set `approvedAt`, the scope is frozen. Start nothing before then; an auto draft's own `approvedAt` doesn't count. Questions still reach the owner through the cynic's rules in both cases: an auto-started run isn't a silent one.
 
 ## 6. Write the goal files and start the leads by wave
 
-For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its wave and verdict, its done-check, the files it owns, its high-impact paths, whether it gets a red team, and its resource slice. It has a `Non-goals` heading that lists what the crew must not build; the judge checks the diff against it. It also names the architecture doc's path and this run's ADRs; the lead and the judge read them from there. It ends with a `Prompt overrides:` line naming the role and the file for every role `promptOverrides` sets, such as `Prompt overrides: lead .claude/foundry/prompts/lead.md; judge .claude/foundry/prompts/judge.md`, or `Prompt overrides: none`. The line names files only, never prompt text. A `design` crew's goal file also lists the `change` verdicts it carries out and their modules. When `plan.md` says a crew's done-check is proved red only after an earlier wave merges, its goal file says so, and its lead re-runs the check before any member starts. The lead re-reads the goal file during the run.
+For each crew, write `<foundry dir>/goals/<slug>.md`: the crew's goal, its wave and verdict, its done-check, the files it owns, its high-impact paths, whether it gets a red team, and its resource slice. It has a `Non-goals` heading that lists what the crew must not build; the judge checks the diff against it. It also has fixed sections: `## Approved scope` (the `decisions.md` lines that bear on the crew, verbatim), `## Red team` (first word `yes` or `no`), `## Engine` (first word `workflow` or `lead`, then the reason when it is `lead`) and, when the interview ran, `## Requirements`: one `- R-<n>: <title>` line per R-id the crew serves, with the title copied exactly from `requirements.md`. Before the first lead or Workflow crew starts, run `node <plugin>/interview/cli.ts trace <requirements path> <foundry dir>/interview.json <foundry dir>/goals` and fix the goal files until it prints `OK:`. It also names the architecture doc's path and this run's ADRs; the lead and the judge read them from there. It ends with a `Prompt overrides:` line naming the role and the file for every role `promptOverrides` sets, such as `Prompt overrides: lead .claude/foundry/prompts/lead.md; judge .claude/foundry/prompts/judge.md`, or `Prompt overrides: none`. The line names files only, never prompt text. A `design` crew's goal file also lists the `change` verdicts it carries out and their modules. When `plan.md` says a crew's done-check is proved red only after an earlier wave merges, its goal file says so, and its lead re-runs the check before any member starts. The lead re-reads the goal file during the run.
+
+Write `## Engine` as `lead`, with the reason, for a deploy crew (it has a `devops` member) and for a raised-effort crew (the owner raised a member to `high` or `xhigh`): those stay on the lead path. Write `workflow` for every other crew.
+
+**Workflow crews.** Pass `--transcript <T>` to `start` and `finish` whenever a Workflow ran this session; `<T>` is the transcript dir of a Workflow run, the dir that holds `journal.jsonl`. Every command takes `--dir <foundry dir> --repo <repo>`.
+
+1. Run `node <plugin>/bin/factory.ts start --wave next --transcript <T>`, adding `--type <role>=<agent type>` as in section 4. It starts only `planned` crews of the lowest open wave, up to the free slots; it marks each Workflow crew `running` and makes its worktree, so don't edit that status by hand. Its output lists `leads` (crews on the lead path: start them as the numbered steps below say), `refused`, `stale` and `unfinished`. Use `start --no-workflow --wave next` instead when the Workflow tool is unavailable or the owner has not opted in: it puts every crew on the lead path. Log whether foundry's Workflow gate refused or ran the first Workflow call of the run. If the call is refused for its `scriptPath`, rerun `plan-args` or `start` with `--scripts-dir <the session's workflows/scripts dir>`.
+2. Run `Workflow({ scriptPath: <scriptPath from the output>, args: <the output> })`, the `Workflow(wave.js)` call. Save the value it returns to a file.
+3. Run `finish --transcript <T> --result <that file>`. `finish` is the merge gate (section 9). A crew that stopped returns `state: "stopped"` with a `tag` and `text`; handle it as section 7 handles a lead's message. Once you have the answer, write `[{"at": "<task or step>", "text": "<answer>"}]` to a file and run `start --slug <slug> --resume answers --transcript <the stopped run> --answers <file>`, then `Workflow(wave.js)` with that output, then `finish`.
+4. After a session restart or a failed Workflow call, run `finish --transcript <T>` on each run `start` lists under `unfinished`: with `--result <file>` if you saved the value, without it if you lost it. Without `--result` it merges nothing and marks the run `incomplete`, and it refuses with `run may be live` until the run's transcripts are 30 minutes old. Then, for each crew under `stale`, run `start --slug <slug> --resume stale --transcript <T>`, `Workflow(wave.js)` and `finish --result`; if `start` refuses with `run may be live`, wait and try again. Log each restart as a decision line.
+5. Repeat from step 1 with `start --wave next` until the last wave has merged.
+
+A leadless crew (item 4 below) with `## Engine` `workflow` runs through `wave.js` like any other Workflow crew. The lead-path steps below stay the rule for `lead` crews.
 
 Start leads by wave, and within a wave in queue order:
 
@@ -319,6 +355,8 @@ On `VERDICT: FAIL`, send the findings back to the lead, apart from those rule 4 
 
 A crew counts as merged when its branch is in the branch the next wave builds on: the target in `sequential` mode, the integration branch in `single` mode. Set its `status` to `"merged"` then, and not before (section 6). The wave gate holds the next wave until every crew in this one is `merged` or `dropped`.
 
+**Workflow crews.** For a Workflow crew the gate is `finish`: it applies this gate in code, merges the target into the crew branch, fast-forwards the target and sets `status` to `merged`. Never merge such a crew by hand. Read its output: `merged` crews are done. `rework: conflict` and `rework: rejudge` go back through `start --slug <slug> --resume merge-ready --transcript <T>` and a new `Workflow(wave.js)` run, whose first step redoes the merge and lets a resolver settle any conflict before the checks and judge. A crew under `blocked` (the target is checked out dirty) waits for the owner; run `finish` again after the answer. `refused` and `audit` entries go to the owner. The gate text in this section is the lead path's rule, and `single` mode is always the lead path.
+
 **sequential**, one crew at a time, wave by wave and in the order of the plan within a wave, or the order the leads agreed between them. For each crew:
 
 1. Tell its lead: "Merge `<target>` into `<crew branch>` with `git merge <target>`; never rebase or cherry-pick. Resolve the conflicts, run the checks, have a fresh judge rule on the merged branch only if its patch id changed or the checks don't pass again on the merged head (otherwise the PASS stands), and send your final report on its PASS." A lead that has ended is resumed by the message.
@@ -367,10 +405,13 @@ When the run's last crew has merged and any lead's report carried a `## Learned`
 
 First, sweep the end-of-run list. Start a fresh cynic, as in "The cynic", whose brief opens with the line `End-of-run sweep.` and gives every deferred item and every `Deferred` and open-question line from the leads' final reports and the judges' and red teams' reports, each with where it came from, plus the decision log's path. For each item it returns `SWEEP: keep | drop`. Log each as one line, `- HH:MM | sweep <keep|drop>: <item> | <reason> | cynic-<n> | <outcome>`, where `<outcome>` is `followed` or `overruled: <reason>`. Follow it by default; to keep an item the cynic dropped, log why.
 
+Then mark the requirements met. For each id in `interview.json`'s `requirements` whose citing crews all merged, set `Status: met` in `requirements.md`; an id whose crew was dropped stays `open`. Run `node <plugin>/interview/cli.ts check <requirements path>` until it prints `OK:`, then commit the file alone on the target as `docs(req): met R-...`, as an extend pass is committed.
+
 Before anything leaves the machine, report:
 
 - the plan: each crew's wave, verdict and status, the `estAgents` total, the ADRs the run wrote, and whether the run started on `approval: "auto"` or the owner's approval;
-- for an auto-started run, the merge mode and target you used, and where each came from;
+- the merge mode and target you used, and where each came from;
+- the requirements marked `met`, and any left `open` or filled by default;
 - each mid-run design slice;
 - each crew's summary, and what merged where;
 - the checks and their results, and each judge's verdict;

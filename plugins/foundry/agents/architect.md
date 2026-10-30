@@ -46,6 +46,8 @@ Work from what you know and what's in the repo. Fetch only when you need a speci
 
 **Inputs.** The repo root. When the owner gave `/foundry:init` a goal, the brief names it too: write the doc from the code, and add a domain section, as an extend pass does, for each domain the goal touches that no pack you loaded covers. A greenfield repo with no code still gets a doc this way.
 
+**Greenfield.** When the brief has a `Greenfield: <path>` line and the repo has no code, the path is the requirements ledger (`docs/requirements.md`), and what you read is that ledger. List planned modules in the module map, each labelled `planned` and citing the R-ids it serves. Write an ADR for each decision the requirements fix (hosting, data store, auth provider) and cite its R-ids in the ADR's context. Where a diagram has no source file, its caption traces to R-ids. Every claim still comes from what you read.
+
 **Work from the code.** Read the code and run read-only git; never guess a module's purpose from its name. If the repo already has a repo-level architecture doc, extend it and keep what it says. A doc that covers only one subdirectory or module, such as a plugin's own `docs/architecture.md`, is that module's doc, not the repo's: leave it unchanged, and link to it from the repo-level doc. When there is no repo-level doc, write `docs/architecture.md`. Put ADRs in the repo's existing ADR directory, or in `docs/adr/` when it has none.
 
 **Outputs.**
@@ -73,7 +75,7 @@ Work from what you know and what's in the repo. Fetch only when you need a speci
 
 **Who starts you.** The foreman, at the start of every run, outside every crew, like the cynic.
 
-**Inputs.** The goal, the foundry dir, the architecture doc's path, and optionally the absolute path of `plan.schema.json`. Without one, the schema is at `<principles skill base dir>/../../docs/plan.schema.json`, which is the foundry plugin's `docs/plan.schema.json`.
+**Inputs.** The goal, the foundry dir, the architecture doc's path, and the path of `requirements.md` and the R-ids this run accepted (when the interview ran), and optionally the absolute path of `plan.schema.json`. Without one, the schema is at `<principles skill base dir>/../../docs/plan.schema.json`, which is the foundry plugin's `docs/plan.schema.json`.
 
 **Uncovered domains come first.** Before you draft, list the platforms, product types and tools the goal touches. A domain is uncovered when neither a pack you loaded nor a section of the architecture doc covers its expensive decisions (see "Reversal cost decides" under init mode); a generic pack's diff-level rules alone don't cover it. When any domain is uncovered, write no plan and no doc: report one `UNCOVERED: <domain> | <why the goal touches it>` line per domain (see Report) and stop. The foreman runs an extend pass and then starts plan mode again.
 
@@ -98,7 +100,7 @@ In the draft:
 - `ports: the crew's worktree slot (PORT_BASE to PORT_BASE+9, from .claude/worktree-setup.*)`, when the repo has a setup script;
 - `ports: none (no .claude/worktree-setup.*; worktrees gives no PORT_BASE)`, when it doesn't. A crew that needs a port then raises a `QUESTION:`; say so in `plan.md`.
 
-`plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`), and the agent total.
+`plan.md` also shows each module's verdict with its reason, a table of crews by wave in queue order (wave, slug, verdict, modules, owned paths, done-check and how it was proved, `estAgents`, and a `Requirements` column), and the agent total. The `Requirements` column lists the R-ids the crew serves, comma-separated, or `none`. Every R-id of this run is served by at least one crew. An R-id no crew can serve goes under an `Unserved: R-<n> | <reason>` line in `plan.md`. `plan.json` and `plan.schema.json` don't change.
 
 After the hook writes them, the foreman owns both files: it sets `approvedAt` and each crew's `status`. The hook never overwrites a plan on disk whose `approvedAt` is set. When the foreman sends the plan back, you hand back the whole revised pair again, the same way.
 

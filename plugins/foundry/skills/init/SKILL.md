@@ -45,6 +45,7 @@ The brief's first line is `Mode: init`. After it, the brief gives:
 - the repo root, `<repo>`, as an absolute path;
 - the existing architecture doc and ADR folder you found in step 2, or "none found";
 - when the owner ran `/foundry:init` with a goal: the goal, word for word, and that the architect also adds a domain section for each domain the goal touches, so a repo with no code yet still gets a doc;
+- when your args carry a `Greenfield: <path>` line (the run skill passes it after the owner interview): that line word for word, and that the repo has no code, so the architect lists planned modules and cites the R-ids in the requirements file at that path;
 - when `foundry.json` exists and names a missing doc: that path, and that the file's other keys must stay as they are;
 - what to write: the architecture doc (principles, module map, ADRs for the decisions already in the code) and `<repo>/.claude/foundry.json` with the keys `architecture` and `adr` only. An existing doc is extended, not replaced. With none, the doc goes to `docs/architecture.md` and the ADRs to `docs/adr/`.
 
