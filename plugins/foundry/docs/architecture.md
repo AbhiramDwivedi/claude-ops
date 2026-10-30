@@ -123,6 +123,9 @@ Only the foreman talks to the owner. Only leads message the foreman, so a member
 | Red team, `<crew>-redteam` | Lead, when the plan says yes | Opus, `medium` (repo ADR-0011 amendment) | Only inside its own worktree and temp dirs; never commits |
 | Integrator | Foreman, `single` mode | `general-purpose`, Opus, `high` | Yes, the integration branch |
 | Integration judge | Foreman, `single` mode | Opus, `xhigh` in 0.4.3 (`skills/run/SKILL.md:315`); `medium` from 0.5.0, like every judge (repo ADR-0011 amendment) | No |
+| Crew planner, `<slug>-planner`, then `-2` (designed in ADR-0009, not built yet) | `wave.js`, on the Workflow path only | Opus, `medium`, in its front matter and in `workflows/roles.json` | No; read-only, starts no agent |
+
+**Workflow crews have no lead (designed in [ADR-0009](adr/0009-workflow-factory.md), Decisions 2, 4 and 5; not built yet).** On the Workflow path a crew is a chain inside the `wave.js` script, not a `foundry:lead`. The script plays the lead's orchestration role and makes every member, judge and red-team `agent()` call itself, because a workflow agent has no Agent tool and can't delegate (ADR-0009, Probe, probe 2; that `foundry:lead` in particular has none is inferred from `kit:builder`, not run). Every agent's type, model, effort and isolation come from one table, `plugins/foundry/workflows/roles.json`, through the script's one `spawn()` function: `architect`, `cynic`, `planner` (`foundry:crew-planner`) and `writer` on Opus at `medium`; `tester` and `builder` (the project's agent type, default `general-purpose`) and `resolver` on Sonnet at `medium`, a builder at `low` when its task says so; `rca`, `redteam` and `judge` on Opus at `medium` (the last two as `foundry:judge`); and `runner` (`general-purpose`, Sonnet, `low`), which runs one `factory.ts` command the script wrote out in full and relays its output. The table has no `lead`, `devops` or `integrator` role, and `workflowRoleVerdict` refuses one (ADR-0009, Decision 2). The crew planner (`agents/crew-planner.md`, Decision 5) does the lead's depth pass and split, `agents/lead.md` sections 2 and 3, for one crew and returns the tasks in a schema; it writes nothing. A tester's commits still carry `Foundry-Role: test-writer`, and a resolver's carry `Foundry-Role: resolver`, a value defined in the member and judge briefs `wave.js` writes, not in `agents/lead.md` (Decision 8). Crews with a `devops` member, crews whose members the owner raised to `high` or `xhigh`, every crew of a `single`-mode run, and every crew in a session without the Workflow tool keep the lead path, and the table above, unchanged (Decision 1, "start, engine split"). Whether the Workflow path is the default is an open owner decision (ADR-0009, Owner decisions, item 2; the ADR recommends yes).
 
 The architect (0.3.0) is `agents/architect.md`. It loads the principle packs the work touches from the `skills/principles/` skill and runs in three modes ([ADR-0001](adr/0001-design-phase.md), sections 2 and 3):
 
@@ -218,6 +221,155 @@ Traces to: `plugins/foundry/skills/run/SKILL.md`, `plugins/foundry/agents/archit
 10. Judge-gated merge: The foreman reads the crew's newest judge file modified at or after `approvedAt` itself, under the folder of the crew's newest lead (`<slug>` or its latest successor `<slug>-<n>`), and merges only on a `VERDICT: PASS` with no `- UNSCOPED: ` finding whose `## Proof checked` `Head: ` matches the crew branch head, or whose `Patch: ` matches the branch's patch id with the lead's checks re-run green on the merged head (`skills/run/SKILL.md:310-313`). In `sequential` mode each lead in turn merges the target into its crew branch (`git merge <target>`, a real merge; from 0.6.0, ADR-0015 item 11; before that it rebased), a fresh judge rules if the head moved and the patch id changed, and the foreman fast-forwards with `git merge --ff-only`. In `single` mode an integrator merges every crew branch into `foundry-<short goal>` and an integration judge rules on it.
 11. End-of-run report: Crew summaries and what merged where, checks and verdicts, decisions and cynic overrules, the items the end-of-run sweep kept (a cynic drops the rest), and the high-impact files that changed. The foreman then asks before every push and PR, unless the project grants it merge ownership. Production deploys always go to the owner.
 
+### The Workflow path (designed in ADR-0009, not built yet)
+
+[ADR-0009](adr/0009-workflow-factory.md) gives foundry a second crew engine. None of its files exist at `b81ad50`: `bin/factory.ts`, `workflows/roles.json`, `workflows/plan.js`, `workflows/wave.js` and `agents/crew-planner.md` are built by the `workflow-gate`, `factory-cli`, `factory-scripts` and `run-procedure` crews (ADR-0009, Build crews), and until they merge every run takes steps 4 to 11 above. The steps 0 to 11 above stay as the lead path, the fallback. When the foreman's session has the Workflow tool, planning runs as a Workflow script, and every crew whose goal file's `## Engine` section says `workflow` runs as one too (Decision 1, "start, engine split"):
+
+```mermaid
+flowchart TB
+  fore["Foreman<br/>[main session: skills/run/SKILL.md]"]
+  cli["factory CLI<br/>[script: bin/factory.ts, node]"]
+  planwf["plan workflow<br/>[Workflow script: workflows/plan.js]"]
+  wavewf["wave workflow<br/>[Workflow script: workflows/wave.js]"]
+  roles[("roles table<br/>[workflows/roles.json]")]
+  hook["Workflow gate<br/>[hook: hooks/register.ts]"]
+  agents["Workflow agents<br/>[architect, cynic, planner, members, red team, judge, runner]"]
+  wfrec[("journal.jsonl, agent-*.meta.json, agent-*.jsonl<br/>[Workflow transcript dir]")]
+  fdir[("plan.json, decisions.md, events.jsonl, reports/<br/>[foundry dir]")]
+  git[("crew branches, target<br/>[git]")]
+
+  fore -->|"start, plan-args, settings: prints args JSON"| cli
+  cli -->|"reads"| roles
+  fore -->|"Workflow call with scriptPath and args"| hook
+  hook -->|"lets through"| planwf
+  hook -->|"lets through"| wavewf
+  planwf -->|"agent() with role's model and effort"| agents
+  wavewf -->|"agent() with role's model and effort"| agents
+  agents -->|"runner runs check, integrate"| cli
+  agents -.->|"recorded by the harness"| wfrec
+  fore -->|"plan-write, finish"| cli
+  cli -->|"reads results, models, efforts"| wfrec
+  cli -->|"plan files, status, decision lines, spawn and report events, judge files"| fdir
+  cli -->|"worktree add, merge, ff-only to target"| git
+  hook -->|"reads plan, crew status"| fdir
+```
+
+*The Workflow engine's parts and what passes between them, as designed.* Traces to: `plugins/foundry/docs/adr/0009-workflow-factory.md:86-115` (the diagram, copied), which traces to `plugins/foundry/hooks/register.ts:1641-1715` (the Agent gates it mirrors), `:327-349` (`planVerdict`), `:499-565` (`judgeRuling`, `patchIdOf`, `headVerdict`) and `:848-904` (the plan-file route), line numbers the ADR took at `fa0fa9f` and unchanged at `b81ad50` (`git diff fa0fa9f b81ad50 -- plugins/foundry/hooks/register.ts` is empty), and to the probe run's `journal.jsonl` and `agent-*.meta.json`.
+
+```mermaid
+sequenceDiagram
+  participant F as Foreman
+  participant C as factory.ts
+  participant H as Workflow gate hook
+  participant W as wave.js
+  participant A as Workflow agents
+  F->>C: start --wave next
+  C->>C: planVerdict per crew, status running, worktree, spawn line
+  C-->>F: args JSON
+  F->>H: Workflow(scriptPath wave.js, args)
+  H->>H: crews running and planVerdict clean, roles valid
+  H-->>W: let through
+  W->>A: runner: factory.ts check --expect red
+  W->>A: planner: tasks
+  W->>A: tester, then builders (worktree each)
+  W->>A: runner: integrate, check --expect green
+  W->>A: red team (if yes), judge
+  W-->>F: per crew: passed or stopped
+  F->>C: finish --transcript dir
+  C->>C: record reports and events, audit models, merge gate, ff target, status merged
+  C-->>F: merged, needs-rework, refused
+```
+
+*One wave on the Workflow path, from start to merge, as designed.* Traces to: `plugins/foundry/docs/adr/0009-workflow-factory.md:117-141`, which traces to `skills/run/SKILL.md` sections 6 and 9, `agents/lead.md` sections 1, 3, 6, 7, 9 and 12, and the probe's `journal.jsonl`.
+
+The run on this path, step by step (ADR-0009, Decision 7, "The foreman's procedure"):
+
+- **Plan (step 4).** The foreman writes the brief to `<foundry dir>/plan-brief.md` and runs `factory.ts plan-args`, then `Workflow(plan.js)`, then `factory.ts plan-write` and `plan-check`. `plan.js` runs `foundry-architect` and `foundry-cynic`, and one reconcile round (`foundry-architect-2`, `foundry-cynic-2`) when the cynic disagrees, never a third architect in that run; owner items are collected and returned, never asked from the script. A failed `plan-check` gets one fix run (`foundry-architect-3`, `foundry-cynic-3`, no reconcile), and a second failure goes to the owner (Decision 3).
+- **Approval (step 5).** Merge mode and target are read from `.claude/foundry.json` by `factory.ts settings` (missing `merge` is `sequential`, missing `target` is the current branch), shown in the plan table as information and logged; the foreman never asks for them, in either kind of run. The build adds `"merge": "sequential"` and `"target": "main"` to this repo's `.claude/foundry.json`. Approval itself stays: a plan with a wave 0 still waits for the owner, and `factory.ts approve --by owner` runs only after the owner's yes (Decision 7, section 5; Decision 1, `approve`). The question is deleted from `skills/run/SKILL.md` section 5 itself, so step 5 above stops asking it once `run-procedure` merges.
+- **Start (step 6).** `factory.ts start --wave next` applies `planVerdict`, marks each workflow crew `running`, makes its worktree `.claude/worktrees/foundry-<slug>` on branch `foundry-<slug>`, appends a `by: "factory"` spawn line, and prints the `wave.js` args. Lead crews come back under `leads`, and the foreman starts and merges them as on the lead path; `start` counts both kinds against `maxParallelCrews` (Decision 1, `start`).
+- **Inside each crew (step 7).** `wave.js` runs each crew's chain, `agents/lead.md` sections 1 and 3 to 9 as code: red first (`check --expect red`), split (the crew planner), members (testers before builders, each `integrate`d by the runner), green with the escalation ladder in code, red team when the goal file says yes, `owns-check`, then a fresh judge (Decision 4). A stopped crew returns its tag and text; the foreman handles it as in step 8 and restarts it with `start --slug <s> --resume answers` (Decision 4, "Restarts").
+- **Merge (steps 9 and 10).** `factory.ts finish` records each agent's report under `reports/<slug>/<label>.md`, audits every agent's real model and effort, then merges in plan order: the newest judge file this run must be a PASS with no UNSCOPED line, the red record `checks/<slug>-<n>.json` must exist, `judgeFails` must not exceed `repairBudget`, and the head or patch must match under `mergeHeadVerdict`, a fail-closed wrapper around `headVerdict`. It fast-forwards the target locally and never pushes (Decision 1, "finish, merge step"). Only `merge: sequential` is supported on this path; a `single` run is all lead path.
+
+The red-team bound is an open owner decision: whether every red-team round after a crew's first counts against `repairBudget` on the Workflow path (ADR-0009, Owner decisions, item 1; the ADR recommends yes, and `wave.js` step 5 is written that way). While a wave runs, `/foundry` doesn't see its agents; they show in `/workflows`, and `/foundry` fills each crew in when `finish` records it (ADR-0009, Consequences).
+
+## The owner interview (designed in ADR-0008, not built yet)
+
+[ADR-0008](adr/0008-owner-interview.md) adds a module that asks the owner about requirements before the plan, and a requirements ledger that carries them from run to run. None of it is built at `b81ad50`: `skills/interview/` and `interview/` don't exist yet, and the `interview-ledger`, `interview-skill` and `interview-wiring` crews build them (ADR-0008, Build crews).
+
+| Part | Path | What it does |
+| --- | --- | --- |
+| `foundry:interview` skill | `plugins/foundry/skills/interview/SKILL.md` | Followed by the foreman in the main thread; the only part of foundry that calls `AskUserQuestion` (Decision 1) |
+| Branches | `plugins/foundry/skills/interview/branches.md` | The questions, one `## <id>` section per branch with `Pack`, `Visit`, `Fact`, `Ask`, `Recommend`, `Writes` and `Opens` lines; core branches such as `hosting`, `integrations`, `auth` and `secrets`, and at least two per non-core pack (Decision 5) |
+| Ledger code | `plugins/foundry/interview/ledger.ts` | Pure functions over the branches, the state file and `requirements.md` (Seams 1 to 4) |
+| CLI | `plugins/foundry/interview/cli.ts` | `next`, `remaining`, `check` and `trace`, run as `node <plugin>/interview/cli.ts <command> ...` (Seam 5) |
+| Fact-finder | an `Agent` call, `roles.search` or `general-purpose`, Sonnet at `low` | The one new agent: reads the repo and reports `FACT:`, `UNKNOWN:` and `SPEC:` lines, never a decision (Decisions 4 and 10) |
+
+```mermaid
+flowchart LR
+  owner["Owner<br/>[person]"]
+  fore["Foreman<br/>[main thread: skills/run + skills/interview]"]
+  facts["Fact-finder<br/>[subagent: general-purpose or roles.search, sonnet, low]"]
+  cli["interview/cli.ts<br/>[CLI: Node, no deps]"]
+  req["docs/requirements.md<br/>[file in the project repo]"]
+  state["interview.json<br/>[file in the foundry dir]"]
+  arch["foundry:architect<br/>[subagent: plan and init modes]"]
+  goals["goals/slug.md<br/>[files in the foundry dir]"]
+  owner -- "answers via AskUserQuestion" --> fore
+  fore -- "goal, branch Fact lines" --> facts
+  facts -- "FACT / UNKNOWN / SPEC lines" --> fore
+  fore -- "next, remaining, check, trace" --> cli
+  cli -- "reads" --> state
+  fore -- "writes, commits" --> req
+  fore -- "R-ids of this run" --> arch
+  fore -- "quotes R-n lines" --> goals
+```
+
+*The interview's parts, as ADR-0008 designs them.* Traces to: `plugins/foundry/docs/adr/0008-owner-interview.md:30-50` (the diagram, copied), which traces to `skills/run/SKILL.md:8` (only the foreman talks to the owner) and `:119-127` (the architect brief); the rest is new. The `docs/requirements.md` node shows the ADR's recommended location, which is an open owner decision (below).
+
+```mermaid
+sequenceDiagram
+  participant O as Owner
+  participant F as Foreman
+  participant X as Fact-finder
+  participant C as cli.ts
+  participant A as Architect (plan)
+  F->>O: altitude question (section 1)
+  F->>X: goal + branch Fact lines
+  X-->>F: FACT / UNKNOWN / SPEC
+  loop until NEXT: none or stop
+    F->>C: next ... 3
+    C-->>F: NEXT: lines
+    F->>O: AskUserQuestion, recommended first
+    O-->>F: answers
+  end
+  F->>C: check requirements.md
+  F->>F: commit docs(req)
+  F->>A: brief + R-ids
+  A-->>F: plan.md with Requirements column
+  F->>C: trace ... goals
+```
+
+*One run from goal to the first lead, with the interview in place, as designed.* Traces to: `plugins/foundry/docs/adr/0008-owner-interview.md:175-198`, which traces to `skills/run/SKILL.md:77-127` and `:206-208`; the interview steps are new.
+
+How it runs (ADR-0008, Decisions 2 to 9):
+
+- **Hook point.** A new `### Interview the owner` at the end of `skills/run/SKILL.md` section 1, after the owner picks the goal and before the depth pass: the foreman runs the skill with args `<goal> | <foundry dir>/interview.json | <requirements path>` (Decision 2).
+- **Size.** The foreman sizes the goal `small`, `standard` or `large` and logs it. A small goal gets no fact-finder and no questions, only one functional requirement written from the goal (`Source: goal`). Greenfield, a new product, service or module, an external service, a stored data shape, or three or more non-core packs make it `large`. Nothing but the interview reads the size; whether process size follows it is left to ADR-0009 (Decision 3).
+- **Facts first, then questions.** For `standard` and `large`, the fact-finder runs before any question. A fact settles a branch as context for the architect and never becomes a requirement; only decisions do (Decision 4). `cli.ts next` returns up to three candidate branches, stopping after the first that can open others, so the next question depends on the last answer; the foreman asks them in one `AskUserQuestion` call with the recommended answer first and `Stop the interview` last (Decision 5).
+- **Stop.** The interview ends on `NEXT: none`, a small goal, or the owner's stop. What happens to the branches never asked is an open owner decision: ADR-0008 designs filling them with the recommended answers as `Source: default` requirements, and recommends that, but the owner hasn't ruled (Owner decisions, item 1; Decision 6). The cynic never answers for the owner.
+- **Tracing.** The plan architect's brief gets the requirements path and this run's R-ids; `plan.md`'s crew table gains a `Requirements` column, and every run R-id is served by a crew or listed under `Unserved:`; `plan.json` and `plan.schema.json` don't change. Each goal file gains a `## Requirements` section quoting its R-n lines exactly, checked by `cli.ts trace` before the first lead starts. The judge needs no change: the goal file is already approved scope (Decision 8).
+- **Greenfield.** With no code outside `docs/`, `.claude/`, `README*`, `LICENSE*`, `.gitignore` and `.gitattributes`, section 0 runs the interview at size `large` before `foundry:init`, and passes `Greenfield: <repo>/docs/requirements.md` to the init architect, which then maps planned modules citing R-ids (Decision 9).
+
+Seams the build crews pin (ADR-0008, Seams; the tests are `tests/contract-interview.check.ts`, `tests/interview-skill.check.ts` and `tests/interview-wiring.check.ts`, none of which exists yet):
+
+| Seam | Producer | Consumer | Contract |
+| --- | --- | --- | --- |
+| `interview/ledger.ts` exports `PACKS`, `parseBranches`, `remainingBranches`, `nextBranches`, `parseRequirements`, `goalRequirementLines`, `checkTrace` | `interview-ledger` crew | `cli.ts`, tests | ADR-0008 Seams 1 to 4; erasable TypeScript, Node built-ins only (P19) |
+| `interview/cli.ts` `COMMANDS` and `main(argv)`: `next` 2-3 args, `remaining` 2, `check` 1, `trace` 3; `NEXT:`, `OK:`, `ERROR:`, `TRACE:` lines; exit 0, 1 or 2 | `interview-ledger` crew | the interview and run skills | ADR-0008 Seam 5 |
+| `skills/interview/branches.md` and the skill's `# Requirements` example | `interview-skill` crew | `cli.ts`, the foreman | ADR-0008 Seam 6 |
+| `cli.ts` calls and the goal-file `## Requirements` example in `skills/run/SKILL.md` | `interview-wiring` crew | the foreman | ADR-0008 Seam 7 |
+| `requirements.md` | the foreman, through the interview | the fact-finder (as `SPEC:` lines), the plan architect, goal files, `trace` | `parseRequirements` and its error strings, ADR-0008 Decision 7 |
+
 ## On disk
 
 Everything for a session lives under one folder:
@@ -242,7 +394,15 @@ Everything for a session lives under one folder:
   messages.<n>.jsonl         plugin: the log rolled over, past 3 MiB
   scratch/                   0.3.0, architect: plan-mode scratch output
   scratch/foundry.candidate.json  0.4.0, init: the config it would write, validated before the write (ADR-0002)
+  interview.json             designed (ADR-0008), foreman: the owner interview's state for the run's first goal
+  checks/<slug>-<n>.json     designed (ADR-0009), factory.ts check: one record per done-check run on the Workflow path
 ```
+
+**Designed, not built yet.** `interview.json` ([ADR-0008](adr/0008-owner-interview.md), Decisions 2, 5 and 7) is the interview's state, rewritten by the foreman with Write after each round: a string `goal`, a `size` of `small`, `standard` or `large`, arrays `packs`, `opened` and `requirements` (the R-ids this run accepted), an object `visits` (`{ "by": "fact" | "owner" | "closed" | "default", "note" }` per branch id) and a boolean `stopped`; `cli.ts` exits 2 on a state file without them (Seam 5). The CLI takes the state path as an argument, so another goal can use its own file; only `<foundry dir>/interview.json` is fixed.
+
+`requirements.md` is the interview's stored shape: one file per project, append-only by id, `## R-<n>: <title>` headings with `Status` (`open`, `met`, `dropped` or `replaced by R-<k>`), `Kind` (`functional`, `nfr` or `constraint`), `Added`, `Source` (`owner`, `default`, `goal` or `repo:<path>`), `Example` and `Measure` lines, and a required `## Non-goals` section. `parseRequirements` is its contract. The foreman writes it, commits it alone as `docs(req): ...` before the plan, marks ids `met` at the end of the run, and no crew owns or edits it (ADR-0008, Decision 7). Where it lives is an open owner decision: ADR-0008 designs and recommends the project repo, at `<dir of the architecture key>/requirements.md` (`docs/requirements.md` here and on a greenfield repo), committed so crews' worktrees see it; the alternative is the session's foundry dir under `.git`, which stays private but isn't seen by crews' worktrees or other machines (ADR-0008, Owner decisions, item 2; Decision 2).
+
+`checks/<slug>-<n>.json` ([ADR-0009](adr/0009-workflow-factory.md), Decision 1, `check`) holds the command, exit code, `git rev-parse HEAD` of the checkout and the last 40 lines of output. `check` adds a new file each time and never changes an old one; the crew's lowest-numbered file is its red record, and `finish` refuses a merge when it is missing or has `exit` 0 (Decision 1, "finish, merge step", item 1). On the Workflow path `factory.ts finish` also writes the crew agents' reports, `reports/<slug>/<label>.md`, from the Workflow journal's results, with each file's mtime set to the agent's last transcript timestamp so `latestJudge`'s newest-file rule orders judges truthfully; it never overwrites a report with different text (Decision 1, "finish, record step" and "start, budget and label numbering across runs"). `factory.ts` also writes `plan.json` and `plan.md` (`plan-write`, the plan-file route's rules), the Workflow crews' `status`, and stamped decision lines (ADR-0009, "What moves where").
 
 The plugin writes only `reports/`, the message logs, (0.4.0) the event logs and (0.6.0) the draft `plan.json` and `plan.md` it takes from the plan-mode architect's hand-back ([ADR-0015](../../../docs/adr/0015-agent-worktree-cleanup.md) item 9). The foreman writes `decisions.md`, `plan.md` and `goals/`, as `skills/run/SKILL.md` tells it to; the plugin only stamps the time on new `decisions.md` lines (see Decision times).
 
@@ -267,6 +427,8 @@ From 0.8.0 the `fetch` event records one `WebFetch` or `WebSearch` call ([ADR-00
 
 The first came from `https://user:secret@example.com:8443/docs/api?version=2&lang=en#auth`.
 
+On the Workflow path ([ADR-0009](adr/0009-workflow-factory.md), designed, not built yet), `factory.ts` writes spawn lines in place of the Agent hook. `start` appends one per workflow crew it starts, `{"event":"spawn","crew":slug,"agent":slug,"agentId":null,"type":"workflow-crew","model":null,"effort":null,"by":"factory"}`, and `start --resume stale` appends a fresh one with a new `ts`. `finish` appends, for each crew agent of a run, a `spawn` line with the `agentId`, the meta file's `agentType`, the `model` and `effort` the transcript records and `by: "workflow:<run id>"`, plus a `report` line with `markerOf`'s marker (Decision 1, `start` and "finish, record step"). `finish` merges only crews that have a `by: "factory"` line, and a run with no `by: "workflow:<run id>"` line counts as not recorded. ADR-0009 says `events.schema.json` doesn't change, since both `by` values are strings it allows (Decision 8). `finish` without `--result` also appends `{"v":1,"ts":"...","event":"incomplete","crew":"<slug>","run":"<run id>"}` per crew with a label in the run (Decision 1, `finish`); `incomplete` is not in the schema's `event` enum and the line has no `agent` field, which the schema requires, so as written that line doesn't validate (an open question for the build, not settled here).
+
 ### `decisions.md` grammar (0.4.0)
 
 ```
@@ -278,6 +440,8 @@ The first came from `https://user:secret@example.com:8443/docs/api?version=2&lan
 ```
 
 `<outcome>` is `followed`, `followed (deferred)` or `overruled: <reason>`. One `## Run` heading per run lets `scripts/retro.py` split a session dir that holds several runs; without headings it reports the split as `"not recorded"`. retro also reads the older shapes (date-stamped lines, free-form lines, a literal `HH:MM`) and says `"not recorded"` for what they lack ([ADR-0003](adr/0003-event-log-and-retro.md), sections 2 and 3).
+
+**Goal tags (designed in [ADR-0010](adr/0010-mid-run-intake.md), section 6; not built yet).** A goal added mid-run gets no heading of its own: it shares its run's `## Run` heading, plan, judge window and event log, so retro's run split stays as it is. Every decision line about an added goal starts its decision field with `[<id>] `, the goal's id, for example `- HH:MM | [intake] intake-gates status running | ... | none | followed`; the first is `- HH:MM | [<id>] goal added: <goal on one line> | owner request mid-run | none | followed` (section 4, step 2). Lines about the run's first goal, `run`, carry no tag. `scripts/retro.py` counts lines whose decision field matches `^\[([a-z0-9]+(?:-[a-z0-9]+)*)\] ` per goal, and adds a top-level `goals` key to its output only when `plan.json` has a non-empty `goals` array, so every existing output keeps its keys (section 6).
 
 ### `plan.json`
 
@@ -303,6 +467,70 @@ Validating a plan against the schema checks these constraints of its own:
 - `wave` is an integer of 0 or more; `maxParallelCrews` and `estAgents` are integers of 1 or more; `goal`, `architecture` and `doneCheck` are non-empty strings.
 
 **Plan v2 (0.5.0, [ADR-0004](adr/0004-scope-repair-and-head-gates.md), section 1).** The schema describes versions 1 and 2. `version` is `1` or `2`. A v2 plan requires the top-level `repairBudget`, an integer of 0 or more: how many fresh judges a crew may start after judge FAILs in this run. The architect copies it from `.claude/foundry.json` (default 2). A v1 plan may not carry it, and every v1 plan that was valid stays valid. There is no per-crew budget. The hooks never validate the version. `parsePlan` passes `version` and `repairBudget` through unchecked, and each 0.5.0 rule asks `planAtLeastV2` (an integer `version` of 2 or more) first. So a v3 plan inherits the v2 rules, and a v1 plan, or one with no version, gets 0.4.3 behaviour.
+
+**Plan v3: several goals in one run (designed in [ADR-0010](adr/0010-mid-run-intake.md), sections 1 and 2; not built yet).** Today one plan holds one goal, and the plan-file route never writes over an approved plan, so a goal the owner adds mid-run has no way in but a hand edit (ADR-0010, Context, items 1, 2 and 4). The design keeps one `plan.json` per session and appends goals under the approved plan. The schema gains version `3` (enum `[1, 2, 3]`; v3 requires `repairBudget` like v2) and three fields, all v3 only:
+
+- `goals`, top level, optional: the goals added after the run's approval, in the order they were added, each `{ "id", "goal", "addedAt", "approval", "approvedAt" }`. `id` follows the crew-slug pattern and is never `run`; `approval` is `owner` exactly when the goal has a wave-0 crew; `approvedAt` is null until the foreman logs an `auto` goal or the owner approves an `owner` one, with the same conditional as the top level. The run's first goal stays in the top-level `goal`, `approval` and `approvedAt`, and its id is the reserved word `run`.
+- `crews[].goal`, optional: the goal id the crew serves. Absent means `run`, and `"run"` written out means the same.
+- `crews[].after`, optional: crews, in any goal, that must be `merged` or `dropped` before this crew starts; the only cross-goal ordering.
+
+A conditional forbids all three below version 3, so every v1 and v2 plan validates unchanged and every crew of one belongs to `run`. Waves are numbered per goal: an added goal's first wave is its wave 0, and the wave-0 and `ownerApproval` rules apply within each goal. The schema can't check that a crew's `goal` names an entry or that `after` names a crew; the hooks do (see [Plan gates](#plan-gates-030)).
+
+Goals reach the plan through a new architect mode and a new hook route (ADR-0010, section 2). A main-session `foundry:architect` call whose prompt's first line is `Mode: amend` is tracked like a plan call, and its hand-back carries a ```` ````json plan-amend.json ```` block, `{ "goal": { "id", "goal", "approval" }, "crews": [ ... ] }`, and a ```` ````markdown plan.md ```` block. The plan-amend route calls `amendPlan(existing, amend, now)`, a pure function in the new `hooks/intake.ts`, inside the same chain as the plan-file route, writes the result to `plan.json`, and writes the markdown block to `<foundry dir>/plan-<id>.md`, never to `plan.md`. `amendPlan` refuses, and the route writes nothing and logs `plan-amend route wrote nothing: <reason>`, when the plan isn't approved yet (the foreman then re-plans in plan mode), when a block or field is malformed, when a slug collides with another goal's crew, when an `after` entry names no crew, when `approval` doesn't match the goal's wave 0, or when the goal already exists and is approved or has started crews. On success it changes only what it adds: the amend's crews get `goal` and `status: "planned"`, `version` becomes 3, and a new goal and its crews go at the end (add path), or a still-unapproved goal's crews are swapped in place keeping its `addedAt` and queue position (replace path, the reconcile round's). Every other field and every other goal's crew deep-equals its value before, which is what keeps existing crews' approval intact, and the same amend sent twice leaves the file byte-identical. `routePlanFiles` and `keepReason` don't change: a `Mode: plan` hand-back over an approved plan is still kept.
+
+```mermaid
+flowchart LR
+  owner["Owner<br/>[person]"]
+  foreman["Foreman<br/>[main session: /foundry:run]"]
+  arch["architect-amend-&lt;id&gt;<br/>[agent: foundry:architect, Mode: amend]"]
+  cynic["Cynic<br/>[agent: foundry:cynic]"]
+  route["plan-amend route<br/>[hook: register.ts + intake.ts amendPlan]"]
+  plan[("plan.json v3, plan-&lt;id&gt;.md<br/>[foundry dir]")]
+  gate["gateOf / planVerdict<br/>[hook: tool.call on Agent]"]
+  status["/foundry<br/>[command: statusOf, planLines]"]
+  lead["Leads<br/>[agents: foundry:lead]"]
+  owner -->|"new goal mid-run"| foreman
+  foreman -->|"Mode: amend brief: goal, in-flight crews"| arch
+  arch -->|"plan-amend.json + plan.md blocks"| route
+  route -->|"append goal + crews, approvedAt null"| plan
+  foreman -->|"verdicts, collisions"| cynic
+  foreman -->|"goals[i].approvedAt, status"| plan
+  foreman -->|"start ready leads"| gate
+  plan -->|"read fresh"| gate
+  gate -->|"allow or refuse with reason"| lead
+  plan -->|"goals, crews, wait text"| status
+  status -->|"every goal and what each crew waits on"| owner
+```
+
+*What mid-run intake adds around `plan.json`, as designed.* Traces to: `plugins/foundry/docs/adr/0010-mid-run-intake.md:142-166` (the diagram, copied), which traces to `hooks/register.ts:873-905` (plan route and its chain), `:327-348` (gates), `:1261-1312` (status), `:1681-1694` and `:1759-1761` (architect detection and hand-back), and `skills/run/SKILL.md:104-139` (plan architect brief), line numbers the ADR took at `fa0fa9f`, which `b81ad50` leaves unchanged in both files.
+
+```mermaid
+sequenceDiagram
+  participant O as Owner
+  participant F as Foreman
+  participant A as architect-amend-<id>
+  participant H as Hooks
+  participant C as Cynic
+  participant L as Leads
+  O->>F: new goal while crews run
+  F->>F: log "[<id>] goal added", short depth pass
+  F->>A: Agent, first line "Mode: amend"
+  A-->>H: hand-back with plan-amend.json and plan.md blocks
+  H->>H: amendPlan: validate, append goal and crews, write plan.json and plan-<id>.md
+  F->>F: find -newer marker, check ownership and after
+  F->>C: review the goal's verdicts and collisions
+  alt goal approval is owner
+    F->>O: the goal's crew table
+    O-->>F: approve
+  end
+  F->>H: set goals[i].approvedAt, then status running
+  F->>L: start each crew whose wait text is "ready to start"
+  H-->>F: refuse with the gate's reason when one applies
+```
+
+*Taking a goal mid-run, end to end, as designed.* Traces to: `plugins/foundry/docs/adr/0010-mid-run-intake.md:168-192`, which traces to `skills/run/SKILL.md:104-139` (marker and `find -newer`), `:150-162` (cynic review), `:172-204` (approval), `:206-264` (start and refusals), and `hooks/register.ts:1681-1694` and `:1759-1761`.
+
+The foreman's side is a new `### Take a new goal mid-run` in `skills/run/SKILL.md` section 7 (ADR-0010, section 4): an owner message asking for work no crew covers, sent after `approvedAt` is set, is a new goal and the owner's ruling on frozen scope; the foreman acknowledges it in one line, logs the tagged `goal added` line, runs a short altitude and depth pass, starts the amend architect, checks the amendment, has a cynic review it with one reconcile round at most, and approves and freezes the goal's scope with section 5's rules applied to that goal alone. The top-level `approval` and `approvedAt` and other goals' entries are never edited, and merge mode and target are the run's. Whether an added goal with a wave-0 crew waits for the owner's approval of its plan before it starts is an open owner decision; ADR-0010 designs the `owner` approval that way and recommends yes (ADR-0010, Owner decisions).
 
 One file lives in the project repo, not the foundry folder:
 
@@ -380,6 +608,7 @@ All of these are in `hooks/register.ts`.
 | `tool.call` on `Agent` | Refuses crew agents' calls without `model` or `effort`, or with `effort: "max"`. Adds the report-path note to calls that start a lead or a crew member. |
 | `tool.call` on `Agent`, 0.3.0 | Refuses starting a lead that `plan.json` holds back: the run-level and crew-level approval gates, the wave gate and the parallel cap (see [Plan gates](#plan-gates-030)). |
 | `tool.call` on `Agent`, 0.5.0 | On a v2 or later plan: refuses a main-session `foundry:*` call with no `model` or a missing or unknown `effort`, and refuses a crew's judge-named spawn once its repair budget is spent (see [Repair budget and head guard](#repair-budget-and-head-guard-050)). |
+| `tool.call` on `Workflow`, designed in ADR-0009, not built yet | For a main-session `Workflow` call only: refuses a script that isn't foundry's `plan.js` or `wave.js` but names a `foundry:` type, a foundry script with a bad `args.foundry` or roles table, a plan script on an approved plan, and a wave script whose crews aren't `running` or fail `planVerdict` (see [Workflow calls](#workflow-calls-designed-in-adr-0009-not-built-yet)). |
 | `tool.call` on `WebFetch`, `WebSearch`, 0.8.0 | The fetch gate: runs `fetchVerdict` on every call in the session, whoever makes it, and appends its `fetch` line to `events.jsonl` when there is one. Allows every call today (see [Fetch gate](#fetch-gate-080)). |
 | `tool.call` on `Write`, `Edit` | Stamps the clock's time on new lines of this session's `decisions.md`; from 0.4.0, on every literal `HH:MM` too. |
 | `tool.call`, any tool | Records activity, the main session's too. On `SubagentHandback`, refuses an empty hand-back from a crew agent and captures the report. |
@@ -412,6 +641,28 @@ The model check runs first. In 0.4.3 the foreman's own Agent calls aren't checke
 
 A call that starts a lead from the main thread, or any agent from inside a crew, gets this note in its result: `[foundry] If <name>'s report does not reach you, read <path> once it stops.`
 
+### Workflow calls (designed in ADR-0009, not built yet)
+
+A Workflow script's `agent()` is not an Agent tool call, so none of the Agent gates above runs for it: the probe's cynic with no model ran on the session model, and a lead started past the cap ([ADR-0009](adr/0009-workflow-factory.md), Probe). ADR-0009, Decision 6, adds three things to `hooks/register.ts` and changes nothing else in it:
+
+- `export` on the existing `fencedBlock` (`register.ts:848`), so `factory.ts plan-write` applies the plan-file route's block rules.
+- Two pure exported functions. `workflowRoleVerdict(roles)` refuses a roles table with a model other than `opus` or `sonnet`, an effort other than `low` or `medium`, a missing model or effort, a `lead` or `devops` role, or a role key that doesn't match `^[a-z]+$`. `workflowCallVerdict(plan, input)` calls a script foundry's when its resolved `scriptPath` is `<pluginDir>/workflows/plan.js` or `wave.js`, or its text equals one of those files byte for byte, and then checks, in order: no plan or a plan below v2, undefined; a script that isn't foundry's but contains `foundry:`, or a `scriptPath` that can't be read, refused with "foundry agents run in a Workflow only from the plugin's plan.js and wave.js"; any other script that isn't foundry's, undefined; a foundry script with no `args.foundry` object, refused; then `workflowRoleVerdict(args.foundry.roles)`; `kind: "plan"` on a plan whose `approvedAt` is set, refused; `kind: "wave"`, refused for any crew whose `status` isn't `running` or that `planVerdict` refuses. Every refusal starts `[foundry] Refused:`.
+- One handler, `on('tool.call', { tool: 'Workflow' }, ...)`, right after the Agent handler, for main-session calls only (`e.agentId === undefined`): it reads the plan within `PLAN_READ_MS`, returns the verdict's deny or calls `next(e)`, and logs each refusal with `logRule`.
+
+The three crew-keyed Agent gates, `agentVerdict`, `effortVerdict` and the repair-budget gate, key on `crewOf(callerId)` and can't fire for a workflow agent, which has no `foundry:lead` ancestor. On the Workflow path the script's `spawn()` (throws on a role without model or allowed effort), `workflowRoleVerdict` in `start`, `plan-args` and this gate, `wave.js`'s spend count and `finish`'s transcript audit and `judgeFails` check replace them: those rules are the script's, the CLI's and the audit's, not a hook's refusal (ADR-0009, Decision 4, "What replaces the lead's gates"). `finish` also audits every Workflow run of the session since the newest `## Run` header that is foundry's or holds a `foundry:*` agent, and while any entry stands it merges nothing (Decision 1, "finish, session audit").
+
+If a copy of a script is needed because Workflow refuses a `scriptPath` inside the plugin, `plan-args` and `start` take `--scripts-dir` and copy the script byte for byte as `foundry-plan.js` or `foundry-wave.js`; the gate still recognises the copy by its text, and an inline `script` with the same text too (Decision 6, "scriptPath fallback").
+
+Seams (ADR-0009, Seams to pin; none of these tests exists yet):
+
+| Seam | Producer | Consumer | Contract | Pinned by |
+| --- | --- | --- | --- | --- |
+| `fencedBlock` export | hooks | `factory.ts plan-write` | the plan-file route's block rule, `register.ts:879-904` | `tests/workflow-gate.check.ts` |
+| `workflowRoleVerdict`, `workflowCallVerdict` | hooks | the Workflow handler, `factory.ts` | ADR-0009 Decisions 2 and 6 | `tests/workflow-gate.check.ts` |
+| `factory.ts` commands, flags, one-line JSON output, exit codes 0, 1 and 2 | `bin/factory.ts` | the foreman, `wave.js`'s runner | ADR-0009 Decision 1 | `tests/factory.check.ts`, with fixtures in `tests/fixtures/workflow-run/` |
+| `plan.js` and `wave.js` control flow, `roles.json` | `workflows/` | the Workflow tool | ADR-0009 Decisions 2 to 4 | `tests/workflows.check.ts`, with stubbed `agent()` |
+| `settings` on this repo's `.claude/foundry.json` | `factory.ts` | the foreman | `{"merge":"sequential","target":"main","source":".claude/foundry.json"}` | `tests/run-procedure.check.ts` |
+
 ### Plan gates (0.3.0)
 
 The gates apply to an Agent call from the main thread that starts a `foundry:lead` with a non-empty `name` ([ADR-0001](adr/0001-design-phase.md), section 9). A lead started by another agent, or with no name, is never gated. On every such call the hook reads `<foundry dir>/plan.json` fresh, so the foreman's edits count at once, and it never writes the file. A leading UTF-8 BOM is stripped before parsing.
@@ -428,6 +679,21 @@ The gates run in this order, and the first match refuses the call with `[foundry
 In each reason, `<slug>` is the plan slug, so a successor's refusal names its base. Entries with the target's slug are left out of the wave and cap checks, so a crew can't hold itself back, and a restart or a successor whose base already says `running` doesn't count against the cap.
 
 With no foundry dir, no plan file, a file that is empty, not JSON, not an object or without a `crews` array, or a name the plan doesn't hold, no gate applies, so 0.2.1 runs keep working. Any error while reading or checking the plan is logged and lets the call through, like every other foundry hook. The gates trust the foreman's `status` field: a crew marked `merged` too early gets past the wave gate. The judge-gated merge is still the real control.
+
+**Goal-aware gates (designed in [ADR-0010](adr/0010-mid-run-intake.md), section 3; not built yet).** For plan v3, `planVerdict` keeps its signature and prefix but is rebuilt on a new `register.ts` function, `gateOf(plan, name): { deny, waits } | undefined`, which gives each refusal a `/foundry` wait text too. A crew's goal is `goalOf(crew)`, exported from `hooks/intake.ts`: its `goal` when that is a string, else `run`. The checks, first match wins:
+
+| # | Gate | Refusal reason | `/foundry` wait text |
+| --- | --- | --- | --- |
+| 1 | run approval, unchanged | `this run changes the design; get the owner's approval first` | `waits for the owner's approval of the plan` |
+| 2 | the crew's goal isn't `run` and names no entry in `goals` | `<slug> names goal <id>, which isn't in the plan` | `waits for a fix: goal <id> isn't in the plan` |
+| 3 | the goal's `approval` is `owner` and its `approvedAt` is null | `goal <id> changes the design; get the owner's approval first` | `waits for the owner's approval of goal <id>` |
+| 4 | `ownerApproval` is `pending`, unchanged | `<slug> waits for the owner's approval` | `waits for the owner's approval` |
+| 5 | an `after` entry names no plan crew | `<slug> waits for <x>, which isn't in the plan` | `waits for a fix: <x> isn't in the plan` |
+| 6 | an `after` crew isn't `merged` or `dropped` | `<slug> waits for <a, b> to merge` | `waits for <a, b> to merge` |
+| 7 | wave gate, within the crew's goal only | `wave <n> isn't merged yet: <slugs>` for `run`; `wave <n> of goal <id> isn't merged yet: <slugs>` for an added goal | `waits for wave <n> to merge: <slugs>` |
+| 8 | parallel cap, global across goals, unchanged | `<running> crews running, the cap is <cap>; start <slug> when one merges` | `waits for a free slot: <running> of <cap> running` |
+
+So each goal runs its own wave sequence, and a new goal's wave 0 can start while the run goal is mid-wave; `after` is the only coupling between goals. All goals share one `maxParallelCrews` and one queue, the `crews` array, with added goals' crews at its end, so at equal readiness older goals' crews start first. The foreman starts the planned crews whose wait text is `ready to start`, in array order, up to the free slots. Disjoint ownership across goals stays a plan-time rule that the amend architect and the foreman enforce; the hooks never compare `owns`. The successor and duplicate-slug rules don't change, and on a v2 plan every crew is in `run`, so the gates behave as above.
 
 The idle-lead prompt also reads the plan, to name a successor the gates map back to the same crew: a plan slug `C` gets `C-2`, a successor `B-<n>` gets `B-<n+1>`, counting past any name that is itself a plan slug (plan `[auth, auth-2]` gives `auth-3`). It waits at most 2 seconds for that read, on the engine clock. A read that hasn't settled by then, or one that fails, gives the 0.2.1 name (`auth` to `auth-2`, `gateway-3` to `gateway-4`), and the prompt still goes out.
 
@@ -644,9 +910,28 @@ Prints `Crews (<n>):` and one line per lead: name, status (`ended` once the agen
 
 From 0.3.0, `/foundry` first shows the plan, read through the same guard as the gates: `Plan (<n> crews, approval <approval>):`, with `, waiting for the owner` added while `approval` is `owner` and `approvedAt` is null, then one line per crew sorted by wave, ties in `crews` order: `- wave <wave>: <slug>, <verdict>, <status>`, with `, waits for the owner's approval` when `ownerApproval` is `pending`. A missing field prints as `?`. Then come the lines above. With no plan, or one it can't read, the output is the 0.2.1 output.
 
+**Goals and wait reasons (designed in [ADR-0010](adr/0010-mid-run-intake.md), section 5; not built yet).** `planLines` changes in two ways. Every `planned` crew gets `, ` plus its wait text from `gateOf` (see [Plan gates](#plan-gates-030)), or `, ready to start` when no gate refuses it; other statuses get no suffix, and a pending crew's line reads as before. When `goals` is a non-empty array, the header becomes `Plan (<n> crews, <k> goals, approval <a><waiting>):` with `k = 1 + goals.length`, and each goal gets a line, `Goal <id> (approval <a>[, waiting for the owner][, done]): <text>`, with its crews under it in today's order: `run` first, then `goals` in array order, then any unknown ids crews name, as `Goal <id> (not in the plan):`. `<text>` has each whitespace run collapsed to one space and is cut to its first 99 characters plus `…` when longer than 100. Without `goals` there are no goal lines and the header is today's. ADR-0010's example, a plan with the run's four crews and one added goal `intake`:
+
+```
+Plan (7 crews, 2 goals, approval owner):
+Goal run (approval owner): Make foundry prod-grade on quality and bloat, from the reviewed anti-bloat analysis: (1) hook clean…
+- wave 0: eval-design, design, merged
+- wave 1: hooks-cleanup, extend, merged
+- wave 1: evals-build, change, running
+- wave 2: prompt-rules, change, planned, waits for wave 1 to merge: evals-build
+Goal intake (approval owner): Mid-run intake: start new crews mid-run, tell the owner what is in progress, take more work
+- wave 0: intake-design, design, running
+- wave 1: intake-gates, change, planned, waits for prompt-rules to merge
+- wave 1: intake-retro, change, planned, waits for prompt-rules to merge
+```
+
+The live-crew block below it doesn't change, and the foreman answers a progress question from this view or from `plan.json`, one line per goal.
+
 ### Failing open
 
 Each hook step runs inside a guard. If foundry's code throws, the guard logs `foundry: <step> failed, letting the call through: <error>` or `foundry: a hook failed and was skipped: <error>` to the debug log, and the call goes on as if the plugin weren't installed. A step that fails refuses nothing.
+
+The Workflow handler (designed in [ADR-0009](adr/0009-workflow-factory.md), Decision 6; not built yet) fails open the same way, through `.catch(failOpen)`. So a throw in the Workflow gate, or a `tool.call` that never fires for the main session's Workflow call, lets the run through unchecked. The gates don't rest on that hook alone: `factory.ts start` refuses a crew `planVerdict` refuses, `spawn()` in `plan.js` and `wave.js` throws before `agent()` on a role that is missing or fails `workflowRoleVerdict`'s rules, and `finish`'s session audit blocks every merge while it finds a `foundry:*` agent in a run that isn't foundry's, or an agent of an in-scope run with no explicit model or a model family other than opus or sonnet. So without the hook an agent on the wrong model can still run and spend tokens, but its work can't reach the target (ADR-0009, Decision 6).
 
 ## Failure modes and recovery
 
@@ -683,5 +968,6 @@ From 0.5.0, on a v2 plan, the judge FAILs a crew may repair are bounded. Once a 
 - Where an organization manages Claude Code, `SubagentStop` hooks run only in plugins it lists. There, reports come only from the hand-back tool. The lead stop gate is a `SubagentStop` hook too, so it shouldn't run there either; that is inferred from the code, not seen.
 - `/goal` is session-only: a Stop hook on the main session judges it, so a lead can't use it. Foundry uses the goal file and the lead stop gate instead (backlog item 20).
 - The gate's two-block bound relies on the engine setting `stop_hook_active` on the stop after a block. That comes from the hook type docs and hasn't been seen live. Claude Code also lets a stop through itself after 8 consecutive blocks.
+- The Workflow path ([ADR-0009](adr/0009-workflow-factory.md), "Probe") is a design, and four facts it touches are unverified. Each has a design answer that doesn't rely on it: whether `tool.call` fires for the main session's own `Workflow` call (if not, the CLI and `finish`'s audit hold the gates); whether `scriptPath` accepts a file inside the plugin (the fallback is the `--scripts-dir` copy, then the inline `script`, then `start --no-workflow`); whether the Workflow call blocks the foreman's turn until the script returns (the stale-run rules cover a dead run either way); and what `agent()` returns when the agent ends with SubagentHandback, not final text. Also unverified: that a `foundry:lead` run by `agent()` has no Agent tool (inferred from `kit:builder` in probe 2); whether a SendMessage from a workflow agent reaches the foreman or a lead; whether Workflow accepts a script the CLI, not the harness, placed in the session's `workflows/scripts/` dir; and that agent transcripts are appended every turn, which the stale check relies on. The stale rule's `STALE_MS` of 30 minutes is a chosen margin, not a proof.
 
 *Drafted with AI assistance and reviewed by the author.*
