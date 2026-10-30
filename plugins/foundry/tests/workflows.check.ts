@@ -539,6 +539,7 @@ const BAD_PLANS = [
   ['a builder not after every tester', PLAN(T1, { ...B1, after: [] }), 'build-it'],
   ['duplicate task names', PLAN(T1, { ...T1, files: ['tests/b.check.ts'] }, B1), 'write-tests'],
   ['an after name that does not exist', PLAN(T1, { ...B1, after: ['write-tests', 'ghost-task'] }), 'ghost-task'],
+  ['a files entry that is a glob', PLAN(T1, B1, { ...B1, name: 'build-more', files: ['src/**'], after: ['write-tests'] }), 'src/**'],
 ]
 for (const [name, bad, token] of BAD_PLANS) {
   t(`wave split: ${name} triggers one planner-2 whose prompt lists the errors; a valid second plan proceeds`, async () => {
@@ -641,6 +642,37 @@ t('wave members: an integrate conflict spawns the resolver with the worktree, th
   has(p, 'Foundry-Role: resolver')
   assert.ok(!Object.hasOwn(call(r, 'a-resolver').opts, 'isolation'))
   assert.equal(r.timeline.filter((e) => e === 'start:runner:a:integrate:feat/t').length, 2)
+  passedShape(r.res[0], 'a', HEAD, 'a-judge')
+})
+t('wave members: the integrate-conflict resolver prompt names git -C with the crew worktree', async () => {
+  const r = await runWave([entry('a')], {
+    labels: base('a', { 'a-resolver': marked('DONE', 'resolved') }),
+    runner: ({ key, n }) => (key === 'integrate:feat/t' && n === 0 ? rj({ merged: false, conflicts: ['src/CONFLICT-FILE.ts'] }) : undefined),
+  })
+  has(call(r, 'a-resolver').prompt, 'git -C /wt/a')
+  passedShape(r.res[0], 'a', HEAD, 'a-judge')
+})
+t('wave runner quoting: a worktree with a space is single-quoted after --cwd', async () => {
+  const seen = []
+  const e = entry('a', { worktree: '/w t/a' })
+  const r = await runWave([e], { labels: base(), runner: ({ cmd, prompt }) => { if (cmd === 'check') seen.push(prompt); return undefined } })
+  assert.ok(seen.length > 0)
+  for (const p of seen) has(p, "--cwd '/w t/a'")
+  passedShape(r.res[0], 'a', HEAD, 'a-judge', e)
+})
+t('wave runner quoting: a dir with a space is single-quoted after --dir', async () => {
+  const w = waveArgs([entry('a')])
+  const r = await exec('wave.js', { ...w, foundry: { ...w.foundry, dir: '/proj x/.foundry' } }, { labels: base() })
+  assert.deepEqual(r.unscripted, [])
+  if (r.error) throw r.error
+  has(r.calls[0].prompt, "--dir '/proj x/.foundry'")
+  passedShape(r.result[0], 'a', HEAD, 'a-judge')
+})
+t('wave runner quoting: a branch with an apostrophe is quoted with the embedded quote written as quote-backslash-quote-quote', async () => {
+  const r = await runWave([entry('a')], { labels: base('a', { 'a-tester': done("feat/it's", 'PROOF-T') }), runner: ({ cmd }) => (cmd === 'integrate' ? rj({ merged: true }) : undefined) })
+  const c = r.calls.find((x) => x.runner?.cmd === 'integrate' && x.prompt.includes('it'))
+  assert.ok(c, 'integrate call for the apostrophe branch')
+  has(c.prompt, "--branch 'feat/it'\\''s'")
   passedShape(r.res[0], 'a', HEAD, 'a-judge')
 })
 t('wave members: a second integrate failure stops BLOCKED at the task name and starts no later task', async () => {
@@ -793,6 +825,28 @@ t('wave scope: an owns-check failure stops QUESTION at scope naming the files ou
 })
 
 // ---------------------------------------------------------------- wave.js: judge
+
+const UNS_PASS = `VERDICT: PASS\n\n## Findings\n${reg.UNSCOPED}no other caller\n\n## Proof checked\nHead: ${HEAD}\nPatch: ${PATCH}\n`
+t('wave judge: a PASS with an UNSCOPED line under ## Findings is a FAIL: fix builder quotes it, then a fresh judge passes', async () => {
+  assert.equal(judgeRuling(UNS_PASS).unscoped, 1)
+  const r = await runWave([entry('a')], { labels: { ...base('a', { 'a-judge': UNS_PASS, 'a-judge-2': PASS }), 'a-builder-2': done('feat/f1') } })
+  passedShape(r.res[0], 'a', HEAD, 'a-judge-2')
+  const p = call(r, 'a-builder-2').prompt
+  has(p, `${reg.UNSCOPED}no other caller`)
+  assert.ok(!/revert/i.test(p), 'the fix prompt must not say to revert')
+})
+t('wave judge: an UNSCOPED PASS with repairBudget 0 stops BLOCKED at judge with spend 1', async () => {
+  const r = await runWave([entry('a')], { repairBudget: 0, labels: base('a', { 'a-judge': UNS_PASS }) })
+  stopped(r.res[0], 'BLOCKED', 'judge')
+  assert.ok(r.res[0].text.startsWith('BLOCKED: repair budget spent: a, spend 1, repairBudget 0'), r.res[0].text)
+})
+t('wave judge: an UNSCOPED line under a section other than ## Findings leaves a PASS a PASS', async () => {
+  const text = `VERDICT: PASS\n\n## Examined\n${reg.UNSCOPED}no other caller\n\n## Proof checked\nHead: ${HEAD}\nPatch: ${PATCH}\n`
+  assert.equal(judgeRuling(text).unscoped, 0)
+  const r = await runWave([entry('a')], { labels: base('a', { 'a-judge': text }) })
+  passedShape(r.res[0], 'a', HEAD, 'a-judge')
+})
+
 
 t('wave judge: the judge is a-judge and its prompt carries goal file, checkout, head, branch, high-impact, architecture, adrs', async () => {
   const r = await runWave([entry('a')], { labels: base() })
@@ -1018,6 +1072,7 @@ t('wave resume merge-ready: a sync conflict spawns the resolver in the crew work
   const r = await runWave([entry('a', { resume: 'merge-ready' })], { labels: { 'a-resolver': marked('DONE', 'ok'), 'a-judge': PASS }, runner: ({ key, n }) => (key === 'sync' && n === 0 ? rj({ merged: false, conflicts: ['SYNC-CONFLICT.ts'] }) : undefined) })
   const p = call(r, 'a-resolver').prompt
   has(p, '/wt/a')
+  has(p, 'git -C /wt/a')
   has(p, 'Foundry-Role: resolver')
   assert.equal(r.timeline.filter((e) => e === 'start:runner:a:sync').length, 2)
   assert.ok(idx(r, 'end:a-resolver') < idx(r, 'start:runner:a:check:green'))
