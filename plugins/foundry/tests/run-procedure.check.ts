@@ -176,8 +176,11 @@ describe('run-procedure: foundry-config.schema.json', () => {
 })
 
 describe('run-procedure: plugin.json and README', () => {
-  test('plugin.json version is exactly 0.11.0', () => {
-    assert.equal(json(PLUGIN, '.claude-plugin', 'plugin.json').version, '0.11.0')
+  test('plugin.json version is the newest CHANGELOG heading, 0.11.0 or later', () => {
+    const version = json(PLUGIN, '.claude-plugin', 'plugin.json').version as string
+    assert.equal(version, CHANGELOG_RAW.match(/^## (\d+\.\d+\.\d+)$/m)?.[1], 'plugin.json version matches the first CHANGELOG heading')
+    const [major, minor] = version.split('.').map(Number)
+    assert.ok(major! > 0 || minor! >= 11, `${version} is 0.11.0 or later`)
   })
   test('README has a Workflow engine section', () => {
     assert.match(README_RAW, /^#{2,3} [^\n]*Workflow engine[^\n]*$/im, 'a heading naming the Workflow engine')
