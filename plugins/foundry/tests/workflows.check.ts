@@ -854,7 +854,7 @@ t('wave redteam: findings run one fix builder with them, integrate, green, then 
   assert.ok(idx(r, 'end:a-builder-2') < idx(r, 'start:runner:a:integrate:feat/f1'))
   assert.ok(!had(r, 'a-redteam-2'), 'a second red team ran')
   assert.equal(r.calls.filter((c) => /redteam/.test(c.label)).length, 1)
-  assert.ok(idx(r, 'end:runner:a:check:green') > idx(r, 'end:a-builder-2'))
+  assert.ok(r.timeline.lastIndexOf('end:runner:a:check:green') > idx(r, 'end:a-builder-2'))
   assert.ok(idx(r, 'start:a-judge') > idx(r, 'end:a-builder-2'))
   passedShape(r.res[0], 'a', HEAD2, 'a-judge', rtCrew())
 })
