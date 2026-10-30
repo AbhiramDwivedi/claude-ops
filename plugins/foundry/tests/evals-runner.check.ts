@@ -37,8 +37,8 @@ function waitGone(extra: Set<string>, ms = 10000) {
 // ---- Seam 5: runSnippet cleans up ----
 test('runSnippet: removes its foundry-snippet-* temp dir after ok, failing, unfilled and worktree runs', () => {
   const before = snippetDirs()
-  const a = runSnippet('echo hi')
-  const b = runSnippet('exit 3')
+  const a = runSnippet('echo hi', {})
+  const b = runSnippet('exit 3', {})
   const c = runSnippet('echo <not-filled>', {})
   const d = runSnippet('echo hi', {}, 'worktree')
   const e = runSnippet('echo hi', {}, 'subdir')
@@ -57,14 +57,14 @@ test('runSnippet: removes its foundry-snippet-* temp dir after ok, failing, unfi
 // ---- Seam 5: runSnippet really executes ----
 test('runSnippet: a script that prints a random token gives the token back on stdout', () => {
   const t = token()
-  const r = runSnippet(`echo ${t}`)
+  const r = runSnippet(`echo ${t}`, {})
   assert.equal(r.ok, true)
   assert.equal(r.code, 0)
   assert.equal(r.stdout.trim(), t)
 })
 
 test('runSnippet: the fixture repo has a.txt at root (test -f a.txt)', () => {
-  const r = runSnippet('test -f a.txt && echo yes')
+  const r = runSnippet('test -f a.txt && echo yes', {})
   assert.equal(r.ok, true)
   assert.equal(r.stdout.trim(), 'yes')
   const sub = runSnippet('test -f a.txt && echo yes', {}, 'subdir')
@@ -90,12 +90,12 @@ test('runSnippet: the worktree toplevel differs from the root toplevel, and neit
 })
 
 test('runSnippet: a failure inside a pipe fails the script (pipefail), and an unset variable fails it (set -u)', () => {
-  assert.equal(runSnippet('false | cat').ok, false)
-  assert.equal(runSnippet('echo "$FOUNDRY_NOT_SET_' + token() + '"').ok, false)
+  assert.equal(runSnippet('false | cat', {}).ok, false)
+  assert.equal(runSnippet('echo "$FOUNDRY_NOT_SET_' + token() + '"', {}).ok, false)
 })
 
 test('runSnippet: stdout and stderr come back with CR dropped', () => {
-  const r = runSnippet("printf 'a\\r\\nb\\r\\n'; printf 'e\\r\\n' >&2")
+  const r = runSnippet("printf 'a\\r\\nb\\r\\n'; printf 'e\\r\\n' >&2", {})
   assert.equal(r.stdout.includes('\r'), false)
   assert.equal(r.stderr.includes('\r'), false)
   assert.equal(r.stdout, 'a\nb\n')
@@ -117,7 +117,7 @@ test('runSnippet: drops GIT_* variables from the caller environment', () => {
   process.env.GIT_DIR = join(ROOT, '.git')
   process.env.GIT_WORK_TREE = ROOT
   try {
-    const r = runSnippet('git rev-parse --show-toplevel')
+    const r = runSnippet('git rev-parse --show-toplevel', {})
     assert.equal(r.ok, true, r.stderr)
     assert.notEqual(norm(r.stdout.trim()), norm(realpathSync.native(ROOT)))
   } finally {
