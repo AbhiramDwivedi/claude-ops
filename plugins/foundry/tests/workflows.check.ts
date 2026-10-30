@@ -554,6 +554,39 @@ for (const [name, bad, token] of BAD_PLANS) {
     assert.ok(!r.labels.some((l) => /a-(planner-3|tester|builder|judge)/.test(l)))
   })
 }
+const PF_OWNS = ['plugins/foundry/**', './plugins/**', '/plugins/**', 'src/**', 'tests/*.ts']
+const NONCANON = [
+  ['a dot segment', 'plugins/foundry/workflows/./wave.js'],
+  ['a double slash', 'plugins/foundry//workflows/wave.js'],
+  ['a backslash', 'plugins/foundry/workflows\wave.js'],
+  ['a dot-dot segment', 'plugins/foundry/../../package.json'],
+  ['a leading ./', './plugins/foundry/workflows/wave.js'],
+  ['a leading slash', '/plugins/foundry/workflows/wave.js'],
+]
+for (const [name, file] of NONCANON) {
+  const bad = PLAN(T1, B1, { ...B1, name: 'build-more', files: [file], after: ['write-tests'] })
+  t(`wave split: a non-canonical files entry (${name}) triggers one planner-2 whose prompt lists it; a valid second plan proceeds`, async () => {
+    const r = await runWave([entry('a', { owns: PF_OWNS })], { labels: base('a', { 'a-planner': bad, 'a-planner-2': PLAN() }) })
+    has(call(r, 'a-planner-2').prompt, file)
+    assert.ok(!had(r, 'a-planner-3'))
+    passedShape(r.res[0], 'a', HEAD, 'a-judge', entry('a', { owns: PF_OWNS }))
+  })
+}
+t('wave split: a non-canonical files entry, still invalid on planner-2, stops BLOCKED at split with no planner-3 and no member', async () => {
+  const bad = PLAN(T1, B1, { ...B1, name: 'build-more', files: ['plugins/foundry/workflows/./wave.js'], after: ['write-tests'] })
+  const r = await runWave([entry('a', { owns: PF_OWNS })], { labels: base('a', { 'a-planner': bad, 'a-planner-2': bad }) })
+  stopped(r.res[0], 'BLOCKED', 'split')
+  assert.ok(!r.labels.some((l) => /a-(planner-3|tester|builder|judge)/.test(l)))
+})
+t('wave split: files differing only in case count as a shared file; planner-2 error names both tasks', async () => {
+  const X = { ...B1, name: 'build-upper', files: ['plugins/foundry/workflows/Wave.js'], after: ['write-tests'] }
+  const Y = { ...B1, name: 'build-lower', files: ['plugins/foundry/workflows/wave.js'], after: ['write-tests'] }
+  const r = await runWave([entry('a', { owns: PF_OWNS })], { labels: base('a', { 'a-planner': PLAN(T1, X, Y), 'a-planner-2': PLAN() }) })
+  const p = call(r, 'a-planner-2').prompt
+  has(p, 'build-upper')
+  has(p, 'build-lower')
+  assert.ok(!had(r, 'a-planner-3'))
+})
 t('wave split: globs accept src/** at depth and tests/*.ts at one level with no planner-2', async () => {
   const r = await runWave([entry('a')], { labels: base('a', { 'a-planner': PLAN(T1, { ...B1, files: ['src/deep/er/x.ts'] }) }) })
   assert.ok(!had(r, 'a-planner-2'))
