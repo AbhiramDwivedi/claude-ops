@@ -1,4 +1,4 @@
-// End-to-end proof for repo ADR-0015: a foundry-shaped run (crew lead + two members, real merges, foreman
+// End-to-end proof for repo ADR-0015: a Truss-shaped run (crew lead + two members, real merges, foreman
 // fast-forward) leaves no worktree-agent branch, no agent folder and no `active` entry in slots.json.
 // Everything git does is real git on a temp repo; the worktrees plugin runs unmodified against an adapter
 // built from child_process and fs. Only ui.log, ui.toast and command.register are recorded in memory.
@@ -235,7 +235,7 @@ async function flow(mergeB: boolean) {
   meta(LEAD)
   await w.fire('classic.SubagentStop', {
     agent_id: LEAD,
-    agent_type: 'foundry:lead',
+    agent_type: 'truss:foreman',
     cwd: lead,
     stop_hook_active: false,
     background_tasks: [],
@@ -254,12 +254,12 @@ async function flow(mergeB: boolean) {
   }
 
   // 8. retro's view
-  const foundryDir = `${common}/foundry/${SESSION}`
-  fs.mkdirSync(foundryDir, { recursive: true })
+  const trussDir = `${common}/truss/${SESSION}`
+  fs.mkdirSync(trussDir, { recursive: true })
   const spawns = [LEAD, MEMBER_A, MEMBER_B].map(agentId => JSON.stringify({ v: 1, ts: '2026-10-28T15:00:00Z', event: 'spawn', agentId }))
-  fs.writeFileSync(`${foundryDir}/events.jsonl`, spawns.join('\n') + '\n')
+  fs.writeFileSync(`${trussDir}/events.jsonl`, spawns.join('\n') + '\n')
   const retro = await new Promise<{ code: number | null; out: string; err: string }>(resolve => {
-    const c = spawn('python', [RETRO, foundryDir], { cwd: w.sandbox, env: cleanEnv(w.sandbox), windowsHide: true })
+    const c = spawn('python', [RETRO, trussDir], { cwd: w.sandbox, env: cleanEnv(w.sandbox), windowsHide: true })
     let out = ''
     let err = ''
     c.stdout.setEncoding('utf8').on('data', d => (out += d))
@@ -294,7 +294,7 @@ after(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
 })
 
-test('a foundry-shaped run leaves zero leftovers', { skip: RETRO_SKIP }, async t => {
+test('a Truss-shaped run leaves zero leftovers', { skip: RETRO_SKIP }, async t => {
   const f = await flow(true)
   dirs.push(f.w.sandbox)
   const seen = observe(f.w)
