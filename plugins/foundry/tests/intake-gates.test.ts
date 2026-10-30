@@ -281,6 +281,9 @@ test('intake item 3: an amend with approval owner and no wave 0 crew is accepted
 type Refusal = { name: string; amend: () => unknown; md?: string | null; reason?: string; plan?: () => string | undefined }
 const refusals: Refusal[] = [
   { name: 'there is no plan.json', amend: () => amendOf('g1', [newCrew('c1', 0)]), plan: () => undefined, reason: NOT_APPROVED },
+  { name: 'the plan is version 1', amend: () => amendOf('g1', [newCrew('c1', 0)]), plan: () => text({ ...existing(), version: 1 }), reason: 'the plan is version 1; re-plan it in plan mode before adding a goal' },
+  { name: 'the plan has no version', amend: () => amendOf('g1', [newCrew('c1', 0)]), plan: () => text(Object.fromEntries(Object.entries(existing()).filter(([k]) => k !== 'version'))) },
+  { name: 'the plan version is a string', amend: () => amendOf('g1', [newCrew('c1', 0)]), plan: () => text({ ...existing(), version: '2' }) },
   { name: 'the plan top-level approvedAt is null', amend: () => amendOf('g1', [newCrew('c1', 0)]), plan: () => text({ ...existing(), approvedAt: null }), reason: NOT_APPROVED },
   { name: 'the plan is not parseable', amend: () => amendOf('g1', [newCrew('c1', 0)]), plan: () => '{not json', reason: NOT_APPROVED },
   { name: 'the plan.md block is missing', amend: () => amendOf('g1', [newCrew('c1', 0)]), md: null },
