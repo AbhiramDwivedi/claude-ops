@@ -8,6 +8,7 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { goalOf, RUN_GOAL } from '../hooks/intake.ts'
 import { fencedBlock, judgeFails, localTime, parsePlan, planVerdict } from '../hooks/register.ts'
 import type { JudgeFile } from '../hooks/register.ts'
 
@@ -364,13 +365,40 @@ function cmdPlanCheck(f: Flags): Obj {
   const errors: string[] = []
   const crews: Obj[] = plan.crews.filter(isObj)
   const name = (c: Obj): string => (typeof c.slug === 'string' ? c.slug : '?')
-  if (plan.version !== 2) errors.push('plan: version must be 2')
+  if (plan.version !== 2 && plan.version !== 3) errors.push('plan: version must be 2 or 3')
+  const goalIds: string[] = []
+  if (plan.version === 3 || plan.version === 2) {
+    // plan.schema.json: top-level goals and a crew's goal are version 3 only.
+    if (plan.goals !== undefined) {
+      if (plan.version === 2) errors.push('plan: goals is version 3 only')
+      else if (!Array.isArray(plan.goals) || plan.goals.length === 0) errors.push('plan: goals must be a non-empty array')
+      else {
+        plan.goals.forEach((g: unknown, i: number) => {
+          if (!isObj(g)) { errors.push(`plan: goals[${i}] must be an object`); return }
+          const id = typeof g.id === 'string' ? g.id : '?'
+          if (typeof g.id !== 'string' || !SLUG.test(g.id) || g.id.length > 100) errors.push(`plan: goals[${i}] id does not match the slug pattern`)
+          else if (g.id === RUN_GOAL) errors.push(`plan: goals[${i}] id ${RUN_GOAL} is reserved for the run's first goal`)
+          else if (goalIds.includes(g.id)) errors.push(`plan: goals[${i}] id ${id} is not unique`)
+          else goalIds.push(g.id)
+          if (typeof g.goal !== 'string' || g.goal === '') errors.push(`plan: goals[${i}] (${id}) goal must be a non-empty string`)
+          if (typeof g.addedAt !== 'string') errors.push(`plan: goals[${i}] (${id}) addedAt must be a date-time string`)
+          if (g.approval !== 'auto' && g.approval !== 'owner') errors.push(`plan: goals[${i}] (${id}) approval must be auto or owner`)
+          if (g.approvedAt !== null && typeof g.approvedAt !== 'string') errors.push(`plan: goals[${i}] (${id}) approvedAt must be a date-time string or null`)
+          else if (g.approval === 'auto' && g.approvedAt === null) errors.push(`plan: goals[${i}] (${id}) approvedAt must be a string on an auto goal`)
+        })
+      }
+    }
+  }
   const hasWave0 = crews.some((c) => c.wave === 0)
   if ((plan.approval === 'owner') !== hasWave0) errors.push(`plan: approval must be owner exactly when a wave-0 crew exists (approval ${JSON.stringify(plan.approval)}, wave-0 crews ${hasWave0 ? 'exist' : 'do not'})`)
   for (const c of crews) {
     const s = name(c)
     if (typeof c.slug !== 'string' || !SLUG.test(c.slug)) errors.push(`${s}: slug does not match the slug pattern`)
     else if (c.slug === 'foundry') errors.push(`${s}: foundry is a reserved slug`)
+    if (c.goal !== undefined) {
+      if (plan.version === 2) errors.push(`${s}: goal is version 3 only`)
+      else if (plan.version === 3 && (typeof c.goal !== 'string' || (c.goal !== RUN_GOAL && !goalIds.includes(c.goal)))) errors.push(`${s}: goal ${JSON.stringify(c.goal)} is neither ${RUN_GOAL} nor a goal in the plan's goals`)
+    }
     if (plan.approvedAt === null && c.status !== 'planned') errors.push(`${s}: status must be planned on an unapproved plan, not ${JSON.stringify(c.status)}`)
   }
   for (let i = 0; i < crews.length; i++) {
@@ -620,6 +648,16 @@ function cmdStartResume(f: Flags, c: StartCtx, slug: string, kind: string): Obj 
   const noWork = kind === 'stale' && Number(run(wt, ['rev-list', '--count', `${baseOf(wt, c.settings.target)}..HEAD`]).out) === 0
   const rebuild = kind !== 'merge-ready' && !noWork
   const entry = crewEntry(c, crew, wt, { resume: kind, tasks: rebuild ? plannerTasks(wfRun, slug) : [], done: rebuild ? doneTasks(wfRun, slug, wt) : [], answers })
+  // The crew's first red team report (label <slug>-redteam, wave.js nextLabel :108-112): its ## Notes bullets, parsed as wave.js redteam() :479 and sectionOf :466-473.
+  const rtFile = `${c.dir}/reports/${slug}/${slug}-redteam.md`
+  if (existsSync(rtFile)) {
+    let section: string | undefined
+    entry.deferred = []
+    for (const line of readFileSync(rtFile, 'utf8').replace(/^\uFEFF/, '').replace(/\r/g, '').split('\n')) {
+      if (line.startsWith('## ')) section = line.trimEnd()
+      else if (section === '## Notes' && line.startsWith('- ')) entry.deferred.push(line.slice(2))
+    }
+  }
   if (kind === 'stale') {
     appendEvent(c.dir, { event: 'spawn', crew: slug, agent: slug, agentId: null, type: 'workflow-crew', model: null, effort: null, by: 'factory' })
     appendDecision(c.dir, `restarted stale workflow crew ${slug} | its wave.js run died; same worktree and branch; ${entry.spent} repair round(s) already spent`)
@@ -650,7 +688,19 @@ function cmdStart(f: Flags): Obj {
   const open = crews.filter((c) => c.status === 'planned' || c.status === 'running').map((c) => c.wave).filter((w) => typeof w === 'number')
   if (open.length === 0) throw refuse({ error: 'no wave has a planned or running crew' })
   const next = Math.min(...open)
-  if (waveArg !== 'next' && Number(waveArg) !== next) throw refuse({ error: `wave ${waveArg} is not the next wave: ${next}` })
+  // A plan with a goals array gets per-goal waves; a plan without one takes the single global next wave, as before.
+  const hasGoals = Array.isArray(plan.goals) && plan.goals.length > 0
+  const goalNext = new Map<string, number>()
+  for (const c of crews) {
+    if ((c.status !== 'planned' && c.status !== 'running') || typeof c.wave !== 'number') continue
+    const g = goalOf(c)
+    goalNext.set(g, Math.min(goalNext.get(g) ?? Infinity, c.wave))
+  }
+  if (!hasGoals && waveArg !== 'next' && Number(waveArg) !== next) throw refuse({ error: `wave ${waveArg} is not the next wave: ${next}` })
+  if (hasGoals && waveArg !== 'next' && ![...goalNext.values()].includes(Number(waveArg))) {
+    throw refuse({ error: `wave ${waveArg} is not the next wave of any goal: ${[...goalNext].map(([g, w]) => `${g} ${w}`).join(', ')}` })
+  }
+  const startsNow = (crew: Obj): boolean => (hasGoals ? goalNext.get(goalOf(crew)) === crew.wave && (waveArg === 'next' || Number(waveArg) === crew.wave) : crew.wave === next)
   const cap = intOr(plan.maxParallelCrews, 4, 1)
   let slots = cap - crews.filter((c) => c.status === 'running').length
   const wasRunning = crews.filter((c) => c.status === 'running')
@@ -658,13 +708,18 @@ function cmdStart(f: Flags): Obj {
   const refused: Obj[] = []
   const entries: Obj[] = []
   for (const crew of crews) {
-    if (crew.wave !== next || crew.status !== 'planned') continue
+    if (!startsNow(crew) || crew.status !== 'planned') continue
     if (slots <= 0) break
     const slug = String(crew.slug)
     const goalFile = `${dir}/goals/${slug}.md`
     const sections = goalSections(existsSync(goalFile) ? readFileSync(goalFile, 'utf8') : '')
     const { engine, reason } = engineOf(sections, settings.merge, noWorkflow)
     if (engine === 'lead') {
+      const leadVerdict = hasGoals ? planVerdict(parsePlan(JSON.stringify(plan)) as any, slug) : undefined
+      if (leadVerdict !== undefined) {
+        refused.push({ slug, reason: leadVerdict.deny })
+        continue
+      }
       leads.push({ slug, reason })
       slots--
       continue
@@ -678,7 +733,7 @@ function cmdStart(f: Flags): Obj {
     crew.status = 'running'
     savePlan(dir, plan)
     appendEvent(dir, { event: 'spawn', crew: slug, agent: slug, agentId: null, type: 'workflow-crew', model: null, effort: null, by: 'factory' })
-    appendDecision(dir, `started workflow crew ${slug} in wave ${next} | worktree foundry-${slug} from ${settings.target}; the cap leaves ${slots - 1} slot(s)`)
+    appendDecision(dir, `started workflow crew ${slug} in wave ${crew.wave}${goalOf(crew) === RUN_GOAL ? '' : ` of goal ${goalOf(crew)}`} | worktree foundry-${slug} from ${settings.target}; the cap leaves ${slots - 1} slot(s)`)
     slots--
     entries.push(crewEntry(ctx, crew, wt, { resume: null }))
   }
