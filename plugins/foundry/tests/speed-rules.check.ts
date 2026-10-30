@@ -46,12 +46,16 @@ describe('speed-rules', () => {
     gone(LEAD, /Have every break it reports fixed/i, 'lead: "Have every break it reports fixed"')
   })
 
-  test('2 dependency-driven start: after list, no wave hold, start every turn', () => {
-    has(RUN, /every crew in its after list (has|have|is) (merged|\w+ or \w+)/i, 'crew starts when every crew in its after list has merged')
-    has(RUN, /maxParallelCrews/, 'cap kept')
-    has(RUN, /(every|each|end of) turn[^.]{0,160}start(ing)? (any|every|each) (startable|ready)|start(ing)? (any|every|each) (startable|ready)[^.]{0,120}(every|each) turn/i, 'foreman ends every turn by starting any startable crew')
-    has(RUN, /disjoint/i, 'no wave-batch hold for disjoint owned files')
-    gone(RUN, /A wave starts only when every crew in every earlier wave/i, 'run: "A wave starts only when every crew in every earlier wave"')
+  test('2 start without batch holds: whole current wave at once, next wave in the same turn, hook note kept', () => {
+    has(RUN, /(start )?every crew in the current wave/i, 'run: start every crew in the current wave')
+    has(RUN, /maxParallelCrews/, 'run: cap kept')
+    has(RUN, /no (batch )?hold (inside|within) a wave|(inside|within) a wave[^.]{0,60}no (batch )?hold/i, 'run: no batch hold inside a wave')
+    has(RUN, /same turn/i, 'run: next wave starts in the same turn')
+    has(RUN, /last crew[^.]{0,80}merge|merges?[^.]{0,80}last crew/i, 'run: the moment the wave last crew merges')
+    has(RUN, /(every|each|end of) turn[^.]{0,160}start(ing)? (any|every|each) crews? (the )?hooks? allow|start(ing)? (any|every|each) crews? (the )?hooks? allow[^.]{0,120}(every|each) turn/i, 'run: ends every turn by starting any crew the hooks allow')
+    has(RUN, /When a hook refuses to start a lead/i, 'run: hook-refusal section kept')
+    has(RUN, /wave <n> isn.t merged yet/i, 'run: hook bullet for an unmerged earlier wave kept')
+    // The old line "A wave starts only when every crew in every earlier wave is merged or dropped" restates the hook and stays true; not pinned.
     gone(RUN, /When the whole wave has merged, start the next wave/i, 'run: "When the whole wave has merged, start the next wave"')
   })
 
