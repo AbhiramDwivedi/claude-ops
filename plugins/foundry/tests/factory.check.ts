@@ -971,6 +971,37 @@ test('plan-check: a version 3 plan with goals and a crew naming one passes; a cr
   assert.ok(errorsFor(bad.json, 'beta').length >= 1, JSON.stringify(bad.json.errors))
 })
 
+test('plan-check: v3 top-level approval auto passes when only an added owner goal has a wave-0 crew', () => {
+  const plan = planObj(
+    [crew('a', { status: 'merged' }), crew('gtwod', { wave: 0, verdict: 'design', goal: 'gtwo' }), crew('gtwob', { wave: 1, goal: 'gtwo' })],
+    { version: 3, goals: [goalsEntry('gtwo', { approval: 'owner', approvedAt: null })] },
+  )
+  const r = checkPlan(plan)
+  assert.equal(r.res.status, 0, r.res.stdout + r.res.stderr)
+  assert.equal(r.json.ok, true, JSON.stringify(r.json.errors))
+})
+
+test('plan-check: v3 owns overlap is checked per goal, not across goals sharing a wave number', () => {
+  const plan = planObj(
+    [crew('a', { status: 'merged', owns: ['bin/x.ts'] }), crew('fix', { goal: 'gtwo', owns: ['bin/x.ts'] })],
+    { version: 3, goals: [goalsEntry('gtwo')] },
+  )
+  const r = checkPlan(plan)
+  assert.equal(r.res.status, 0, r.res.stdout + r.res.stderr)
+  assert.equal(r.json.ok, true, JSON.stringify(r.json.errors))
+})
+
+test('plan-check: v3 owns overlap between two crews of the same goal and wave is still refused', () => {
+  const plan = planObj(
+    [crew('a', { goal: 'gtwo', owns: ['bin/x.ts'] }), crew('fix', { goal: 'gtwo', owns: ['bin/x.ts'] })],
+    { version: 3, goals: [goalsEntry('gtwo')] },
+  )
+  const r = checkPlan(plan)
+  assert.equal(r.res.status, 1)
+  assert.equal(r.json.ok, false)
+  assert.ok(r.json.errors.some((e) => /overlaps/.test(e)), JSON.stringify(r.json.errors))
+})
+
 test('start --wave next: an owner goal\'s crew is not started before approval and is started after; the run crew starts meanwhile', () => {
   const env = goalsWorld(
     [crew('g2c', { wave: 0, goal: 'g2' }), crew('runc', { wave: 1 })],
