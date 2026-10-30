@@ -193,9 +193,12 @@ test('run-model: one claude call per case, with the flags, role prompt, tool lis
 
 test('run-model: prints a foundry-evals-* tmpdir holding results.json and one raw report per case; nothing written in the checkout', () => {
   const all = cases()
-  const statusBefore = git('status', '--porcelain')
-  const foundryBefore = tree(join(COMMON, 'foundry'))
-  const claudeBefore = tree(join(ROOT, '.claude'))
+  const status = () =>
+    [['--porcelain'], ['--porcelain', '--ignored']].map((f) =>
+      git('status', ...f).split('\n').filter((l) => !l.includes('.claude/worktrees/')).join('\n'))
+  const statusBefore = status()
+  const foundryBefore = new Set(tree(join(COMMON, 'foundry')))
+  const claudeBefore = new Set(tree(join(ROOT, '.claude')))
   const { r, outDir, results, outFiles } = run()
   assert.equal(r.status, 0, r.stderr)
   assert.ok(outDir, 'no foundry-evals-* path printed')
@@ -206,9 +209,22 @@ test('run-model: prints a foundry-evals-* tmpdir holding results.json and one ra
   assert.equal(entries.length, all.length, 'one results entry per case')
   const raw = outFiles.filter((f) => f !== 'results.json')
   assert.equal(raw.length, all.length, `one raw report per case, got ${raw.join(',')}`)
-  assert.equal(git('status', '--porcelain'), statusBefore, 'checkout status changed')
-  assert.deepEqual(tree(join(COMMON, 'foundry')), foundryBefore, '.git/foundry changed')
-  assert.deepEqual(tree(join(ROOT, '.claude')), claudeBefore, '.claude changed')
+  assert.deepEqual(status(), statusBefore, 'checkout status (plain or --ignored) changed')
+  // Live foundry runs write under .git/foundry and .claude/worktrees while this test runs, so the trees are not
+  // compared whole. No path NEW since before may look like run-model output: results.json, a golden case id as a
+  // basename stem, or foundry-evals.
+  const ids = new Set(all.map((c) => c.id))
+  const looksLikeOutput = (p: string) => {
+    const base = p.split('/').pop() as string
+    return base === 'results.json' || p.includes('foundry-evals') || ids.has(base.replace(/\.[^.]*$/, ''))
+  }
+  for (const [label, before, after] of [
+    ['.git/foundry', foundryBefore, tree(join(COMMON, 'foundry'))],
+    ['.claude', claudeBefore, tree(join(ROOT, '.claude'))],
+  ] as const) {
+    const bad = after.filter((p) => !before.has(p) && looksLikeOutput(p))
+    assert.deepEqual(bad, [], `run-model wrote under ${label}`)
+  }
 })
 
 test('run-model: takes no flag that picks cases - an extra --case argument exits non-zero', () => {
