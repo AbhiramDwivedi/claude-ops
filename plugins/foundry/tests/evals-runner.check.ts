@@ -22,6 +22,8 @@ const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), '..')
 const ROOT = join(PLUGIN, '..', '..')
 const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 const token = () => randomBytes(8).toString('hex')
+// Drops block and line comments so a source check cannot be satisfied by a comment. Naive: skips `//` after ':' or a quote.
+const stripComments = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1')
 const snippetDirs = () => new Set(readdirSync(tmpdir()).filter((n) => n.startsWith('foundry-snippet-')))
 
 // Other test files run in parallel and may hold a foundry-snippet-* dir for a moment, so a leak is a new dir that is
@@ -212,11 +214,11 @@ test('score RECOMMEND: the line must start with RECOMMEND or a cynic-N prefix', 
 
 // ---- ADR-0007 section 5: the 30-second bash timeout (source check: a live 30 s test is too slow) ----
 test('runSnippet (source check): the bash spawn carries timeout: 30_000', () => {
-  const text = readFileSync(join(PLUGIN, 'evals', 'snippets.ts'), 'utf8')
+  const text = stripComments(readFileSync(join(PLUGIN, 'evals', 'snippets.ts'), 'utf8'))
   const chunk = text.split('spawnSync(').slice(1).find((c) => c.includes("'bash'"))
   assert.ok(chunk, 'no spawnSync call running bash')
   const opts = chunk.slice(0, chunk.indexOf('})'))
-  assert.match(opts, /timeout:\s*(30_000|30000)\b/, 'the bash spawn has no 30-second timeout')
+  assert.match(opts, /timeout:\s*(30_000|30000)\s*[,}\r\n]/, 'the bash spawn has no 30-second timeout')
 })
 
 // ---- ADR-0007 section 5: extractSnippet rules ----
@@ -240,7 +242,7 @@ test('extractSnippet: drops a BOM (and every CR), so a BOM-prefixed fence still 
     assert.equal(extractSnippet(p, line('git foo', 'inline')), 'git foo')
   })
   // JS trimStart() also strips a BOM, so behaviour alone cannot tell a dropped BOM from a kept one; the source must say it.
-  const text = readFileSync(join(PLUGIN, 'evals', 'snippets.ts'), 'utf8')
+  const text = stripComments(readFileSync(join(PLUGIN, 'evals', 'snippets.ts'), 'utf8'))
   assert.ok(/\\uFEFF|﻿/.test(text), 'snippets.ts never removes a BOM')
 })
 
@@ -285,7 +287,7 @@ test('extractSnippet: an unreadable file gives undefined', () => {
 
 // ---- ADR-0007 section 4: score rules a VERDICT exactly as the merge gate does ----
 test('score VERDICT: agrees with judgeRuling from the gate (hooks/register.ts) on text the gate and a bare regex rule differently', () => {
-  for (const text of ['  VERDICT: PASS\n', '\n\nVERDICT: FAIL\n', 'VERDICT:  PASS\n', 'VERDICT: PASS   \n', '﻿VERDICT: PASS\n']) {
+  for (const text of ['  VERDICT: PASS\n', '\n\nVERDICT: FAIL\n', 'VERDICT:  PASS\n', 'VERDICT: PASS   \n', 'VERDICT: PASS (see findings)\n', 'VERDICT: FAIL, two bugs\n', 'VERDICT: PASS\t\n', 'VERDICT: FAIL\r\n\r\n## Proof checked\n','﻿VERDICT: PASS\n']) {
     const gate = judgeRuling(text).verdict
     for (const kind of ['PASS', 'FAIL']) {
       assert.deepEqual(score(text, V(kind)), { ok: gate === kind, got: gate }, JSON.stringify(text) + ' expecting ' + kind)

@@ -22,6 +22,8 @@ const RUN_MODEL = join(PLUGIN, 'evals', 'run-model.ts')
 const STUB = join(PLUGIN, 'tests', 'fixtures', 'claude-stub', 'claude.mjs')
 const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 const rm = (p: string) => rmSync(p, { recursive: true, force: true, maxRetries: 10 })
+// Drops block and line comments so a source check cannot be satisfied by a comment. Naive: fine for run-model.ts.
+const stripComments = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1')
 
 // Every `--` flag run-model may pass, plus `-p`. Mirrors ADR-0007 section 7, with `--tools` and `--disallowedTools`
 // added on the lead's word. Anything else on the command line (a permission mode) fails the argv test.
@@ -102,6 +104,8 @@ function run(env: Record<string, string> = {}, args: string[] = [], opts: { clau
     rm(logDir)
     if (outDir && basename(outDir).startsWith('foundry-evals-') && norm(dirname(outDir)) === norm(realpathSync.native(tmpdir()))) rm(outDir)
     else if (outDir && basename(outDir).startsWith('foundry-evals-') && existsSync(outDir)) rm(outDir)
+    // Every run that prints `results <dir>` removes that dir here, so the suite leaves no foundry-evals-* dir behind.
+    if (outDir && basename(outDir).startsWith('foundry-evals-') && existsSync(outDir)) rm(outDir)
   }
 }
 
@@ -350,8 +354,9 @@ test('run-model: writes nothing under .claude (worktrees excepted) and no run ou
 
 test('run-model (source check): the only environment variable it reads by name is CLAUDE (a bare process.env passed whole is allowed)', () => {
   // ADR-0007 section 7: "It takes no flag that picks or adds cases." A behavioural test can only try names it guesses;
-  // a source check closes the door on every name.
-  const text = readFileSync(RUN_MODEL, 'utf8')
+  // a source check closes the door on every name. Comments are stripped first. Today's file mentions process.env twice:
+  // the whole-env copy `{ ...process.env }` for git (GIT_* dropped) and the one `process.env.CLAUDE` read. Pinned at 2.
+  const text = stripComments(readFileSync(RUN_MODEL, 'utf8'))
   const reads = [...text.matchAll(/process\.env(\s*\.\s*(\w+)|\s*\?\.\s*(\w+)|\s*\[\s*(['"`])([^'"`]*)\4\s*\]|\s*\[[^\]]*\])?/g)]
   const named = reads.filter((m) => m[1] !== undefined)
   assert.ok(named.some((m) => (m[2] ?? m[3] ?? m[5]) === 'CLAUDE'), 'run-model no longer reads process.env.CLAUDE')
@@ -359,16 +364,54 @@ test('run-model (source check): the only environment variable it reads by name i
     const key = m[2] ?? m[3] ?? m[5]
     assert.equal(key, 'CLAUDE', `run-model reads process.env${m[1]}; only CLAUDE may be read by name`)
   }
+  assert.equal((text.match(/process\.env/g) ?? []).length, 2, 'run-model mentions process.env a number of times other than the allowed 2')
+  assert.equal((text.match(/\.\.\.\s*process\.env\b/g) ?? []).length, 1, 'exactly one whole-env spread is allowed')
+  assert.ok(!/=\s*process\.env\s*(?:[;\n)]|$)/.test(text), 'process.env must not be aliased with =')
+  assert.ok(!/}\s*=\s*process\.env/.test(text), 'process.env must not be destructured')
+  assert.ok(!/\bprocess\s*\[\s*['"`]env['"`]\s*\]/.test(text), 'process["env"] is not allowed')
 })
 
-test('run-model (source check): a timed-out child is detected by ETIMEDOUT and scored with the timeout label', () => {
-  // A live 600 s run is too slow, and no override of the timeout is allowed, so there is no behavioural test here.
-  // (A red team proved the real path with a patched copy in tmp at 1.5 s.) A dead branch must turn this red.
-  const text = readFileSync(RUN_MODEL, 'utf8')
-  assert.match(text, /code\s*===\s*['"]ETIMEDOUT['"]/, 'no ETIMEDOUT comparison on the spawn error')
-  assert.match(text, /['"]timeout['"]/, "no 'timeout' result label")
-  assert.ok(!/(?:const|let)\s+timedOut\s*=\s*(?:false|true)\b/.test(text), 'timedOut is a constant')
-  assert.match(text, /timedOut\s*\?\s*['"]timeout['"]/, 'a timed-out case is not given the timeout label')
+test('run-model: a case that outlives CASE_TIMEOUT_MS is killed and scored timeout (patched copy at 1.5 s, stub sleeps 5 s)', () => {
+  // ADR-0007 section 7: "kills the child and scores the case timeout". The real constant is 600000, so the copy gets 1500.
+  assert.ok(readFileSync(RUN_MODEL, 'utf8').includes('CASE_TIMEOUT_MS = 600000'), 'real run-model.ts must keep CASE_TIMEOUT_MS = 600000')
+  const tmp = mkdtempSync(join(tmpdir(), 'foundry-copy-'))
+  try {
+    const base = join(tmp, 'plugins', 'foundry')
+    mkdirSync(join(base, 'hooks'), { recursive: true })
+    mkdirSync(join(base, 'agents'), { recursive: true })
+    mkdirSync(join(base, 'evals', 'golden'), { recursive: true })
+    // The copy holds only 2 golden cases (one judge, one cynic), so the run costs about 2 x 1.5 s, not one wait per real case.
+    const golden = cases()
+    const keep = [golden.find((c) => c.role === 'judge'), golden.find((c) => c.role === 'cynic')]
+    assert.ok(keep.every(Boolean), 'need a judge and a cynic golden case')
+    for (const f of readdirSync(join(PLUGIN, 'evals'))) if (f !== 'golden') cpSync(join(PLUGIN, 'evals', f), join(base, 'evals', f), { recursive: true })
+    for (const c of keep) writeFileSync(join(base, 'evals', 'golden', `${c.id}.json`), JSON.stringify(c))
+    cpSync(join(PLUGIN, 'hooks', 'register.ts'), join(base, 'hooks', 'register.ts'))
+    for (const a of ['judge', 'cynic']) cpSync(join(PLUGIN, 'agents', `${a}.md`), join(base, 'agents', `${a}.md`))
+    const rp = join(base, 'evals', 'run-model.ts')
+    const orig = readFileSync(rp, 'utf8')
+    const patched = orig.replace('CASE_TIMEOUT_MS = 600000', 'CASE_TIMEOUT_MS = 1500')
+    assert.notEqual(patched, orig, 'the CASE_TIMEOUT_MS replacement did not happen')
+    writeFileSync(rp, patched)
+    const sleeper = join(tmp, 'sleeper.mjs')
+    writeFileSync(sleeper, 'setTimeout(() => process.stdout.write("VERDICT: PASS\\n"), 5000)\n')
+    const env = { ...process.env }
+    for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k]
+    for (const args of [['init', '-q'], ['config', 'user.name', 'copy'], ['config', 'user.email', 'copy@example.invalid'],
+      ['config', 'commit.gpgsign', 'false'], ['add', '-A'], ['commit', '-q', '-m', 'copy']]) {
+      const g = spawnSync('git', args, { cwd: tmp, env, encoding: 'utf8', windowsHide: true })
+      assert.equal(g.status, 0, `git ${args.join(' ')}: ${g.stderr}`)
+    }
+    const { r, stdout } = run({}, [], { runModel: rp, cwd: tmp, claude: sleeper })
+    const lines = stdout.split('\n').filter((l) => l.trim())
+    const rows = lines.filter((l) => LINE.test(l))
+    const sorted = [...keep].sort((a, b) => (a.id < b.id ? -1 : 1))
+    assert.deepEqual(rows, sorted.map((c) => `${c.id} timeout expected=${c.expected.kind} got=none`), `stdout:\n${stdout}\nstderr: ${r.stderr}`)
+    assert.ok(lines.some((l) => /^score 0\/2\b/.test(l)), `no 'score 0/2' line in:\n${stdout}`)
+    assert.ok(!/cannot run/.test(stdout + (r.stderr ?? '')), 'a timeout must not read as "cannot run"')
+  } finally {
+    rm(tmp)
+  }
 })
 
 test('run-model: each raw report is the child stdout, and each results.json entry matches that case\'s printed line', () => {
