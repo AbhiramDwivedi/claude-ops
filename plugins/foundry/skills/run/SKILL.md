@@ -352,8 +352,6 @@ After `approvedAt` is set, the owner may ask for work no crew in `plan.json` cov
 7. **Approve and freeze the goal's scope.** An `owner` goal is one where an owner trigger applies, as for a mid-run design slice; a design crew alone doesn't make it one. For an `auto` goal, set `goals[i].approvedAt` to your log time (read the clock as in section 5) and start. For an `owner` goal, show the goal's crews in section 5's table, wait for the owner's yes, then set `goals[i].approvedAt`; the hook holds the goal's crews until then. The merge mode and target are the run's and are never asked again. Never edit the top-level `approval` and `approvedAt`, or another goal's entry. "Build only approved scope" applies to the goal from its `approvedAt`.
 8. **Start the crews** by section 6's start rule. Write goal files and briefs as in section 6; a lead's brief also names its goal id.
 
-On the Workflow path, a goal added mid-run starts its crews through the lead path (the `Agent` call, which the hooks gate) until `factory.ts` learns goals.
-
 A mid-run design slice (above) stays for a lead's design `PROPOSAL:` within one goal: the slice joins the proposing crew's goal, with its `goal` field set to that id.
 
 ## 8. Collect the reports
