@@ -9,7 +9,7 @@
 // No real model, no network. CASE_TIMEOUT_MS is a fixed 600000 constant, so the timeout path is not tested here.
 
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -667,4 +667,250 @@ test('run-model: a missing binary leaves no foundry-evals-* dir in os.tmpdir()',
   const stuck = first.filter((p) => now.includes(p))
   for (const p of stuck) rm(p)
   assert.deepEqual(stuck, [], 'empty foundry-evals-* dir left behind')
+})
+
+
+// ---- Hardening tests (red team 5): interrupt, punctuation, collisions, directories, busy cleanup ----------------------
+const U1 = '11111111-1111-4111-8111-111111111111'
+const U2 = '22222222-2222-4222-8222-222222222222'
+const sleepMs = (ms: number) => new Promise((res) => setTimeout(res, ms))
+const cleanEnv = () => { const e = { ...process.env }; for (const k of Object.keys(e)) if (k.startsWith('GIT_')) delete e[k]; return e }
+
+// Copy of the plugin in a throwaway git repo with only the given golden cases. `sources` maps a path under
+// <git dir>/foundry to its content; they are created unconditionally, so a copy assertion never skips.
+function synth(defs: { id: string; input: string }[], sources: Record<string, string>) {
+  const tmp = mkdtempSync(join(tmpdir(), 'foundry-synth-'))
+  const base = join(tmp, 'plugins', 'foundry')
+  mkdirSync(join(base, 'hooks'), { recursive: true })
+  mkdirSync(join(base, 'agents'), { recursive: true })
+  mkdirSync(join(base, 'evals', 'golden'), { recursive: true })
+  for (const f of readdirSync(join(PLUGIN, 'evals'))) if (f !== 'golden') cpSync(join(PLUGIN, 'evals', f), join(base, 'evals', f), { recursive: true })
+  cpSync(join(PLUGIN, 'hooks', 'register.ts'), join(base, 'hooks', 'register.ts'))
+  for (const a of ['judge', 'cynic']) cpSync(join(PLUGIN, 'agents', `${a}.md`), join(base, 'agents', `${a}.md`))
+  for (const d of defs) {
+    writeFileSync(join(base, 'evals', 'golden', `${d.id}.json`), JSON.stringify({
+      id: d.id, source: `.git/foundry/${U1}/a.md`, role: 'judge', input: d.input, expected: { keyword: 'VERDICT', kind: 'PASS' },
+    }))
+  }
+  const env = cleanEnv()
+  for (const args of [['init', '-q'], ['config', 'user.name', 'copy'], ['config', 'user.email', 'copy@example.invalid'],
+    ['config', 'commit.gpgsign', 'false'], ['add', '-A'], ['commit', '-q', '-m', 'copy']]) {
+    const g = spawnSync('git', args, { cwd: tmp, env, encoding: 'utf8', windowsHide: true })
+    assert.equal(g.status, 0, `git ${args.join(' ')}: ${g.stderr}`)
+  }
+  for (const [rel, content] of Object.entries(sources)) {
+    const f = join(tmp, '.git', 'foundry', rel)
+    mkdirSync(dirname(f), { recursive: true })
+    writeFileSync(f, content)
+  }
+  return { tmp, rp: join(base, 'evals', 'run-model.ts') }
+}
+
+// Like makeProbe, but resolves every inputs/... token in stdin (nested paths too) and records the content found.
+function makeResolveProbe() {
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-rprobe-'))
+  const file = join(dir, 'claude.mjs')
+  writeFileSync(file, `import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+let stdin = ''
+try { stdin = readFileSync(0, 'utf8') } catch {}
+const files = {}
+for (const t of stdin.match(/inputs\\/[^\\s,;]+/g) ?? []) {
+  try { files[t] = readFileSync(join(process.cwd(), t), 'utf8') } catch { files[t] = null }
+}
+const logDir = process.env.CLAUDE_STUB_LOG
+if (logDir) writeFileSync(join(logDir, (readdirSync(logDir).length + 1) + '.json'), JSON.stringify({ stdin, cwd: process.cwd(), files }))
+process.stdout.write('VERDICT: PASS\\n\\n## Proof checked\\nprobe\\n')
+`)
+  return { file, dir }
+}
+
+test('run-model: trailing punctuation after a .git/foundry path stays in the text, not in the file name (comma, full stop, semicolon)', () => {
+  const defs = [
+    { id: 'p-comma', input: `See .git/foundry/${U1}/a.md, then judge.\n` },
+    { id: 'p-dot', input: `The brief is at .git/foundry/${U1}/a.md.\n` },
+    { id: 'p-semi', input: `Read .git/foundry/${U1}/a.md; then judge.\n` },
+  ]
+  const { tmp, rp } = synth(defs, { [`${U1}/a.md`]: 'CONTENT-A\n' })
+  const probe = makeProbe()
+  try {
+    const { r, calls } = run({}, [], { runModel: rp, cwd: tmp, claude: probe.file })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(calls.length, 3)
+    const want = ['See inputs/a.md, then judge.\n', 'The brief is at inputs/a.md.\n', 'Read inputs/a.md; then judge.\n']
+    for (const [i, d] of defs.entries()) {
+      assert.equal(calls[i].stdin, want[i], `${d.id}: stdin`)
+      assert.deepEqual(calls[i].inputs, ['a.md'], `${d.id}: <cwd>/inputs must hold exactly a.md (no file named with the punctuation)`)
+      assert.equal(calls[i].inputText['a.md'], 'CONTENT-A\n', `${d.id}: copied content`)
+    }
+  } finally { rm(probe.dir); rm(tmp) }
+})
+
+test('run-model: two .git/foundry files with the same basename get two distinct inputs/ paths, each with its own content; the same file twice maps to one path', () => {
+  const input = `first .git/foundry/${U1}/decisions.md\nsecond .git/foundry/${U2}/decisions.md\nagain .git/foundry/${U1}/decisions.md\n`
+  const { tmp, rp } = synth([{ id: 'collide', input }], { [`${U1}/decisions.md`]: 'ONE\n', [`${U2}/decisions.md`]: 'TWO\n' })
+  const probe = makeResolveProbe()
+  try {
+    const { r, calls } = run({}, [], { runModel: rp, cwd: tmp, claude: probe.file })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(calls.length, 1)
+    const lines = calls[0].stdin.split('\n')
+    assert.equal(lines[0], 'first inputs/decisions.md', 'the first file keeps inputs/<basename>')
+    assert.ok(/^second inputs\/\S+$/.test(lines[1]), `second line: ${lines[1]}`)
+    const p1 = lines[0].slice('first '.length)
+    const p2 = lines[1].slice('second '.length)
+    assert.notEqual(p2, p1, 'both files were given the same inputs/ path')
+    assert.equal(lines[2], `again ${p1}`, 'the same file named twice must map to the same path')
+    assert.ok(!/\.git[\\/]+foundry/.test(calls[0].stdin), 'stdin still names .git/foundry')
+    assert.equal(calls[0].files[p1], 'ONE\n', `${p1} must hold the first file's content`)
+    assert.equal(calls[0].files[p2], 'TWO\n', `${p2} must hold the second file's content`)
+  } finally { rm(probe.dir); rm(tmp) }
+})
+
+test('run-model: a directory named in the input does not abort the run; every case still gets a line and the score line', () => {
+  const defs = [
+    { id: 'd-dir', input: `Review .git/foundry/${U1}/reports/foo/ now.\n` },
+    { id: 'e-plain', input: 'No paths here.\n' },
+  ]
+  const { tmp, rp } = synth(defs, { [`${U1}/reports/foo/x.md`]: 'X\n', [`${U1}/reports/foo/sub/y.md`]: 'Y\n' })
+  try {
+    const { r, stdout, calls } = run({}, [], { runModel: rp, cwd: tmp })
+    const lines = stdout.split('\n').filter((l) => l.trim())
+    assert.deepEqual(lines.filter((l) => LINE.test(l)), ['d-dir ok expected=PASS got=PASS', 'e-plain ok expected=PASS got=PASS'],
+      `exit ${r.status}\nstdout:\n${stdout}\nstderr: ${r.stderr}`)
+    assert.ok(lines.some((l) => /^score 2\/2 at /.test(l)), `no score line in:\n${stdout}`)
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(calls.length, 2)
+    assert.ok(!/\.git[\\/]+foundry/.test(calls[0].stdin), `stdin still names .git/foundry: ${calls[0].stdin}`)
+  } finally { rm(tmp) }
+})
+
+// An interrupt the runner can actually catch. On Windows child.kill('SIGINT') is TerminateProcess, so no handler can
+// run; a real Ctrl-Break is a console control event, delivered here by a Python helper (CREATE_NEW_PROCESS_GROUP +
+// os.kill(pid, CTRL_BREAK_EVENT)). On POSIX the signal is sent with child.kill.
+const SIG_HELPER_PY = `import json, os, signal, subprocess, sys, time
+node, script, cwd, d = sys.argv[1:5]
+p = subprocess.Popen([node, script], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+started = os.path.join(d, 'started.json')
+deadline = time.time() + 60
+while time.time() < deadline and not os.path.exists(started) and p.poll() is None:
+    time.sleep(0.1)
+time.sleep(0.3)
+if p.poll() is None:
+    os.kill(p.pid, signal.CTRL_BREAK_EVENT)
+try:
+    out, _ = p.communicate(timeout=20)
+    code = p.returncode
+except subprocess.TimeoutExpired:
+    p.kill()
+    out, _ = p.communicate()
+    code = 'hung'
+sys.stdout.write(json.dumps({'code': code, 'stdout': out.decode('utf8', 'replace')}))
+`
+
+async function interruptCase(how: 'SIGINT' | 'SIGTERM' | 'CTRL_BREAK', t: { skip: (m?: string) => void }) {
+  if (how === 'CTRL_BREAK') {
+    const py = spawnSync('python', ['-c', 'import sys; print(sys.version_info[0])'], { encoding: 'utf8', windowsHide: true })
+    if (py.error || py.status !== 0) { t.skip('python was not found on PATH; the Windows Ctrl-Break delivery needs it'); return }
+  }
+  const before = tmpWorktrees()
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-sig-'))
+  const stub = join(dir, 'hang.mjs')
+  writeFileSync(stub, `import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+writeFileSync(join(process.env.SIG_DIR, 'started.json'), JSON.stringify({ pid: process.pid, cwd: process.cwd() }))
+setTimeout(() => {}, 60000)
+`)
+  const env = { ...cleanEnv(), CLAUDE: stub, SIG_DIR: dir }
+  let child: ReturnType<typeof spawn>
+  if (how === 'CTRL_BREAK') {
+    const helper = join(dir, 'sigbreak.py')
+    writeFileSync(helper, SIG_HELPER_PY)
+    child = spawn('python', [helper, process.execPath, RUN_MODEL, ROOT, dir], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  } else {
+    child = spawn(process.execPath, [RUN_MODEL], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  }
+  let out = ''
+  let err = ''
+  child.stdout!.on('data', (d) => { out += d })
+  child.stderr!.on('data', (d) => { err += d })
+  const exited = new Promise<{ code: number | null; sig: string | null }>((res) => child.on('exit', (code, sig) => res({ code, sig })))
+  let started: { pid: number; cwd: string } | undefined
+  let leftL: string[] = []
+  try {
+    let code: number | string | null
+    let sig: string | null = null
+    let runnerOut: string
+    if (how === 'CTRL_BREAK') {
+      const res = await Promise.race([exited, sleepMs(100000).then(() => 'hung' as const)])
+      assert.notEqual(res, 'hung', 'the Python helper did not finish')
+      let parsed: { code: number | string; stdout: string } | undefined
+      try { parsed = JSON.parse(out) } catch { assert.fail(`helper gave no result (python stderr: ${err}) stdout: ${out}`) }
+      code = parsed!.code
+      runnerOut = parsed!.stdout
+      try { started = JSON.parse(readFileSync(join(dir, 'started.json'), 'utf8')) } catch {}
+      assert.ok(started, `the stub never started (python stderr: ${err})`)
+      assert.notEqual(code, 'hung', 'run-model did not exit within 20 s of Ctrl-Break')
+    } else {
+      for (let i = 0; i < 600 && !started; i++) {
+        try { started = JSON.parse(readFileSync(join(dir, 'started.json'), 'utf8')) } catch { await sleepMs(100) }
+      }
+      assert.ok(started, 'the stub never started')
+      child.kill(how)
+      const res = await Promise.race([exited, sleepMs(20000).then(() => 'hung' as const)])
+      assert.notEqual(res, 'hung', `run-model did not exit within 20 s of ${how}`)
+      ;({ code, sig } = res as { code: number | null; sig: string | null })
+      runnerOut = out
+    }
+    await sleepMs(300)
+    const after = tmpWorktrees()
+    leftL = newOnly(before.listed, after.listed)
+    assert.ok(code !== 0, `exit code ${code} signal ${sig}: an interrupted run must not exit 0`)
+    assert.ok(!/^score /m.test(runnerOut), `a score line was printed after the interrupt:\n${runnerOut}`)
+    assert.deepEqual(leftL, [], `runner exit ${code}/${sig} after ${how}: git worktree list shows a leftover temp worktree`)
+    assert.deepEqual(newOnly(before.meta, after.meta), [], `runner exit ${code}/${sig} after ${how}: <common>/worktrees holds leftover metadata`)
+    assert.ok(!existsSync(started!.cwd), `runner exit ${code}/${sig} after ${how}: the temp worktree dir ${started!.cwd} still exists`)
+  } finally {
+    try { child.kill('SIGKILL') } catch {}
+    if (started) { try { process.kill(started.pid, 'SIGKILL') } catch {} }
+    await sleepMs(500)
+    // Tidy what the red run leaked, so the suite does not accumulate worktrees.
+    for (const w of leftL) spawnSync('git', ['worktree', 'remove', '--force', w], { cwd: ROOT, windowsHide: true })
+    if (started) rm(started.cwd)
+    spawnSync('git', ['worktree', 'prune'], { cwd: ROOT, windowsHide: true })
+    rm(dir)
+  }
+}
+
+if (process.platform === 'win32') {
+  test('run-model: an interrupt (Ctrl-Break console event) mid-case leaves no temp worktree and no score line', (t) => interruptCase('CTRL_BREAK', t))
+} else {
+  test('run-model: an interrupt (SIGINT) mid-case leaves no temp worktree and no score line', (t) => interruptCase('SIGINT', t))
+  test('run-model: SIGTERM mid-case leaves no temp worktree and no score line', (t) => interruptCase('SIGTERM', t))
+}
+
+test('run-model: cleanup that cannot remove the tree at once (a leftover process holds the cwd) does not abort the run, and nothing is left afterwards', async () => {
+  const { tmp, rp } = synth([{ id: 'busy-one', input: 'x\n' }], {})
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-busy-'))
+  const stub = join(dir, 'busy.mjs')
+  writeFileSync(stub, `import { spawn } from 'node:child_process'
+import { writeFileSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+try { readFileSync(0) } catch {}
+writeFileSync(join(process.env.BUSY_DIR, 'cwd.txt'), process.cwd())
+spawn(process.execPath, ['-e', 'setTimeout(() => {}, 2500)'], { detached: true, stdio: 'ignore', cwd: process.cwd(), windowsHide: true }).unref()
+process.stdout.write('VERDICT: PASS\\n\\n## Proof checked\\nbusy\\n')
+`)
+  try {
+    const { r, stdout } = run({ BUSY_DIR: dir }, [], { runModel: rp, cwd: tmp, claude: stub })
+    const cwd = readFileSync(join(dir, 'cwd.txt'), 'utf8')
+    assert.ok(/^score 1\/1 at /m.test(stdout), `no score line (exit ${r.status}):\nstdout:\n${stdout}\nstderr:\n${r.stderr}`)
+    assert.equal(r.status, 0, r.stderr)
+    for (let i = 0; i < 100 && existsSync(cwd); i++) await sleepMs(100)
+    await sleepMs(300)
+    const g = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: tmp, encoding: 'utf8', windowsHide: true }).stdout
+    const listed = g.split('\n').filter((l) => l.startsWith('worktree ')).map((l) => norm(l.slice(9).trim()))
+    assert.deepEqual(listed.filter((p) => p !== norm(realpathSync.native(tmp)) && p !== norm(tmp)), [], 'worktree still registered once the holder exited')
+    assert.equal(existsSync(cwd), false, `${cwd} still exists once the holder exited`)
+  } finally { rm(dir); rm(tmp) }
 })
