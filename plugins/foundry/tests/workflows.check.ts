@@ -209,8 +209,8 @@ const stopped = (r, tag, at) => {
   assert.equal(typeof r.text, 'string')
   assert.deepEqual(Object.keys(r).sort(), ['at', 'slug', 'state', 'tag', 'text'])
 }
-const passedShape = (r, slug, head, judge, e = entry(slug)) => {
-  assert.deepEqual(r, { slug, state: 'passed', head, base: e.base, judge })
+const passedShape = (r, slug, head, judge, e = entry(slug), deferred = []) => {
+  assert.deepEqual(r, { slug, state: 'passed', head, base: e.base, judge, ...(e.redTeam ? { deferred } : {}) })
 }
 const call = (r, label) => r.calls.find((c) => c.label === label)
 const had = (r, label) => r.calls.some((c) => c.label === label)
@@ -845,25 +845,56 @@ t('wave redteam: redTeam false runs no red team', async () => {
   const r = await runWave([entry('a')], { labels: base() })
   assert.ok(!r.labels.some((l) => /redteam/.test(l)))
 })
-t('wave redteam: findings run a fix builder with them, integrate, green, then a fresh red team; stops at 0', async () => {
+t('wave redteam: findings run one fix builder with them, integrate, green, then the judge; no second red team', async () => {
   const r = await runWave([rtCrew()], {
-    labels: { ...base('a', { 'a-redteam': RTN(2, 'ONE'), 'a-redteam-2': RT0 }), ...fixers },
+    labels: { ...base('a', { 'a-redteam': RTN(2, 'ONE') }), ...fixers },
     runner: greenSeq(gOk(HEAD), gOk(HEAD2)),
   })
   has(call(r, 'a-builder-2').prompt, 'ONE-finding-1')
   assert.ok(idx(r, 'end:a-builder-2') < idx(r, 'start:runner:a:integrate:feat/f1'))
-  has(call(r, 'a-redteam-2').prompt, HEAD2)
-  assert.equal(call(r, 'a-redteam-2').prompt.split('\n')[0], 'Red team:')
+  assert.ok(!had(r, 'a-redteam-2'), 'a second red team ran')
+  assert.equal(r.calls.filter((c) => /redteam/.test(c.label)).length, 1)
+  assert.ok(idx(r, 'end:runner:a:check:green') > idx(r, 'end:a-builder-2'))
+  assert.ok(idx(r, 'start:a-judge') > idx(r, 'end:a-builder-2'))
   passedShape(r.res[0], 'a', HEAD2, 'a-judge', rtCrew())
 })
-t('wave redteam: loops uncapped and adds no spend: four finding rounds with repairBudget 0 still pass', async () => {
-  const labels = { ...base('a', { 'a-redteam': RTN(1, 'R1'), 'a-redteam-2': RTN(1, 'R2'), 'a-redteam-3': RTN(1, 'R3'), 'a-redteam-4': RTN(1, 'R4'), 'a-redteam-5': RT0 }), 'a-builder-2': done('feat/f1'), 'a-builder-3': done('feat/f2'), 'a-builder-4': done('feat/f3'), 'a-builder-5': done('feat/f4') }
+t('wave redteam: REDTEAM 0 runs no fix builder', async () => {
+  const r = await runWave([rtCrew()], { labels: base('a', { 'a-redteam': RT0 }) })
+  assert.ok(!had(r, 'a-builder-2'))
+  assert.ok(!had(r, 'a-redteam-2'))
+})
+t('wave redteam: one round adds no spend: a finding round with repairBudget 0 still passes', async () => {
+  const labels = { ...base('a', { 'a-redteam': RTN(1, 'R1') }), 'a-builder-2': done('feat/f1') }
   const r = await runWave([rtCrew()], { repairBudget: 0, labels })
-  assert.equal(r.calls.filter((c) => /redteam/.test(c.label)).length, 5)
+  assert.equal(r.calls.filter((c) => /redteam/.test(c.label)).length, 1)
   assert.equal(r.res[0].state, 'passed', JSON.stringify(r.res[0]))
 })
-t('wave redteam: red-team rounds do not count toward spend: after two rounds a judge FAIL is spend 1', async () => {
-  const labels = { ...base('a', { 'a-redteam': RTN(1), 'a-redteam-2': RTN(1), 'a-redteam-3': RT0, 'a-judge': FAIL() }), 'a-builder-2': done('feat/f1'), 'a-builder-3': done('feat/f2') }
+const NOTES = 'REDTEAM: 1 findings\n## Findings\n- REAL-defect-1\n## Notes\n- GAP-note-1\n- GAP-note-2\nprose line, not a bullet\n## Other\n- not-a-note\n'
+t('wave redteam: test gaps under ## Notes never reach a fix builder prompt', async () => {
+  const r = await runWave([rtCrew()], { labels: { ...base('a', { 'a-redteam': NOTES }), ...fixers } })
+  has(call(r, 'a-builder-2').prompt, 'REAL-defect-1')
+  for (const c of r.calls.filter((c) => /builder/.test(c.label))) assert.ok(!c.prompt.includes('GAP-note-1'), `${c.label} prompt carries a test gap`)
+})
+t('wave redteam: deferred holds the ## Notes bullets in order, "- " removed, up to the next ## heading', async () => {
+  const r = await runWave([rtCrew()], { labels: { ...base('a', { 'a-redteam': NOTES }), ...fixers } })
+  passedShape(r.res[0], 'a', HEAD, 'a-judge', rtCrew(), ['GAP-note-1', 'GAP-note-2'])
+})
+t('wave redteam: deferred reads ## Notes to the end of the report and works with REDTEAM 0', async () => {
+  const r = await runWave([rtCrew()], { labels: base('a', { 'a-redteam': 'REDTEAM: 0 findings\n## Notes\n- GAP-last\n' }) })
+  passedShape(r.res[0], 'a', HEAD, 'a-judge', rtCrew(), ['GAP-last'])
+})
+t('wave redteam: deferred is [] when the report has no ## Notes, and comes from the retried report after a bad first line', async () => {
+  const r = await runWave([rtCrew()], { labels: base('a', { 'a-redteam': RT0 }) })
+  assert.deepEqual(r.res[0].deferred, [])
+  const r2 = await runWave([rtCrew()], { labels: base('a', { 'a-redteam': 'REDTEAM: not run', 'a-redteam-2': 'REDTEAM: 0 findings\n## Notes\n- GAP-retry\n' }) })
+  assert.deepEqual(r2.res[0].deferred, ['GAP-retry'])
+})
+t('wave redteam: a crew with no red team has no deferred key', async () => {
+  const r = await runWave([entry('a')], { labels: base() })
+  assert.ok(!('deferred' in r.res[0]))
+})
+t('wave redteam: the judge FAIL after a red-team fix is spend 1', async () => {
+  const labels = { ...base('a', { 'a-redteam': RTN(1), 'a-judge': FAIL() }), 'a-builder-2': done('feat/f1') }
   const r = await runWave([rtCrew()], { repairBudget: 0, labels })
   stopped(r.res[0], 'BLOCKED', 'judge')
   assert.ok(r.res[0].text.startsWith('BLOCKED: repair budget spent: a, spend 1, repairBudget 0'), r.res[0].text)
@@ -1132,7 +1163,9 @@ t('wave resume merge-ready: sync, green, owns-check, judge in that order; no red
   assert.ok(idx(r, 'end:runner:a:sync') < idx(r, 'start:runner:a:check:green'))
   assert.ok(idx(r, 'end:runner:a:check:green') < idx(r, 'start:runner:a:owns-check'))
   assert.ok(idx(r, 'end:runner:a:owns-check') < idx(r, 'start:a-judge'))
-  passedShape(r.res[0], 'a', HEAD, 'a-judge', e)
+  // no red team ran on this path, so the shape is checked without `deferred` (either choice is allowed)
+  const { deferred, ...rest } = r.res[0]
+  passedShape(rest, 'a', HEAD, 'a-judge', { ...e, redTeam: false })
 })
 t('wave resume merge-ready: a sync conflict spawns the resolver in the crew worktree, then syncs again', async () => {
   const r = await runWave([entry('a', { resume: 'merge-ready' })], { labels: { 'a-resolver': marked('DONE', 'ok'), 'a-judge': PASS }, runner: ({ key, n }) => (key === 'sync' && n === 0 ? rj({ merged: false, conflicts: ['SYNC-CONFLICT.ts'] }) : undefined) })
@@ -1194,4 +1227,41 @@ t('wave judge reports: a fresh start (labelFrom {}) lists no report paths', asyn
   const r = await runWave([entry('a')], { labels: base() })
   const p = call(r, 'a-judge').prompt
   assert.ok(!p.includes('/reports/'), 'fresh judge prompt names a report path')
+})
+
+// ---------------------------------------------------------------- wave.js: brief text from merged prompt-rules
+
+const countOf = (s, sub) => s.split(sub).length - 1
+const J1 = 'Check that new code reuses what exists or names its consumer: each new function, export, option or file needs existing code that already does the job or a caller in the diff or in existing code. If there is neither, it is a finding.'
+const J2 = "Check the goal file's Non-goals heading against the diff. Work that lands in a non-goal is a finding."
+const R1 = 'Each finding names a plausible producer: the real caller or input that would produce the break.'
+const R2 = 'Class each finding as a real defect or a test gap. Only real defects count in REDTEAM <n> and go under ## Findings; test gaps go under ## Notes and are not fixed.'
+const M1 = 'Build only the approved scope quoted above. An idea beyond it goes back in your report, never into the diff.'
+t('wave briefs: the judge prompt carries the reuse-or-consumer rule and the Non-goals rule', async () => {
+  const r = await runWave([entry('a')], { labels: base() })
+  const p = call(r, 'a-judge').prompt
+  has(p, J1)
+  has(p, J2)
+})
+t('wave briefs: with labelFrom redteam 3 the last earlier red-team path appears once, on the "Earlier red-team report: " line', async () => {
+  const r = await runWave([entry('a', { resume: 'merge-ready', labelFrom: { redteam: 3, tester: 2 } })], { labels: { 'a-judge': PASS } })
+  const p = call(r, 'a-judge').prompt
+  assert.equal(countOf(p, rpt('a-redteam-2')), 1, 'a-redteam-2 path count')
+  const line = p.split('\n').find((l) => l.startsWith('Earlier red-team report: '))
+  assert.ok(line, 'no "Earlier red-team report: " line')
+  has(line, rpt('a-redteam-2'))
+  has(p, rpt('a-redteam'))
+  has(p, rpt('a-tester'))
+})
+t('wave briefs: the red-team prompt keeps "Red team:" first and carries the plausible-producer and defect-or-gap rules', async () => {
+  const r = await runWave([rtCrew()], { labels: base('a', { 'a-redteam': RT0 }) })
+  const p = call(r, 'a-redteam').prompt
+  assert.equal(p.split('\n')[0], 'Red team:')
+  has(p, R1)
+  has(p, R2)
+})
+t('wave briefs: the tester and builder prompts tell the member to build only the approved scope', async () => {
+  const r = await runWave([entry('a')], { labels: base() })
+  has(call(r, 'a-tester').prompt, M1)
+  has(call(r, 'a-builder').prompt, M1)
 })
