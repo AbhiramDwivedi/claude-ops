@@ -109,6 +109,71 @@ function run(env: Record<string, string> = {}, args: string[] = [], opts: { clau
   }
 }
 
+// Throwaway-worktree contract (foreman ruling, option (a) for the run-model answer leak): each case runs in a temp
+// worktree under os.tmpdir(), never in the checkout, and the worktree is gone once run-model has exited.
+const insideDir = (child: string, parent: string) => norm(child).startsWith(`${norm(parent)}/`)
+function assertThrowawayCwd(cwd: string, label: string) {
+  const tmp = realpathSync.native(tmpdir())
+  assert.ok(insideDir(cwd, tmp) || insideDir(cwd, tmpdir()), `${label}: ${cwd} is not under os.tmpdir() (${tmp})`)
+  assert.notEqual(norm(cwd), norm(realpathSync.native(ROOT)), `${label}: cwd is the repo root`)
+  assert.ok(!insideDir(cwd, realpathSync.native(ROOT)), `${label}: cwd is inside the checkout`)
+  assert.equal(existsSync(cwd), false, `${label}: ${cwd} still exists after the run (worktree not removed)`)
+}
+
+// Worktrees git knows that live under os.tmpdir(): `git worktree list` entries and <common>/worktrees/<name>/gitdir
+// pointers. Live agent worktrees sit under .claude/worktrees, so only tmpdir ones count.
+function tmpWorktrees() {
+  const tmps = [norm(tmpdir()), norm(realpathSync.native(tmpdir()))]
+  const underTmp = (p: string) => tmps.some((t) => norm(p).startsWith(`${t}/`))
+  const listed = git('worktree', 'list', '--porcelain').split('\n').filter((l) => l.startsWith('worktree '))
+    .map((l) => l.slice(9).trim()).filter(underTmp).map(norm)
+  const wtDir = join(COMMON, 'worktrees')
+  const meta: string[] = []
+  if (existsSync(wtDir)) {
+    for (const n of readdirSync(wtDir)) {
+      let g = ''
+      try { g = readFileSync(join(wtDir, n, 'gitdir'), 'utf8').trim() } catch { g = '' }
+      if (underTmp(g)) meta.push(`${n} -> ${norm(g)}`)
+    }
+  }
+  return { listed: listed.sort(), meta: meta.sort() }
+}
+const newOnly = (before: string[], after: string[]) => after.filter((x) => !before.includes(x))
+
+// A claude stand-in that records, at call time, what the fixture stub cannot: whether golden and the agents dir exist
+// in its cwd, the files under <cwd>/inputs, and what git says about the cwd. Written to a temp dir by the test.
+function makeProbe() {
+  const dir = mkdtempSync(join(tmpdir(), 'foundry-probe-'))
+  const file = join(dir, 'claude.mjs')
+  writeFileSync(file, `import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+let stdin = ''
+try { stdin = readFileSync(0, 'utf8') } catch {}
+const cwd = process.cwd()
+const g = (...a) => { const r = spawnSync('git', a, { cwd, encoding: 'utf8', windowsHide: true }); return r.status === 0 ? r.stdout.trim() : null }
+const inputsDir = join(cwd, 'inputs')
+const names = existsSync(inputsDir) ? readdirSync(inputsDir) : []
+const rec = {
+  argv: process.argv.slice(2), stdin, cwd,
+  golden: existsSync(join(cwd, 'plugins', 'foundry', 'evals', 'golden')),
+  agents: existsSync(join(cwd, 'plugins', 'foundry', 'agents')),
+  inputs: names,
+  inputText: Object.fromEntries(names.map((f) => [f, readFileSync(join(inputsDir, f), 'utf8')])),
+  head: g('rev-parse', 'HEAD'),
+  detached: g('symbolic-ref', '-q', 'HEAD') === null,
+  worktrees: g('worktree', 'list', '--porcelain'),
+}
+const logDir = process.env.CLAUDE_STUB_LOG
+if (logDir) {
+  const n = readdirSync(logDir).filter((f) => /^\\d+\\.json$/.test(f)).length + 1
+  writeFileSync(join(logDir, n + '.json'), JSON.stringify(rec))
+}
+process.stdout.write('VERDICT: PASS\\n\\n## Proof checked\\nprobe\\n')
+`)
+  return { file, dir }
+}
+
 const LINE = /^(\S+) (ok|miss|timeout) expected=(\S+) got=(\S+)$/
 function parse(stdout: string) {
   const lines = stdout.split('\n').filter((l) => l.trim())
@@ -200,7 +265,7 @@ test('run-model: one claude call per case, with the flags, role prompt, tool lis
     for (const bad of ['Write', 'Edit', 'NotebookEdit']) assert.ok(!tools.join(' ').includes(bad), `${c.id}: ${bad}`)
     assert.ok(!argv.includes('--max-budget-usd'), 'no budget flag')
     assert.equal(stdin, c.input, `${c.id}: stdin is the case input`)
-    assert.equal(norm(realpathSync.native(cwd)), norm(realpathSync.native(ROOT)), `${c.id}: cwd`)
+    assertThrowawayCwd(cwd, `${c.id}: cwd`)
   }
 })
 
@@ -492,11 +557,11 @@ test('run-model (source check): the per-case timeout is CASE_TIMEOUT_MS = 600000
   assert.ok(chunk.includes('timeout: CASE_TIMEOUT_MS'), 'timeout: CASE_TIMEOUT_MS missing from the case spawn')
 })
 
-test('run-model: runs claude in the repo root even when started from a subdirectory', () => {
+test('run-model: runs claude in a throwaway worktree even when started from a subdirectory', () => {
   const { r, calls } = run({}, [], { cwd: PLUGIN })
   assert.equal(r.status, 0, r.stderr)
   assert.ok(calls.length >= 1)
-  for (const c of calls) assert.equal(norm(realpathSync.native(c.cwd)), norm(realpathSync.native(ROOT)))
+  for (const c of calls) assertThrowawayCwd(c.cwd, 'cwd')
 })
 
 test('run-model: a child that exits non-zero with no stdout scores miss got=none, forwards its stderr and exits non-zero', () => {
@@ -509,6 +574,73 @@ test('run-model: a child that exits non-zero with no stdout scores miss got=none
   for (const m of rows) assert.deepEqual([m[2], m[4]], ['miss', 'none'], m[1])
   assert.ok(scoreLine, 'score line is still printed')
   assert.equal(Number(scoreLine[1]), 0)
+})
+
+test('run-model: at call time the case cwd is a detached worktree of HEAD with the agents dir checked out and the golden dir removed', () => {
+  const probe = makeProbe()
+  try {
+    const { r, calls } = run({}, [], { claude: probe.file })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(calls.length, cases().length)
+    for (const c of calls) {
+      assert.equal(c.golden, false, `golden still present in ${c.cwd}/plugins/foundry/evals/golden`)
+      assert.equal(c.agents, true, `plugins/foundry/agents missing in ${c.cwd}`)
+      assert.equal(c.head, HEAD, 'worktree is not at HEAD')
+      assert.equal(c.detached, true, 'worktree is not detached')
+      assert.ok(c.worktrees.split('\n').some((l: string) => l.startsWith('worktree ') && norm(l.slice(9)) === norm(c.cwd)),
+        `git does not list ${c.cwd} as a worktree`)
+      assertThrowawayCwd(c.cwd, 'probe cwd')
+    }
+  } finally { rm(probe.dir) }
+})
+
+test('run-model: no .git/foundry (either slash) reaches claude on stdin; named files arrive as inputs/<basename>, copied into the temp tree', () => {
+  const all = cases()
+  const probe = makeProbe()
+  try {
+    const { r, calls } = run({}, [], { claude: probe.file })
+    assert.equal(r.status, 0, r.stderr)
+    let named = 0
+    for (const [i, c] of all.entries()) {
+      const call = calls[i]
+      assert.ok(!call.stdin.includes('.git/foundry'), `${c.id}: stdin contains .git/foundry`)
+      assert.ok(!call.stdin.includes('.git\\foundry'), `${c.id}: stdin contains .git\\foundry`)
+      const paths = c.input.match(/\S*\.git[\\/]foundry[^\s"'`)]*/g) ?? []
+      for (const p of paths) {
+        named++
+        const base = basename(p.replace(/\\/g, '/'))
+        assert.ok(call.stdin.includes(`inputs/${base}`), `${c.id}: stdin does not name inputs/${base}`)
+        const src = join(COMMON, p.replace(/\\/g, '/').replace(/^.*?\.git\//, ''))
+        if (existsSync(src)) {
+          assert.ok(call.inputs.includes(base), `${c.id}: ${base} not copied to <cwd>/inputs (has ${call.inputs.join(',')})`)
+          assert.equal(call.inputText[base], readFileSync(src, 'utf8'), `${c.id}: copied ${base} differs from the source`)
+        }
+      }
+    }
+    assert.ok(named >= 1, 'no golden case names a .git/foundry file; this test would pin nothing')
+  } finally { rm(probe.dir) }
+})
+
+test('run-model: after a run git lists no extra worktree under os.tmpdir() and the common dir holds no leftover worktree metadata', () => {
+  const before = tmpWorktrees()
+  const { r, calls } = run()
+  assert.equal(r.status, 0, r.stderr)
+  assert.ok(calls.length >= 1)
+  const after = tmpWorktrees()
+  assert.deepEqual(newOnly(before.listed, after.listed), [], 'git worktree list shows a leftover temp worktree')
+  assert.deepEqual(newOnly(before.meta, after.meta), [], '<common>/worktrees holds leftover metadata from the run')
+  for (const c of calls) assert.equal(existsSync(c.cwd), false, `${c.cwd} still exists`)
+})
+
+test('run-model: the temp worktrees are removed even when every claude call fails', () => {
+  const before = tmpWorktrees()
+  const { r, calls } = run({ CLAUDE_STUB_EXIT: '3', CLAUDE_STUB_STDERR: 'boom' })
+  assert.notEqual(r.status, 0)
+  assert.equal(calls.length, cases().length)
+  const after = tmpWorktrees()
+  assert.deepEqual(newOnly(before.listed, after.listed), [], 'leftover temp worktree after failing calls')
+  assert.deepEqual(newOnly(before.meta, after.meta), [], 'leftover worktree metadata after failing calls')
+  for (const c of calls) assertThrowawayCwd(c.cwd, 'failing-call cwd')
 })
 
 test('run-model: a missing binary leaves no foundry-evals-* dir in os.tmpdir()', async () => {
