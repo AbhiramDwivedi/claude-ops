@@ -372,26 +372,24 @@ t('plan: agree returns {architectLabel, reviews, owner, stillDisagree} with no r
   assert.deepEqual(r.labels, ['foundry-architect', 'foundry-cynic'])
   assert.deepEqual(r.result, { architectLabel: 'foundry-architect', reviews: ['REVIEW: agree'], owner: [], stillDisagree: false })
 })
-t('plan: REVIEW: disagree runs one reconcile round: architect-2 with the cynic lines, then cynic-2 told it happened', async () => {
-  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': 'REVIEW: disagree\nWHY-CYNIC-ONE\nOwner: none', 'foundry-architect-2': ARCH(), 'foundry-cynic-2': AGREE } })
-  assert.deepEqual(r.labels, ['foundry-architect', 'foundry-cynic', 'foundry-architect-2', 'foundry-cynic-2'])
-  const a2 = call(r, 'foundry-architect-2').prompt
-  assert.equal(a2.split('\n')[0], 'Mode: plan')
-  has(a2, 'BRIEF-TEXT: build the thing')
-  has(a2, 'REVIEW: disagree')
-  assert.match(call(r, 'foundry-cynic-2').prompt, /reconcile/i)
-  assert.deepEqual(r.result, { architectLabel: 'foundry-architect-2', reviews: ['REVIEW: agree'], owner: [], stillDisagree: false })
+t('plan: REVIEW: disagree returns after one architect and one cynic: stillDisagree true, no architect-2 or cynic-2', async () => {
+  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': 'REVIEW: disagree\nWHY-CYNIC-ONE\nOwner: none' } })
+  assert.deepEqual(r.labels, ['foundry-architect', 'foundry-cynic'])
+  assert.ok(!had(r, 'foundry-architect-2'), 'architect-2 ran')
+  assert.ok(!had(r, 'foundry-cynic-2'), 'cynic-2 ran')
+  assert.deepEqual(r.result, { architectLabel: 'foundry-architect', reviews: ['REVIEW: disagree'], owner: [], stillDisagree: true })
 })
-t('plan: never a third architect: a second disagree sets stillDisagree', async () => {
+t('plan: a disagree never starts a second architect or cynic even when they would answer', async () => {
   const dis = 'REVIEW: disagree\nOwner: none'
-  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': dis, 'foundry-architect-2': ARCH(), 'foundry-cynic-2': dis } })
-  assert.equal(r.calls.filter((c) => /architect/.test(c.label)).length, 2)
+  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': dis, 'foundry-architect-2': ARCH(), 'foundry-cynic-2': AGREE } })
+  assert.equal(r.calls.filter((c) => /architect/.test(c.label)).length, 1)
+  assert.equal(r.calls.filter((c) => /cynic/.test(c.label)).length, 1)
   assert.equal(r.result.stillDisagree, true)
   assert.deepEqual(r.result.reviews, ['REVIEW: disagree'])
-  assert.equal(r.result.architectLabel, 'foundry-architect-2')
+  assert.equal(r.result.architectLabel, 'foundry-architect')
 })
-t('plan: owner is every Owner: line from every cynic except Owner: none, deduped, in order', async () => {
-  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': 'REVIEW: disagree\nOwner: Q-one\nOwner: none', 'foundry-architect-2': ARCH(), 'foundry-cynic-2': 'REVIEW: agree\nOwner: Q-one\nOwner: Q-two' } })
+t('plan: owner is every Owner: line from the one cynic except Owner: none, deduped, in order', async () => {
+  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': 'REVIEW: disagree\nOwner: Q-one\nOwner: none\nOwner: Q-two\nOwner: Q-one' } })
   assert.deepEqual(r.result.owner, ['Owner: Q-one', 'Owner: Q-two'])
 })
 t('plan: an Owner: line never stops the script (the result still comes back)', async () => {
@@ -420,9 +418,9 @@ t('plan spawn: a missing architect role is never passed to agent() and the scrip
   assert.ok(r.error)
   assert.equal(r.calls.length, 0)
 })
-t('plan spawn: every call carries model, effort, agentType and isolation from roles (reconcile path)', async () => {
-  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': 'REVIEW: disagree', 'foundry-architect-2': ARCH(), 'foundry-cynic-2': AGREE } })
-  assert.equal(r.calls.length, 4) // checkSpawns ran inside runPlan
+t('plan spawn: every call carries model, effort, agentType and isolation from roles (disagree run)', async () => {
+  const r = await runPlan({ labels: { 'foundry-architect': ARCH(), 'foundry-cynic': 'REVIEW: disagree' } })
+  assert.equal(r.calls.length, 2) // checkSpawns ran inside runPlan
   assert.equal(call(r, 'foundry-architect').opts.isolation, 'worktree')
   assert.ok(!Object.hasOwn(call(r, 'foundry-cynic').opts, 'isolation'))
 })
