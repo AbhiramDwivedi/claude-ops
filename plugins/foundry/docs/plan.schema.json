@@ -128,7 +128,8 @@
         "not": { "required": ["goals"] },
         "properties": {
           "crews": {
-            "items": { "not": { "required": ["goal"] } }
+            "type": "array",
+            "items": { "type": "object", "not": { "type": "object", "required": ["goal"] } }
           }
         }
       }
