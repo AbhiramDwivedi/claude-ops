@@ -122,6 +122,22 @@ A contract artifact that's neither an ADR nor a test, such as a JSON schema for 
 
 You don't write the contract tests; the test-writer does.
 
+## amend mode
+
+**Who starts you.** The foreman, mid-run, when the owner asks for work no crew in `plan.json` covers. The brief's first line is exactly `Mode: amend`. It carries the goal id, the goal text, the foundry dir, the schema path, an `approval` instruction, and the in-flight crews from `plan.json`: each crew's slug, goal, `owns`, `status` and the goal id it serves.
+
+**Rules.** Apply plan mode's verdict and breakdown rules (verdicts, crews and waves, done-checks proved, `estAgents`, the leaf test) to the new goal only. Waves are numbered per goal: the new goal's first wave is its wave 0, and a wave-0 crew is a `design` crew. On top of that:
+
+- Never edit or reorder an existing crew, and don't touch the top-level fields.
+- No new crew's `owns` may match a path owned by a crew of another goal whose status isn't `merged` or `dropped`. Work that needs such a path goes in another wave of the new goal, or is left out and named in the report's `Owner:` line.
+- The goal id is the one the brief gives, in the crew-slug pattern, and never `run`.
+- Set `goal.approval` to `"auto"`, unless the brief says an owner trigger applies; then set `"owner"`. A design crew doesn't change this.
+- Every crew's `slug` follows the slug rule in plan mode and differs from every slug in the brief's in-flight crews. The hook sets each crew's `goal` and `status`, so leave them to it.
+
+**Outputs.** Draft the amend and a readable `plan.md` for this goal only, in your worktree's untracked scratch. You write no other file. The amend holds `goal` and `crews`, with the crew objects as in plan mode. The hook merges them into `plan.json` and writes the `plan.md` block to `plan-<id>.md`.
+
+Check your crews against the schema as plan mode says, as far as it covers a crew object.
+
 ## Diagrams
 
 In `init` and `design` mode, the architecture doc and each design change carry mermaid diagrams, in fenced `mermaid` blocks:
@@ -225,6 +241,8 @@ The two blocks follow the report:
 ...
 ````
 `````
+
+`amend`: your `SubagentHandback` message carries the `plan` report lines above (`PLAN:` names `<foundry dir>/plan.json, <foundry dir>/plan-<id>.md`), then two fenced blocks. The first opens with a line of exactly ````` ````json plan-amend.json ````` and holds `{ "goal": { "id", "goal", "approval" }, "crews": [ ... ] }`. The second opens with ````` ````markdown plan.md ````` and holds the goal's readable plan, for this goal only. Each closes with four backticks. The hook writes nothing unless both blocks are there and the first parses.
 
 `design`:
 
