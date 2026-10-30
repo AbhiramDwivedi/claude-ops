@@ -8,7 +8,8 @@
 
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { existsSync, readdirSync, realpathSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
@@ -113,16 +114,45 @@ test('runSnippet: a snippet that creates a canary file leaves the caller checkou
   assert.equal(existsSync(join(PLUGIN, name)), false, 'canary in the plugin dir')
 })
 
-test('runSnippet: drops GIT_* variables from the caller environment', () => {
-  process.env.GIT_DIR = join(ROOT, '.git')
-  process.env.GIT_WORK_TREE = ROOT
+test('runSnippet: drops every GIT_* variable from the caller environment and never touches the repo they point at', () => {
+  // Every injected path is inside a throwaway dir. Never point GIT_* at ROOT or any real repo.
+  const tmp = mkdtempSync(join(tmpdir(), 'foundry-gitenv-'))
+  const keys = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_CONFIG_GLOBAL', 'GIT_AUTHOR_NAME']
+  const saved: Record<string, string | undefined> = {}
+  for (const k of keys) saved[k] = process.env[k]
+  const cleaned: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(process.env)) if (!k.toUpperCase().startsWith('GIT_')) cleaned[k] = v
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', args, { cwd, env: cleaned, stdio: 'pipe', windowsHide: true }).toString()
   try {
-    const r = runSnippet('git rev-parse --show-toplevel', {})
+    git(tmp, 'init', '-q')
+    const before = git(ROOT, 'status', '--porcelain')
+    process.env.GIT_DIR = join(tmp, '.git')
+    process.env.GIT_WORK_TREE = tmp
+    process.env.GIT_INDEX_FILE = join(tmp, '.git', 'fake-index')
+    process.env.GIT_OBJECT_DIRECTORY = join(tmp, 'fake-objects')
+    process.env.GIT_CONFIG_GLOBAL = join(tmp, 'fake-gitconfig')
+    process.env.GIT_AUTHOR_NAME = 'leaky-author'
+    const probe = keys.map((k) => `echo "${k}=\${${k}-unset}"`).join('; ')
+    const r = runSnippet(`${probe}; git rev-parse --show-toplevel`, {})
     assert.equal(r.ok, true, r.stderr)
-    assert.notEqual(norm(r.stdout.trim()), norm(realpathSync.native(ROOT)))
+    const lines = r.stdout.trim().split('\n')
+    for (const k of keys) assert.ok(lines.includes(`${k}=unset`), `${k} leaked into the snippet: ${r.stdout}`)
+    const top = norm(lines[lines.length - 1])
+    assert.notEqual(top, norm(realpathSync.native(tmp)))
+    assert.notEqual(top, norm(realpathSync.native(ROOT)))
+    // The throwaway repo the variables pointed at stays untouched.
+    assert.equal(git(tmp, 'rev-list', '--all').trim(), '', 'a commit landed in the throwaway repo')
+    const cfg = spawnSync('git', ['config', '--local', 'user.name'], { cwd: tmp, env: cleaned, windowsHide: true })
+    assert.equal(cfg.stdout.toString().trim(), '', 'user.name written to the throwaway repo config')
+    assert.equal(existsSync(join(tmp, 'a.txt')), false, 'fixture file written into the throwaway work tree')
+    assert.equal(git(ROOT, 'status', '--porcelain'), before, 'the real checkout status changed')
   } finally {
-    delete process.env.GIT_DIR
-    delete process.env.GIT_WORK_TREE
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+    rmSync(tmp, { recursive: true, force: true })
   }
 })
 
@@ -159,4 +189,22 @@ test('score: is pure - the same input twice gives equal results, and different i
   assert.equal(score('VERDICT: FAIL\n', V('FAIL')).ok, true)
   assert.equal(score('VERDICT: FAIL\n', V('PASS')).ok, false)
   assert.equal(score('', V('PASS')).got, undefined)
+})
+
+test('score VERDICT: keyword and kind are case-sensitive', () => {
+  assert.equal(score('verdict: pass\n', V('PASS')).got, undefined)
+  assert.equal(score('Verdict: FAIL\n', V('FAIL')).got, undefined)
+  assert.equal(score('VERDICT: pass\n', V('PASS')).got, undefined)
+})
+
+test('score RECOMMEND: the keyword is case-sensitive', () => {
+  assert.equal(score('recommend: answer\n', R('answer')).got, undefined)
+  assert.equal(score('Recommend: defer\n', R('defer')).got, undefined)
+})
+
+test('score RECOMMEND: the line must start with RECOMMEND or a cynic-N prefix', () => {
+  assert.equal(score('I would not RECOMMEND pass here\n', R('pass')).got, undefined)
+  assert.equal(score('note: cynic-2 RECOMMEND: defer\n', R('defer')).got, undefined)
+  assert.deepEqual(score('cynic-2: RECOMMEND: defer\n', R('defer')), { ok: true, got: 'defer' })
+  assert.deepEqual(score('  RECOMMEND answer\n', R('answer')), { ok: true, got: 'answer' })
 })
