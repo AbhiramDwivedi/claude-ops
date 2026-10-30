@@ -199,7 +199,7 @@ const sendAmend = async ($: Engine, w: W, id: string, amend: unknown, md: string
 }
 const sendPlan = async ($: Engine, w: W) => {
   await w.agentCall(undefined, { subagent_type: 'foundry:architect', prompt: 'Mode: plan\nGoal: something else', name: 'planner', model: 'opus', effort: 'medium' })
-  await handBack($, 'new1', message(JSON.stringify(planOf([newCrew('other', 0)]), null, 2), '# other plan'))
+  await handBack($, 'new1', ['VERDICT: plan ready, both files below.', `${FENCE}json plan.json`, JSON.stringify(planOf([newCrew('other', 0)]), null, 2), FENCE, `${FENCE}markdown plan.md`, '# other plan', FENCE, 'Report: one crew.'].join('\n'))
   await settle()
 }
 
@@ -330,11 +330,11 @@ test('intake item 6: the plan.json block missing is refused with the nothing lin
 // the replace path
 const withGoalAThenB = async ($: Engine, w: W) => {
   w.files.set(PLAN_JSON, text(existing()))
-  await sendAmend($, w, 'aa', amendOf('aa', [newCrew('aa-1', 0), newCrew('aa-2', 1)]))
+  await sendAmend($, w, 'aa', amendOf('aa', [newCrew('aa-one', 0), newCrew('aa-two', 1)]))
   expect(goalsOf(onDisk(w)).map(g => g.id)).toEqual(['aa'])
   const addedAt = goalsOf(onDisk(w))[0].addedAt
   await w.clock.advance(3 * 60_000)
-  await sendAmend($, w, 'bb', amendOf('bb', [newCrew('bb-1', 0)]))
+  await sendAmend($, w, 'bb', amendOf('bb', [newCrew('bb-one', 0)]))
   expect(goalsOf(onDisk(w)).map(g => g.id)).toEqual(['aa', 'bb'])
   await w.clock.advance(3 * 60_000)
   return addedAt
@@ -344,13 +344,13 @@ test('intake item 7: replace keeps the goal index and original addedAt and puts 
   const w = await setup($, on)
   const addedAt = await withGoalAThenB($, w)
   const mid = onDisk(w)
-  expect(slugs(mid)).toEqual(['quotas', 'gateway', 'docs', 'aa-1', 'aa-2', 'bb-1'])
+  expect(slugs(mid)).toEqual(['quotas', 'gateway', 'docs', 'aa-one', 'aa-two', 'bb-one'])
   await sendAmend($, w, 'aa', amendOf('aa', [newCrew('aa-x', 0), newCrew('aa-y', 0), newCrew('aa-z', 1)], { goal: 'do aa, redone', approval: 'owner' }))
   const after = onDisk(w)
   expect(goalsOf(after).map(g => g.id)).toEqual(['aa', 'bb'])
   expect(goalsOf(after)[0]).toMatchObject({ id: 'aa', goal: 'do aa, redone', approval: 'owner', approvedAt: null, addedAt })
   expect(goalsOf(after)[1]).toEqual(goalsOf(mid)[1])
-  expect(slugs(after)).toEqual(['quotas', 'gateway', 'docs', 'aa-x', 'aa-y', 'aa-z', 'bb-1'])
+  expect(slugs(after)).toEqual(['quotas', 'gateway', 'docs', 'aa-x', 'aa-y', 'aa-z', 'bb-one'])
   expect(crewsOf(after)[6]).toEqual(crewsOf(mid)[5])
   expect(crewsOf(after).slice(0, 3)).toEqual(crewsOf(mid).slice(0, 3))
   expect(crewsOf(after).slice(3, 6).map(c => c.goal)).toEqual(['aa', 'aa', 'aa'])
@@ -398,14 +398,14 @@ test('intake item 7: when the goal crews were all removed by hand, the replaceme
   p.crews = crewsOf(p).filter(c => c.goal !== 'aa')
   w.files.set(PLAN_JSON, text(p))
   await sendAmend($, w, 'aa', amendOf('aa', [newCrew('aa-x', 0)]))
-  expect(slugs(onDisk(w))).toEqual(['quotas', 'gateway', 'docs', 'bb-1', 'aa-x'])
+  expect(slugs(onDisk(w))).toEqual(['quotas', 'gateway', 'docs', 'bb-one', 'aa-x'])
   expect(goalsOf(onDisk(w)).map(g => g.id)).toEqual(['aa', 'bb'])
 })
 
 test('intake item 8: a Mode: plan hand-back over an approved plan is still kept, goals or not', async ($, on) => {
   const w = await setup($, on)
   w.files.set(PLAN_JSON, text(existing()))
-  await sendAmend($, w, 'aa', amendOf('aa', [newCrew('aa-1', 0)]))
+  await sendAmend($, w, 'aa', amendOf('aa', [newCrew('aa-one', 0)]))
   const plan = w.files.get(PLAN_JSON)
   w.files.delete(PLAN_MD)
   await sendPlan($, w)
