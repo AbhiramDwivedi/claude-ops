@@ -17,3 +17,8 @@ The marketplace lists seven plugins that install separately (ADR-0001). Users on
 - A change that spans plugins (ADR-0003's parser copy, a renamed agent type) needs a bump in each plugin it touches.
 - There is no changelog file; the version history is the commit log and each plugin's README.
 - All plugins are below 1.0, so semver itself promises nothing about breaking changes yet. Which changes count as breaking (a renamed agent, skill, command, setting or project-file contract) is set in the architecture doc's principles, not here.
+
+## Amendment 2026-11-02: every version is tagged
+
+Other plugins depend on ours with semver ranges (truss on kit `^0.3.1`, worktrees `^0.8.3`, subagent-limits `^0.3.1`), and Claude Code resolves a range against git tags named `<plugin>--v<version>` in the repo that hosts the plugin. For a relative-path marketplace entry, that is this repo. So each version gets a tag at the commit that first sets it in `plugin.json`, and `scripts/tag-releases.sh --push` creates and pushes the missing ones. It runs after every version bump reaches main. It backfilled every earlier version on 2026-11-02. A version without a tag can't satisfy a range, so Claude Code falls back to main's copy and disables the dependent plugin when main's version is out of range.
+

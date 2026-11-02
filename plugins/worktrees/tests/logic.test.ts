@@ -63,6 +63,10 @@ import {
   worktreeMentions,
   worktreeRootOf,
   agentWorktreeId,
+  sessionDirOf,
+  workflowMetaWorktree,
+  workflowRunFinished,
+  workflowWorktreeRun,
   cherryMerged,
   mainCheckoutOf,
   metaFinished,
@@ -808,4 +812,36 @@ test('sweepActive does not mutate its input, keeps slots, and leaves survivors i
   expect(() => sweepActive(before, frozenFacts, true)).not.toThrow()
   // empty state and empty facts
   expect(sweepActive(parseState(undefined), { now: NOW, finished: [], gone: [] }, true)).toEqual(parseState(undefined))
+})
+
+test('workflowWorktreeRun returns the run id of a direct wf_<run>-<n> worktree under the main checkout', () => {
+  expect(workflowWorktreeRun('/r/.claude/worktrees/wf_0dff946d-af1-6', '/r', false)).toBe('wf_0dff946d-af1')
+  expect(workflowWorktreeRun('C:\\R\\.claude\\worktrees\\WF_0dff946d-af1-18', 'C:/r', true)).toBe('wf_0dff946d-af1')
+  expect(workflowWorktreeRun('/r/.claude/worktrees/agent-a1', '/r', false)).toBe(undefined)
+  expect(workflowWorktreeRun('/r/.claude/worktrees/wf_0dff946d-af1', '/r', false)).toBe(undefined)
+  expect(workflowWorktreeRun('/other/.claude/worktrees/wf_0dff946d-af1-6', '/r', false)).toBe(undefined)
+  expect(workflowWorktreeRun('/r/.claude/worktrees/wf_0dff946d-af1-6/sub', '/r', false)).toBe(undefined)
+})
+
+test('workflowRunFinished is true only for a known end status', () => {
+  expect(workflowRunFinished('{"status":"completed"}')).toBe(true)
+  expect(workflowRunFinished('{"status":"failed"}')).toBe(true)
+  expect(workflowRunFinished('{"status":"running"}')).toBe(false)
+  expect(workflowRunFinished('{"status":"paused"}')).toBe(false)
+  expect(workflowRunFinished('{not json')).toBe(false)
+  expect(workflowRunFinished(undefined)).toBe(false)
+})
+
+test('workflowMetaWorktree takes only a wf_* worktreePath', () => {
+  expect(workflowMetaWorktree('{"worktreePath":"/r/.claude/worktrees/wf_a-b-1"}')).toBe('/r/.claude/worktrees/wf_a-b-1')
+  expect(workflowMetaWorktree('{"worktreePath":"/r/.claude/worktrees/agent-a1"}')).toBe(undefined)
+  expect(workflowMetaWorktree('{"worktreePath":"/r"}')).toBe(undefined)
+  expect(workflowMetaWorktree('{}')).toBe(undefined)
+})
+
+test('sessionDirOf finds the session dir from a session, subagent or Workflow agent transcript', () => {
+  expect(sessionDirOf('/p/S1.jsonl')).toBe('/p/S1')
+  expect(sessionDirOf('/p/S1/subagents/agent-a1.jsonl')).toBe('/p/S1')
+  expect(sessionDirOf('/p/S1/subagents/workflows/wf_a-b/agent-a1.jsonl')).toBe('/p/S1')
+  expect(sessionDirOf('C:\\p\\S1\\subagents\\agent-a1.jsonl')).toBe('C:/p/S1')
 })

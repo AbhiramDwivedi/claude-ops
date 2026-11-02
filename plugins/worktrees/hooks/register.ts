@@ -365,14 +365,21 @@ export function mainCheckoutOf(commonDirOut: string): string | undefined {
   return m ? m[1] : undefined
 }
 
-// Where a subagent's meta file lives, from the event's transcript path and the bare agent id.
-export function metaPathFor(transcriptPath: string, id: string): string {
+// The session dir (`<projects>/<project>/<session>`), from the session's transcript or a subagent's:
+// `<session>/subagents/agent-<id>.jsonl` or a Workflow agent's `<session>/subagents/workflows/<run>/agent-<id>.jsonl`.
+export function sessionDirOf(transcriptPath: string): string {
   const path = transcriptPath.replace(/\\/g, '/')
   const parts = path.split('/')
-  // a subagent's transcript is `<session>/subagents/agent-<id>.jsonl`; a session transcript in a folder named subagents is not
-  const inSubagents = parts[parts.length - 2] === 'subagents' && /^agent-[^/]*\.jsonl$/.test(parts[parts.length - 1])
-  const sessionDir = inSubagents ?parts.slice(0, -2).join('/') : path.replace(/\.jsonl$/, '')
-  return `${sessionDir}/subagents/agent-${id}.meta.json`
+  // a session transcript in a folder named subagents is not a subagent's
+  const leaf = /^agent-[^/]*\.jsonl$/.test(parts[parts.length - 1])
+  if (leaf && parts[parts.length - 2] === 'subagents') return parts.slice(0, -2).join('/')
+  if (leaf && parts[parts.length - 4] === 'subagents' && parts[parts.length - 3] === 'workflows') return parts.slice(0, -4).join('/')
+  return path.replace(/\.jsonl$/, '')
+}
+
+// Where a subagent's meta file lives, from the event's transcript path and the bare agent id.
+export function metaPathFor(transcriptPath: string, id: string): string {
+  return `${sessionDirOf(transcriptPath)}/subagents/agent-${id}.meta.json`
 }
 
 // A meta file that says its agent finished: a JSON object with `finished` exactly true. Never throws.
@@ -543,6 +550,43 @@ export function agentWorktreeId(path: string, main: string, windows: boolean): s
   if (!p.startsWith(prefix)) return undefined
   const id = p.slice(prefix.length)
   return /^[0-9a-z]+$/.test(id) ? id : undefined
+}
+
+// The run id of a Workflow agent's worktree, `<main>/.claude/worktrees/wf_<run>-<n>` (the Workflow tool names its
+// agents' worktrees after the run, `wf_0dff946d-af1-6` for agent 6 of run `wf_0dff946d-af1`), else undefined.
+export function workflowWorktreeRun(path: string, main: string, windows: boolean): string | undefined {
+  const prefix = normPath(main, windows) + '/.claude/worktrees/'
+  const p = normPath(path, windows)
+  if (!p.startsWith(prefix)) return undefined
+  const m = /^(wf_[0-9a-z]+(?:-[0-9a-z]+)*)-[0-9]+$/i.exec(p.slice(prefix.length))
+  return m?.[1]
+}
+
+// the statuses a Workflow run file (`<session>/workflows/<run>.json`) ends in; any other status counts as running
+const WORKFLOW_DONE = new Set(['completed', 'failed', 'killed', 'cancelled', 'canceled', 'stopped', 'aborted', 'error', 'errored', 'timeout', 'timed_out'])
+
+// A Workflow run file that says its run ended: a JSON object whose `status` is a known end status. Never throws.
+export function workflowRunFinished(text: string | undefined): boolean {
+  try {
+    const raw: unknown = JSON.parse(text ?? '')
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false
+    const status = (raw as { status?: unknown }).status
+    return typeof status === 'string' && WORKFLOW_DONE.has(status.toLowerCase())
+  } catch {
+    return false
+  }
+}
+
+// The worktree a Workflow agent's meta names (`worktreePath`), when it is a `wf_*` folder. Never throws.
+export function workflowMetaWorktree(text: string | undefined): string | undefined {
+  try {
+    const raw: unknown = JSON.parse(text ?? '')
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
+    const path = (raw as { worktreePath?: unknown }).worktreePath
+    return typeof path === 'string' && /[\\/]\.claude[\\/]worktrees[\\/]wf_[^\\/]+$/.test(path) ? path : undefined
+  } catch {
+    return undefined
+  }
 }
 
 // The state without the entries that are stale, whose agent finished, or whose worktree is gone.
@@ -983,18 +1027,90 @@ async function declaredByKit($: $, input: Record<string, unknown>, main: string)
   }
 }
 
+// The `wf_*` worktree a Workflow agent runs in, from its meta: beside its own transcript when the event names it
+// (`<session>/subagents/workflows/<run>/agent-<id>.jsonl`), else looked up under every run dir of the session.
+// The Workflow tool's agents get no `agent-<id>` worktree and their cwd may be the session's, so this is the only
+// way to tie one to its worktree. undefined when nothing names one; never throws.
+async function workflowAgentPath($: $, transcriptPath: unknown, agentTranscriptPath: unknown, agentId: string): Promise<string | undefined> {
+  const read = async (meta: string) => {
+    try {
+      return (await $.fs.exists(meta)) ? workflowMetaWorktree((await $.fs.read(meta)) as string) : undefined
+    } catch {
+      return undefined
+    }
+  }
+  if (typeof agentTranscriptPath === 'string' && /[\\/]subagents[\\/]workflows[\\/][^\\/]+[\\/]agent-[^\\/]*\.jsonl$/.test(agentTranscriptPath)) {
+    const hit = await read(agentTranscriptPath.replace(/\\/g, '/').replace(/\.jsonl$/, '.meta.json'))
+    if (hit !== undefined) return hit
+  }
+  const from = typeof transcriptPath === 'string' && transcriptPath !== '' ? transcriptPath : typeof agentTranscriptPath === 'string' ? agentTranscriptPath : ''
+  if (from === '') return undefined
+  const runs = `${sessionDirOf(from)}/subagents/workflows`
+  let entries: { name: string }[]
+  try {
+    entries = (await $.fs.list(runs)) as { name: string }[]
+  } catch {
+    return undefined
+  }
+  for (const entry of entries) {
+    if (!/^wf_/.test(entry.name)) continue
+    const hit = await read(`${runs}/${entry.name}/agent-${agentId}.meta.json`)
+    if (hit !== undefined) return hit
+  }
+  return undefined
+}
+
+// Whether Workflow run `runId` has ended, from its run file `<session>/workflows/<run>.json`: this session's first,
+// then the project's other sessions (a run another session started). A file that can't be found or read counts as
+// running. Answers are kept in `cache` for one sweep.
+async function workflowRunDone($: $, transcriptPath: string | undefined, runId: string, cache: Map<string, boolean>): Promise<boolean> {
+  const known = cache.get(runId)
+  if (known !== undefined) return known
+  let done = false
+  if (typeof transcriptPath === 'string' && transcriptPath !== '') {
+    const session = sessionDirOf(transcriptPath)
+    const check = async (dir: string) => {
+      const file = `${dir}/workflows/${runId}.json`
+      try {
+        return (await $.fs.exists(file)) && workflowRunFinished((await $.fs.read(file)) as string)
+      } catch {
+        return false
+      }
+    }
+    done = await check(session)
+    if (!done) {
+      const project = session.replace(/\/[^/]*$/, '')
+      try {
+        const sessions = (await $.fs.list(project)) as { name: string; kind?: string }[]
+        for (const s of sessions) {
+          if (s.name.endsWith('.jsonl') || s.name === 'memory' || `${project}/${s.name}` === session) continue
+          if (s.kind !== undefined && s.kind !== 'dir' && s.kind !== 'directory') continue
+          if (await check(`${project}/${s.name}`)) {
+            done = true
+            break
+          }
+        }
+      } catch {
+        // the project dir can't be listed: the run counts as running
+      }
+    }
+  }
+  cache.set(runId, done)
+  return done
+}
+
 type AgentWorktree = { repo: Repo; path: string; branch: string }
 
 // The worktree an agent runs in, when the plugin can identify it: the `.claude/worktrees/<name>` folder `cwd` lies
 // in, or `agent-<id>` there. Never the main checkout or the worktree the session itself works in, and only a folder
 // that is the top of its own checkout with a branch checked out.
-async function agentWorktree($: $, cwd: string, agentId: string): Promise<AgentWorktree | undefined> {
+async function agentWorktree($: $, cwd: string, agentId: string, workflowPath?: string): Promise<AgentWorktree | undefined> {
   const repo = await repoAt($, cwd)
   if (repo === undefined) return undefined
   const windows = await isWindows($)
   const prefix = normPath(`${repo.mainRoot}/.claude/worktrees`, windows) + '/'
   const own = worktreeRootOf(await $.session.cwd())
-  for (const path of [worktreeRootOf(cwd), `${repo.mainRoot}/.claude/worktrees/agent-${agentId}`]) {
+  for (const path of [worktreeRootOf(cwd), `${repo.mainRoot}/.claude/worktrees/agent-${agentId}`, workflowPath]) {
     if (path === undefined) continue
     const n = normPath(path, windows)
     if (!n.startsWith(prefix) || n === normPath(repo.mainRoot, windows)) continue
@@ -1236,8 +1352,8 @@ async function removeWorktree($: $, cwd: string, path: string, windows: boolean)
 // What a sweep knows of the merge that started it: the event's cwd and the session transcript (for the metas).
 type SweepEvent = { cwd?: string; transcriptPath?: string }
 
-// Removes the agent worktrees (`<main checkout>/.claude/worktrees/agent-<id>`, from `git worktree list`, so native
-// and auto-isolated ones count and a restart loses nothing) whose agent is done, that are clean, and whose branch is
+// Removes the agent worktrees (`<main checkout>/.claude/worktrees/agent-<id>`, and the Workflow tool's `wf_<run>-<n>`,
+// from `git worktree list`, so native, auto-isolated and Workflow ones count and a restart loses nothing) whose agent is done, that are clean, and whose branch is
 // in the main checkout's HEAD (repo ADR-0015, amendment 2026-10-28) and that have no member still running; then their branch. A dirty or
 // locked one is kept and reported. One write of slots.json retires finished, gone and stale `active` entries.
 // `tracked` is only a hint: removed paths drop out of it. Answers what it removed and what it kept, for the toasts.
@@ -1306,13 +1422,17 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
   const finishedPaths: string[] = []
   const removed: string[] = []
   const kept: string[] = []
+  const runsDone = new Map<string, boolean>()
   for (const wt of worktrees) {
     const id = agentWorktreeId(wt.path, found.main, windows)
-    if (id === undefined || isRef(wt.path)) continue
+    // a Workflow agent's `wf_<run>-<n>` worktree: its agent is done once its run has ended
+    const run = id === undefined ? workflowWorktreeRun(wt.path, found.main, windows) : undefined
+    if ((id === undefined && run === undefined) || isRef(wt.path)) continue
     const key = normPath(wt.path, windows)
     let finished = false
-    if (typeof ev.transcriptPath === 'string' && ev.transcriptPath !== '') {
-      const meta = metaPathFor(ev.transcriptPath, id)
+    if (run !== undefined) finished = await workflowRunDone($, ev.transcriptPath, run, runsDone)
+    else if (typeof ev.transcriptPath === 'string' && ev.transcriptPath !== '') {
+      const meta = metaPathFor(ev.transcriptPath, id as string)
       try {
         finished = (await $.fs.exists(meta)) && metaFinished((await $.fs.read(meta)) as string)
       } catch {
@@ -1329,7 +1449,8 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
       dirty = !status.ok || status.out !== ''
     }
     // a lead with a member still running is live, whatever its own meta says (ADR-0015 amendment 2026-10-28, a)
-    const members = membersRunning(id, metas)
+    // a Workflow agent has no members the sweep can see: its run's end covers them
+    const members = id === undefined ? false : membersRunning(id, metas)
     const inMain = members ? undefined : await inMainBy(branch, wt.locked === undefined && !dirty)
     if (!mainBranchRead) {
       mainBranchRead = true
@@ -1840,7 +1961,9 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     const live = liveWork(e.background_tasks)
     const inTranscript = live.length > 0 ? await idsInTranscript($, e.agent_transcript_path, live.map(t => t.id)) : new Set<string>()
-    const wt = await agentWorktree($, e.cwd, e.agent_id)
+    const ev = e as unknown as { transcript_path?: unknown; agent_transcript_path?: unknown }
+    const wfPath = await workflowAgentPath($, ev.transcript_path, ev.agent_transcript_path, e.agent_id)
+    const wt = await agentWorktree($, e.cwd, e.agent_id, wfPath)
     const dirty = wt === undefined ? undefined : await dirtyOf($, wt)
     // nothing is cleaned up for a refused stop
     const decision = decideStop({ stopHookActive: e.stop_hook_active, tasks: live, inTranscript, dirty })
@@ -1853,7 +1976,7 @@ export const register: Register = (on, options) => {
     if (decision.commit && wt !== undefined && dirty !== undefined) await commitLeftovers($, wt, dirty, e.agent_type, e.agent_id)
     const repo = await repoAt($, e.cwd)
     if (repo === undefined) return result
-    const candidates = [worktreeRootOf(e.cwd), `${repo.mainRoot}/.claude/worktrees/agent-${e.agent_id}`]
+    const candidates = [worktreeRootOf(e.cwd), `${repo.mainRoot}/.claude/worktrees/agent-${e.agent_id}`, wfPath]
     const windows = await isWindows($)
     const seen = new Set<string>()
     for (const path of candidates) {
@@ -1879,10 +2002,12 @@ export const register: Register = (on, options) => {
   }).catch(passThrough)
 
   // 4. An editing agent is told to commit on its branch; the main thread, to merge an agent's branch before using it.
-  // SubagentStart's cwd may be the session's, not the worktree's: agentWorktree also looks for agent-<id>.
+  // SubagentStart's cwd may be the session's, not the worktree's: agentWorktree also looks for agent-<id>, and for
+  // a Workflow agent the `wf_*` worktree its meta names.
   on('classic.SubagentStart', async ($, e, next) => {
     const result = await next(e)
-    const wt = await agentWorktree($, e.cwd, e.agent_id)
+    const ev = e as unknown as { transcript_path?: unknown; agent_transcript_path?: unknown }
+    const wt = await agentWorktree($, e.cwd, e.agent_id, await workflowAgentPath($, ev.transcript_path, ev.agent_transcript_path, e.agent_id))
     await $.ui.log(`worktrees: ${e.agent_type} ${e.agent_id} started; cwd ${e.cwd}; worktree ${wt?.path ?? 'none'}`, { to: 'debug' })
     if (wt === undefined) return result
     return { ...result, additionalContext: [...(result.additionalContext ?? []), startContext(wt.branch)] }
