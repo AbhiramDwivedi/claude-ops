@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 # 6: a cleaned-up worktree reads its project root's CLAUDE.md instead of counting as missing.
 # 7: tool rejections counted from toolDenialKind; new permissions.denials, effort.by_model, verification.review_after_edits,
 #    practices.usage.rewinds_after_untracked_edits and commands_used.
-METRICS_VERSION = 7
+# 8: worktree cuts use the nearest hidden/scratchpad marker, so an earlier hidden parent
+#    (.hermes, .cache) does not steal an in-repo scratchpad worktree's project folder.
+METRICS_VERSION = 8
 
 
 def parse_ts(s):
@@ -47,10 +49,17 @@ def resolve_cwd(cwd):
             slug = parts[i + 1]
             toks = [t for t in slug.split("-") if t]
             return (toks[-1] if toks else slug), None, slug
-    # a worktree: cut at the first hidden folder on the way to it (app/.hardening/x/.run-worktrees/y -> app)
+    # a worktree: cut at the hidden/scratchpad marker nearest the worktree
+    # (app/.hardening/x/.run-worktrees/y -> app). Nearest, not first from the
+    # left, so an earlier hidden parent (.hermes, .cache) does not steal an
+    # in-repo scratchpad worktree.
     if any("worktree" in p.lower() for p in parts):
         w = next(i for i, p in enumerate(parts) if "worktree" in p.lower())
-        k = next((i for i in range(1, w + 1) if parts[i].startswith(".") or parts[i].lower() == "scratchpad"), None)
+        markers = [i for i in range(1, w + 1)
+                   if parts[i].startswith(".") or parts[i].lower() == "scratchpad"]
+        k = markers[-1] if markers else None
+        if k == w and len(markers) > 1:
+            k = markers[-2]
         if k:
             return parts[k - 1], parts[:k], None
     if parts:
