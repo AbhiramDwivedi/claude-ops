@@ -61,6 +61,7 @@ class ScratchAndWorktreeLabels(unittest.TestCase):
             "/Users/a/code/shop-app/.hardening/sync-main/.run-worktrees/w2": "shop-app",
             "C:\sw\proj\.claude\worktrees\feat-x": "proj",
             "/Users/a/code/plain": "plain",
+            "/home/u/.hermes/cache/scratch/tmpX/kb/scratchpad/q1/run1/.run-worktrees/w1": "kb",
         }
         for cwd, want in cases.items():
             name, _owner, slug = resolve_cwd(cwd)
