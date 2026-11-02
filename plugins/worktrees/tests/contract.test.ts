@@ -2,6 +2,7 @@ import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
 import * as W from '../hooks/register.ts'
+import { hostPath } from './fixtures/paths.ts'
 
 // Contract test for repo ADR-0014 ("Seams"): worktrees reads kit's manifest at
 // <main checkout>/.claude/kit/manifest.json and gives no worktree to a type it declares read-only.
@@ -33,15 +34,15 @@ function world(on: On, files: Map<string, string>, readThrows = false) {
     const stdout = args.includes('--git-common-dir') ? 'C:/r/.git\n' : args.includes('--is-inside-work-tree') ? 'true\n' : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('fs.exists', async (_, e) => ({ value: files.has(slashed(e.path)) }))
+  on('fs.exists', async (_, e) => ({ value: files.has(slashed(hostPath(e.path))) }))
   on('fs.read', async (_, e) => {
-    if (readThrows && slashed(e.path) === MANIFEST) throw new Error('EACCES: permission denied')
-    const text = files.get(slashed(e.path))
+    if (readThrows && slashed(hostPath(e.path)) === MANIFEST) throw new Error('EACCES: permission denied')
+    const text = files.get(slashed(hostPath(e.path)))
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: text }
   })
   on('fs.write', async (_, e) => {
-    files.set(slashed(e.path), e.text)
+    files.set(slashed(hostPath(e.path)), e.text)
     return { value: undefined }
   })
   on('env.get', async () => ({ value: undefined }))

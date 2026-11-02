@@ -34,6 +34,7 @@ import {
   WORKTREE_LIST_PORCELAIN,
   type AgentFixture,
 } from './fixtures/run3.ts'
+import { hostPath } from './fixtures/paths.ts'
 
 // Contract test for the 2026-10-28 amendment to ADR-0015 ("Added by the 2026-10-28 amendment", seams 22-29).
 // Written from the spec before the producer exists. The pure functions are read off the module namespace so a
@@ -93,27 +94,27 @@ function world(on: On, opts: Opts = {}) {
     return { value: undefined } as never
   })
   on('fs.exists', async (_, e) => {
-    const p = slashed(e.path)
+    const p = slashed(hostPath(e.path))
     reads.push(p)
     return { value: files.has(p) || (!gone.has(p) && p.includes('/.claude/worktrees/agent-') && !p.endsWith('.json')) }
   })
   // ADR-0015 amendment 2026-10-28 (a): every sweep lists META_DIR; the mock answers with the metas in `files`
   on('fs.list', async (_, e) => {
     if (state.listThrows) throw new Error('EACCES')
-    const dir = slashed(e.path).replace(/\/$/, '')
+    const dir = slashed(hostPath(e.path)).replace(/\/$/, '')
     const entries = [...files.keys()].filter(p => p.startsWith(dir + '/') && !p.slice(dir.length + 1).includes('/')).map(p => p.slice(dir.length + 1))
     return { value: entries.map(name => ({ name, kind: 'file', size: 0, isLink: false })) }
   })
   on('fs.read', async (_, e) => {
-    const p = slashed(e.path)
+    const p = slashed(hostPath(e.path))
     reads.push(p)
     const text = files.get(p)
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: text }
   })
   on('fs.write', async (_, e) => {
-    writes.push({ path: slashed(e.path), text: e.text })
-    files.set(slashed(e.path), e.text)
+    writes.push({ path: slashed(hostPath(e.path)), text: e.text })
+    files.set(slashed(hostPath(e.path)), e.text)
     return { value: undefined }
   })
   on('tool.call', async (_, e) => {

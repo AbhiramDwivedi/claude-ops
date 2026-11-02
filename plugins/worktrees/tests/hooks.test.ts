@@ -1,6 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { COMMON, DIRTY, FOUNDRY_CWD, LEAD, LIVE_OTHER, LOCKED, MAIN, MEMBER, META_DIR, META_FINISHED, META_RUNNING, NOW, SLOTS_JSON, SLOTS_PATH, TRANSCRIPT, WORKTREE_LIST_PORCELAIN, type AgentFixture } from './fixtures/run3'
+import { hostPath } from './fixtures/paths.ts'
 
 // the engine beneath the plugin: git says the session is in a repo, and the Agent call records what reached it
 function world(on: On, inRepo = true) {
@@ -45,10 +46,10 @@ test('creates every worktree itself, from the HEAD of the checkout the hook runs
   mock.clock(on, { now: 1_000_000 })
   on('classic.WorktreeCreate', async () => ({}))
   on('env.get', async () => ({ value: 'Windows_NT' }))
-  on('fs.exists', async (_, e) => ({ value: files.has(e.path) }))
-  on('fs.read', async (_, e) => ({ value: files.get(e.path) ?? '' }))
+  on('fs.exists', async (_, e) => ({ value: files.has(hostPath(e.path)) }))
+  on('fs.read', async (_, e) => ({ value: files.get(hostPath(e.path)) ?? '' }))
   on('fs.write', async (_, e) => {
-    files.set(e.path, e.text)
+    files.set(hostPath(e.path), e.text)
     return { value: undefined }
   })
   on('process.run', async (_, e) => {
@@ -96,7 +97,7 @@ function workspace(on: On, setup: boolean, grouped = false) {
   const present = new Set([`${at}/svc-a/.git`, `${at}/svc-b/.git`, ...(setup ? ['C:/w/.claude/worktree-setup.sh'] : [])])
   on('env.get', async () => ({ value: undefined }))
   on('session.cwd', async () => ({ value: 'C:/w' }))
-  on('fs.exists', async (_, e) => ({ value: present.has(e.path.replace(/\\/g, '/')) }))
+  on('fs.exists', async (_, e) => ({ value: present.has(hostPath(e.path).replace(/\\/g, '/')) }))
   const listings: Record<string, { name: string; kind: 'file' | 'dir' | 'other'; size: number; isLink: boolean }[]> = {
     'C:/w/services': [
       { name: 'README.md', kind: 'file', size: 1, isLink: false },
@@ -107,7 +108,7 @@ function workspace(on: On, setup: boolean, grouped = false) {
     'C:/w/node_modules': [{ name: 'lodash', kind: 'dir', size: 0, isLink: false }],
   }
   on('fs.list', async (_, e) => {
-    const listing = listings[(e.path ?? '').replace(/\\/g, '/')]
+    const listing = listings[(hostPath(e.path) ?? '').replace(/\\/g, '/')]
     if (listing === undefined) throw new Error('ENOENT')
     return { value: listing }
   })
@@ -207,7 +208,7 @@ function agentRepo(on: On, status: () => string) {
   const toasts: string[] = []
   const WT = 'C:/r/.claude/worktrees/agent-a1'
   // the engine hands the hook a resolved path: backslashes on Windows
-  on('fs.exists', async (_, e) => ({ value: e.path.replace(/\\/g, '/') === WT }))
+  on('fs.exists', async (_, e) => ({ value: hostPath(e.path).replace(/\\/g, '/') === WT }))
   on('session.cwd', async () => ({ value: 'C:/r' }))
   on('ui.log', async () => ({ value: undefined }))
   on('env.get', async () => ({ value: 'Windows_NT' }))
@@ -288,12 +289,12 @@ function sessionRepo(on: On, answer: (args: string) => { stdout?: string; exitCo
     toasts.push(e.text)
     return { value: undefined }
   })
-  on('fs.exists', async (_, e) => ({ value: files.has(key(e.path)) }))
+  on('fs.exists', async (_, e) => ({ value: files.has(key(hostPath(e.path))) }))
   // ADR-0015 amendment 2026-10-28 (a): every sweep lists the session's subagents dir; this world has no other agent metas
   on('fs.list', async () => ({ value: [] }))
-  on('fs.read', async (_, e) => ({ value: files.get(key(e.path)) ?? '' }))
+  on('fs.read', async (_, e) => ({ value: files.get(key(hostPath(e.path))) ?? '' }))
   on('fs.write', async (_, e) => {
-    files.set(key(e.path), e.text)
+    files.set(key(hostPath(e.path)), e.text)
     return { value: undefined }
   })
   on('process.run', async (_, e) => {
@@ -432,7 +433,7 @@ test('kit manifest match folds ASCII case only: KELVIN SIGN does not match a dec
     const stdout = args.includes('--git-common-dir') ? 'C:/r/.git\n' : args.includes('--is-inside-work-tree') ? 'true\n' : ''
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('fs.exists', async (_, e) => ({ value: e.path.replace(/\\/g, '/') === MANIFEST }))
+  on('fs.exists', async (_, e) => ({ value: hostPath(e.path).replace(/\\/g, '/') === MANIFEST }))
   on('fs.read', async () => ({ value: text }))
   on('env.get', async () => ({ value: undefined }))
   on('session.cwd', async () => ({ value: 'C:/r' }))
@@ -497,20 +498,20 @@ function cleanupWorld(on: On, opts: CleanupOpts = {}) {
     return { value: undefined } as never
   })
   on('fs.exists', async (_, e) => {
-    const p = slashed(e.path)
+    const p = slashed(hostPath(e.path))
     reads.push(p)
     return { value: files.has(p) || (!gone.has(p) && p.includes('/.claude/worktrees/agent-') && !p.endsWith('.json')) }
   })
   on('fs.read', async (_, e) => {
-    const p = slashed(e.path)
+    const p = slashed(hostPath(e.path))
     reads.push(p)
     const text = files.get(p)
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     return { value: text }
   })
   on('fs.write', async (_, e) => {
-    writes.push({ path: slashed(e.path), text: e.text })
-    files.set(slashed(e.path), e.text)
+    writes.push({ path: slashed(hostPath(e.path)), text: e.text })
+    files.set(slashed(hostPath(e.path)), e.text)
     return { value: undefined }
   })
   on('tool.call', async (_, e) => {
