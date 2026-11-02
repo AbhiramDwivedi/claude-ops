@@ -1,6 +1,6 @@
 {
   "name": "subagent-limits",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Keeps subagents small: tells the main agent how to size and split work, asks a growing subagent to checkpoint, and refuses its tools past a hard limit so a fresh agent takes over",
   "author": {
     "name": "Abhiram Dwivedi",

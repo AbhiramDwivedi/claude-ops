@@ -1,4 +1,4 @@
-import type { EngineInterface, Register, ToolCallResult, TurnUsage } from 'claude-code'
+import type { EngineInterface, Register, ToolCallResult, TurnStepChunk, TurnUsage } from 'claude-code'
 
 // what the mod has seen of one subagent or in-process teammate
 export type Budget = {
@@ -87,11 +87,16 @@ export const DROP = { minContext: 100_000, minShare: 0.5, minPauseMs: 4 * 60_000
 export function cacheDrop(last: Step | undefined, request: Request, usage: TurnUsage): Drop | undefined {
   if (last === undefined || !last.calledTools || last.turnId !== request.turnId) return undefined
   if (usage.model !== last.model || request.messageCount < last.messageCount) return undefined
-  const context = usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+  const context = contextOf(usage)
   const rebuilt = usage.cache_creation_input_tokens
   const pauseMs = request.startedAt - last.endedAt
   if (context < DROP.minContext || rebuilt < context * DROP.minShare || pauseMs <= DROP.minPauseMs) return undefined
   return { rebuilt, pauseMs }
+}
+
+// tokens a request carried: input plus cache reads and writes
+export function contextOf(usage: TurnUsage): number {
+  return usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
 }
 
 export function minutes(ms: number): number {
@@ -199,14 +204,33 @@ export const register: Register = (on, options) => {
     const id = e.agentId
     if (id === undefined || forks.has(id)) return yield* next(e)
     const startedAt = await $.clock.now()
-    const result = yield* next(e)
-    if (result.usage === null) return result
-    const usage = result.usage
-    const context = usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
     const budget = budgets.get(id) ?? fresh()
     budgets.set(id, budget)
+    // The engine starts a tool as soon as its call has streamed, before the response ends, and the request's
+    // size arrives only with the response's stop. So the response's chunks from its first tool call on are held
+    // until the stop has set the budget: otherwise every call of a request is judged by the request before it,
+    // and an agent whose context jumps past both limits in one request, then finishes, is never nudged.
+    const stream = next(e)
+    let held: TurnStepChunk[] = []
+    for await (const chunk of stream) {
+      if (chunk.kind === 'stop') {
+        if (chunk.usage !== null) budget.context = contextOf(chunk.usage)
+        yield* held
+        held = []
+        yield chunk
+      } else if (held.length > 0 || chunk.kind === 'tool') {
+        held.push(chunk)
+      } else {
+        yield chunk
+      }
+    }
+    // a stream that ended without a stop still hands on what it held
+    yield* held
+    const result = await stream.result
+    if (result.usage === null) return result
+    const usage = result.usage
     const drop = cacheDrop(budget.last, { turnId: e.turnId, startedAt, messageCount: e.messageCount }, usage)
-    budget.context = context
+    budget.context = contextOf(usage)
     budget.last = {
       turnId: e.turnId,
       endedAt: await $.clock.now(),
