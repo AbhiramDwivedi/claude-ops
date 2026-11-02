@@ -43,7 +43,7 @@
     {
       "name": "truss",
       "description": "Runs a big goal as parallel crews of engineering-role agents: each crew's foreman delegates to your project's agents in its own worktree, a QC engineer checks the work, and the crews merge one at a time or as one PR",
-      "source": { "source": "github", "repo": "AbhiramDwivedi/truss" },
+      "source": { "source": "git-subdir", "url": "https://github.com/AbhiramDwivedi/truss.git", "path": "plugins/truss", "ref": "main" },
       "category": "productivity"
     }
   ]
