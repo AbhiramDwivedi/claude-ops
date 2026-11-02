@@ -1,5 +1,5 @@
 {
- "updated": "2026-10-08",
+ "updated": "2026-11-01",
  "practices": [
   {
    "id": "provide-runnable-check",
@@ -102,7 +102,7 @@
    "superseded_by": null,
    "metric": "verification.review_after_edits",
    "check": "Read sessions with 20+ edits and no human message, and how many had a review after. A gap only when an unreviewed run later needed fixes: corrections or reverts of that work in the transcripts. Skip Opus 5 sessions.",
-   "notes": "Best-practices, 'Add an adversarial review step': 'The longer Claude works unattended, the more an independent check matters before you count the work as done.' The same section warns that a reviewer will report gaps even in sound work; act only on gaps that affect correctness. The Opus 5 prompting page says 'do not use subagents to verify or double-check your own work', so Opus 5 is excluded; nobody knows whether that covers Opus 5.5. Date is the fetch date; docs are undated.",
+   "notes": "Best-practices (re-read 2026-11-01; the page was reorganized and the old 'adversarial review step' heading and quote are gone): a check can run 'By someone who didn't write the code: ... /code-review reviews the diff in a fresh subagent that never saw your conversation', and 'Before a run goes unattended, make sure it knows what done looks like, can check its own work... and have a person approve the result at the end.' The page warns that 'A reviewer that's asked to find problems will always find something'; act only on gaps that affect correctness. The Opus 5 prompting page says 'do not use subagents to verify or double-check your own work', so Opus 5 is excluded; nobody knows whether that covers Opus 5.5. Date is the fetch date; docs are undated.",
    "suggest": [
     {
      "name": "/code-review",
@@ -409,7 +409,7 @@
   },
   {
    "id": "subagents-for-investigation",
-   "claim": "Use subagents for investigation and verbose operations so the main context gets only a short summary.",
+   "claim": "Use subagents for parallel work, noisy output and independent review, not to protect context or get a better answer; each one costs extra tokens.",
    "improves": [
     "quality",
     "cost"
@@ -426,7 +426,7 @@
    "superseded_by": null,
    "metric": "agents.calls",
    "check": "Compare agent calls and sizes against main-context compactions. More subagents is not better; see the cost and over-spawn entries.",
-   "notes": "Context engineering post: subagent summaries are 'often 1,000-2,000 tokens'."
+   "notes": "Context engineering post: subagent summaries are 'often 1,000-2,000 tokens'. Best-practices 'What you can stop doing' (re-read 2026-11-01) retires 'Use subagents to protect your context window' ('Running out of context is rarely the problem anymore') and 'Delegate to a subagent for a better answer'. It keeps subagents for 'parallel work, keeping noisy output out of your way, and independent review, but each of those costs extra tokens'. The costs doc still says to delegate verbose operations so only a summary returns."
   },
   {
    "id": "subagents-cost-tokens",
