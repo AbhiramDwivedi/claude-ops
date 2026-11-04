@@ -34,6 +34,9 @@ import {
   SESSION_CONTEXT,
   startContext,
   unmergedAgentWork,
+  addedLines,
+  parseCatFileBatch,
+  reflogWorked,
   WIP_MESSAGE,
   includedFiles,
   isActive,
@@ -311,9 +314,9 @@ test('deletes a branch only when its PR merged and nothing would be lost', async
   expect(reason({ pr: { numbers: [] }, gitMerged: false })).toBe('no merged PR, and not in the default branch')
   // a tip already in origin/<default> counts as merged without a PR only on an agent's worktree-* branch
   expect(reason({ branch: 'worktree-agent-a1', pr: { numbers: [] }, gitMerged: true })).toBe('delete')
-  // a branch made by hand (`git branch foo`) sits on the default branch too: it needs a merged PR
-  expect(reason({ pr: { numbers: [] }, gitMerged: true })).toBe('no merged PR; only worktree-* branches count as merged by being in the default branch')
-  expect(reason({ pr: undefined, gitMerged: true })).toBe('no merged PR (gh unavailable); only worktree-* branches count as merged by being in the default branch')
+  // a branch made by hand (`git branch foo`) sits on the default branch too: without work made on it, it needs a merged PR
+  expect(reason({ pr: { numbers: [] }, gitMerged: true })).toBe('no merged PR; in the default branch, but no commits were made on it here; looks like a bookmark')
+  expect(reason({ pr: undefined, gitMerged: true, worked: false })).toBe('no merged PR (gh unavailable); in the default branch, but no commits were made on it here; looks like a bookmark')
   expect(reason({ worktree: { ...MERGED.worktree!, isActive: true } })).toBe('its agent has not stopped yet')
   expect(reason({ worktree: { ...MERGED.worktree!, dirty: true } })).toBe('worktree has uncommitted changes')
   expect(reason({ worktree: { ...MERGED.worktree!, locked: 'claude agent x' } })).toBe('worktree is locked (claude agent x)')
@@ -509,6 +512,95 @@ test('falls through to the merged-PR head when the content check cannot run', as
   expect(unmergedAgentWork([AGENT, { ...AGENT, branch: 'feature' }, { ...AGENT, branch: 'worktree-b', ahead: 1, worktree: { ...AGENT.worktree!, isActive: true } }])).toEqual([
     'unmerged agent work: worktree-agent-a1 (2 commits)',
   ])
+})
+
+test('counts a branch of your own in the default branch merged once its reflog shows work made on it', async () => {
+  const plan = decideBranch({ ...MERGED, pr: { numbers: [] }, gitMerged: true, worked: true, tip: 'abc' })
+  expect(plan).toEqual({
+    kind: 'delete',
+    branch: 'feature',
+    via: 'in the default branch, worked on here',
+    worktreePath: 'C:/r/.claude/worktrees/f',
+    prune: false,
+    allowForce: true,
+    deleteRemote: true,
+    remoteNote: undefined,
+    archive: true,
+  })
+  // a bookmark: no reflog entry but its creation (or a reset or rename)
+  expect(decideBranch({ ...MERGED, pr: { numbers: [] }, gitMerged: true, worked: false })).toEqual({
+    kind: 'skip',
+    branch: 'feature',
+    reason: 'no merged PR; in the default branch, but no commits were made on it here; looks like a bookmark',
+  })
+  // a merged PR needs no archive, and the same gates hold
+  expect(decideBranch(MERGED).kind === 'delete' && 'archive' in decideBranch(MERGED)).toBe(false)
+  const dirty = decideBranch({ ...MERGED, pr: { numbers: [] }, gitMerged: true, worked: true, worktree: { ...MERGED.worktree!, dirty: true } })
+  expect(dirty.kind === 'skip' && dirty.reason).toBe('worktree has uncommitted changes (in the default branch, worked on here)')
+  expect(reflogWorked('branch: Created from HEAD\n')).toBe(false)
+  expect(reflogWorked('reset: moving to HEAD~1\nbranch: renamed refs/heads/a to refs/heads/b\nbranch: Created from main')).toBe(false)
+  expect(reflogWorked("merge worktree-wf_1-2: Merge made by the 'ort' strategy.\nbranch: Created from HEAD")).toBe(true)
+  for (const s of ['commit: x', 'commit (amend): x', 'cherry-pick: x', 'rebase (finish): refs/heads/a onto b', 'am: x', 'pull: Fast-forward'])
+    expect(reflogWorked(s)).toBe(true)
+  expect(reflogWorked('committed: no')).toBe(false)
+})
+
+test('counts an agent branch merged when every line it adds is in the default branch, and says how many are not', async () => {
+  const covered = decideBranch({ ...AGENT, contentMerged: false, linesCovered: { missing: 0, total: 41 } })
+  expect(covered.kind === 'delete' && [covered.via, covered.archive]).toEqual(['content in the default branch (later edited there)', true])
+  expect(unmergedAgentWork([{ ...AGENT, contentMerged: false, linesCovered: { missing: 0, total: 41 } }])).toEqual([])
+  const facts = { ...AGENT, contentMerged: false, linesCovered: { missing: 73, total: 143 } }
+  expect(decideBranch(facts)).toEqual({ kind: 'skip', branch: 'worktree-agent-a1', reason: 'not merged: 73 of 143 lines it adds are not in the default branch' })
+  expect(unmergedAgentWork([facts])).toEqual(['unmerged agent work: worktree-agent-a1 (2 commits; 73 of 143 lines it adds are not in the default branch)'])
+  // the fallback never applies to a branch of your own
+  expect(decideBranch({ ...AGENT, branch: 'feature', contentMerged: false, linesCovered: { missing: 0, total: 41 } }).kind).toBe('skip')
+})
+
+test('reads the added lines of a -U0 patch per file and a cat-file --batch stream', async () => {
+  const patch = [
+    'diff --git a/a.ts b/a.ts',
+    'index 1..2 100644',
+    '--- a/a.ts',
+    '+++ b/a.ts',
+    '@@ -1,0 +2,3 @@',
+    '+  const longEnough = 1',
+    '+short',
+    '+++ not a header once in a hunk',
+    'diff --git a/new file.md b/new file.md',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/new file.md',
+    '@@ -0,0 +1 @@',
+    '+# a new heading here',
+    '\\ No newline at end of file',
+  ].join('\n')
+  expect(addedLines(patch)).toEqual([['const longEnough = 1', '++ not a header once in a hunk'], ['# a new heading here']])
+  const one = 'héllo\nworld'
+  const size = new TextEncoder().encode(one).length
+  expect(parseCatFileBatch(`${'a'.repeat(40)} blob ${size}\n${one}\nmain:gone.md missing\n`, 2)).toEqual([one, undefined])
+  expect(parseCatFileBatch(`${'a'.repeat(40)} blob 99\nshort\n`, 1)).toBe(undefined)
+})
+
+test('counts a relay leg merged when another local branch strictly contains its tip', async () => {
+  const leg = decideBranch({ ...AGENT, containedIn: 'worktree-wf_r-78', remote: { safe: false } })
+  expect(leg.kind === 'delete' && [leg.via, leg.archive, leg.deleteRemote]).toEqual(['contained in worktree-wf_r-78', true, false])
+  expect(unmergedAgentWork([{ ...AGENT, containedIn: 'worktree-wf_r-78' }])).toEqual([])
+  // the same gates: locked, running or dirty legs stay
+  expect(decideBranch({ ...AGENT, containedIn: 'x', worktree: { ...AGENT.worktree!, locked: 'l' } })).toEqual({
+    kind: 'skip',
+    branch: 'worktree-agent-a1',
+    reason: 'worktree is locked (l) (contained in x)',
+  })
+  expect(decideBranch({ ...AGENT, containedIn: 'x', worktree: { ...AGENT.worktree!, isActive: true } }).kind).toBe('skip')
+  // a branch of your own is never deleted for being contained
+  expect(decideBranch({ ...AGENT, branch: 'feature', containedIn: 'x' }).kind).toBe('skip')
+  // equal tips are not containment: gatherFacts leaves containedIn unset, and two such branches both stay
+  expect(decideBranch({ ...AGENT }).kind).toBe('skip')
+})
+
+test('names the count and first path of a dirty worktree', async () => {
+  const plan = decideBranch({ ...MERGED, worktree: { ...MERGED.worktree!, dirty: true, changes: { count: 1, first: '?? .plan-scratch/' } } })
+  expect(plan).toEqual({ kind: 'skip', branch: 'feature', reason: 'worktree has uncommitted changes (1: ?? .plan-scratch/)' })
 })
 
 // --- self-cleanup after a merge ---

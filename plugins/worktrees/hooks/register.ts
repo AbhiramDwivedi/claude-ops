@@ -647,8 +647,20 @@ export type BranchFacts = {
   // worktree-* branches only: merging it into origin/<default> (`git merge-tree --write-tree`) gives origin/<default>'s
   // own tree. undefined when the check could not run (git before 2.38, or another error)
   contentMerged?: boolean
-  // isActive: this plugin created it for an agent that has not stopped yet
-  worktree?: { path: string; exists: boolean; dirty: boolean; locked?: string; isMain: boolean; isSession: boolean; isActive?: boolean }
+  // worktree-* branches only, when contentMerged is false: of the lines it adds since its merge base (8 characters or
+  // more once trimmed), how many are not a whole line of origin/<default>'s version of the same file. undefined when
+  // the check was skipped (too big, binary only, nothing added) or could not run
+  linesCovered?: { missing: number; total: number }
+  // worktree-* branches only: another local branch whose tip strictly contains its tip, as a relay leg merged into
+  // the next leg or a crew branch
+  containedIn?: string
+  // other branches in origin/<default> only: its reflog shows work made on it here (commit, merge, cherry-pick,
+  // rebase, am, pull), not only `branch: Created from`; a bookmark made with `git branch foo` has none
+  worked?: boolean
+  tip?: string
+  // isActive: this plugin created it for an agent that has not stopped yet. changes: `git status --porcelain`'s count
+  // and first line when dirty
+  worktree?: { path: string; exists: boolean; dirty: boolean; locked?: string; isMain: boolean; isSession: boolean; isActive?: boolean; changes?: { count: number; first: string } }
   // origin's branch of the same name; safe when every commit on it is in a merged PR's head or in origin/<default>
   remote?: { safe: boolean }
 }
@@ -666,6 +678,8 @@ export type BranchPlan =
       allowForce: boolean
       deleteRemote: boolean
       remoteNote?: string
+      // judged merged by reflog work, covered lines or containment: its tip is kept at refs/tidy-archive/<branch>
+      archive?: true
     }
 
 export function decideBranch(f: BranchFacts): BranchPlan {
@@ -674,32 +688,52 @@ export function decideBranch(f: BranchFacts): BranchPlan {
   if (f.worktree?.isMain) return skip('checked out in the main checkout')
   if (f.worktree?.isSession) return skip('this session works in its worktree')
   const prMerged = f.pr !== undefined && f.pr.numbers.length > 0
-  // a tip in origin/<default> counts as merged without a PR only on the branches agent worktrees get:
-  // a branch made by hand with `git branch foo` sits on the default branch too
+  // a tip in origin/<default> counts as merged without a PR on the branches agent worktrees get, and on other
+  // branches only when work was made on them here: a branch made by hand with `git branch foo` sits there too
   const agent = f.branch.startsWith('worktree-')
-  const byAncestry = f.gitMerged && agent
+  const byAncestry = !prMerged && f.gitMerged && agent
+  const byWork = !prMerged && f.gitMerged && !agent && f.worked === true
   // agent branches only, in this order: merging it into origin/<default> would change nothing (squash, cherry-pick,
-  // rebase); or, when that check could not run, its tip is in a merged PR's head
-  const byContent = !prMerged && !byAncestry && agent && f.contentMerged === true
-  const bySquash = !prMerged && !byAncestry && agent && f.contentMerged === undefined && f.inMergedPr !== undefined
-  if (!prMerged && !byAncestry && !byContent && !bySquash) {
-    if (agent && f.contentMerged === false) return skip('not merged: merging it into the default branch would change files')
+  // rebase); every line it adds is in origin/<default> (merged, then edited there); when the tree check could not
+  // run, its tip is in a merged PR's head; its tip is inside another local branch (a relay leg or crew member)
+  const open = !prMerged && !f.gitMerged && agent
+  const byContent = open && f.contentMerged === true
+  const byLines = open && !byContent && f.contentMerged === false && f.linesCovered !== undefined && f.linesCovered.missing === 0
+  const bySquash = open && f.contentMerged === undefined && f.inMergedPr !== undefined
+  const byContained = open && !byContent && !byLines && !bySquash && f.containedIn !== undefined
+  if (!prMerged && !byAncestry && !byWork && !byContent && !byLines && !bySquash && !byContained) {
+    if (agent && f.contentMerged === false) {
+      const l = f.linesCovered
+      return skip(l !== undefined ? `not merged: ${l.missing} of ${l.total} lines it adds are not in the default branch` : 'not merged: merging it into the default branch would change files')
+    }
     const gh = f.pr === undefined ? ' (gh unavailable)' : ''
+    if (f.gitMerged && !agent) return skip(`no merged PR${gh}; in the default branch, but no commits were made on it here; looks like a bookmark`)
     return skip(f.gitMerged ? `no merged PR${gh}; only worktree-* branches count as merged by being in the default branch` : f.pr !== undefined ? 'no merged PR, and not in the default branch' : 'not in the default branch (gh unavailable)')
   }
   const via = prMerged
     ? `PR #${f.pr?.numbers[0]}`
     : byAncestry
       ? 'in the default branch'
-      : byContent
-        ? 'content in the default branch'
-        : `in merged PR #${f.inMergedPr}`
-  const also = byContent || bySquash ? ` (${via})` : ''
+      : byWork
+        ? 'in the default branch, worked on here'
+        : byContent
+          ? 'content in the default branch'
+          : byLines
+            ? 'content in the default branch (later edited there)'
+            : bySquash
+              ? `in merged PR #${f.inMergedPr}`
+              : `contained in ${f.containedIn}`
+  const archive = byWork || byLines || byContained
+  const also = byContent || bySquash || archive ? ` (${via})` : ''
   if (f.worktree?.locked !== undefined) return skip(`worktree is locked (${f.worktree.locked})${also}`)
   if (f.worktree?.isActive) return skip(`its agent has not stopped yet${also}`)
-  if (f.worktree?.dirty) return skip(`worktree has uncommitted changes${also}`)
-  // a squash leaves the branch's own commits on no remote; its content check already proved nothing would be lost
-  if (f.unpushed > 0 && !byContent) return skip(`${f.unpushed} commit${f.unpushed === 1 ? '' : 's'} on no remote and in no merged PR`)
+  if (f.worktree?.dirty) {
+    const c = f.worktree.changes
+    return skip(`worktree has uncommitted changes${c !== undefined ? ` (${c.count}: ${c.first})` : ''}${also}`)
+  }
+  // a squash leaves the branch's own commits on no remote; its content check already proved nothing would be lost,
+  // and a contained branch's commits are all in the branch that contains it
+  if (f.unpushed > 0 && !byContent && !byLines && !byContained) return skip(`${f.unpushed} commit${f.unpushed === 1 ? '' : 's'} on no remote and in no merged PR`)
   return {
     kind: 'delete',
     branch: f.branch,
@@ -709,6 +743,7 @@ export function decideBranch(f: BranchFacts): BranchPlan {
     allowForce: true,
     deleteRemote: f.remote?.safe === true,
     remoteNote: f.remote !== undefined && !f.remote.safe ? 'remote branch has commits outside the merge; left it' : undefined,
+    ...(archive ? { archive: true as const } : {}),
   }
 }
 
@@ -742,7 +777,10 @@ export function decideMainSync(f: {
 
 export function describePlan(plan: BranchPlan): string {
   if (plan.kind === 'skip') return `skip ${plan.branch}: ${plan.reason}`
-  const parts = [plan.worktreePath ? `remove worktree ${plan.worktreePath}` : plan.prune ? 'prune its missing worktree' : '', `delete branch`]
+  const parts = [
+    plan.worktreePath ? `remove worktree ${plan.worktreePath}` : plan.prune ? 'prune its missing worktree' : '',
+    plan.archive ? `delete branch (tip kept at refs/tidy-archive/${plan.branch})` : 'delete branch',
+  ]
   if (plan.deleteRemote) parts.push('delete origin/' + plan.branch)
   if (plan.remoteNote) parts.push(plan.remoteNote)
   return `${plan.branch} (${plan.via}): ${parts.filter(Boolean).join('; ')}`
@@ -885,17 +923,21 @@ export function unmergedAgentWork(facts: readonly BranchFacts[]): string[] {
   return facts
     .filter(f => f.branch.startsWith('worktree-') && !f.isProtected && !f.gitMerged && (f.pr?.numbers.length ?? 0) === 0)
     .filter(f => f.contentMerged === false || (f.contentMerged === undefined && f.inMergedPr === undefined))
+    .filter(f => f.containedIn === undefined && f.linesCovered?.missing !== 0)
     .filter(f => !f.worktree?.isMain && !f.worktree?.isSession && !f.worktree?.isActive && (f.ahead ?? 0) > 0)
-    .map(f => `unmerged agent work: ${f.branch} (${f.ahead} commit${f.ahead === 1 ? '' : 's'})`)
+    .map(f => {
+      const lines = f.linesCovered !== undefined ? `; ${f.linesCovered.missing} of ${f.linesCovered.total} lines it adds are not in the default branch` : ''
+      return `unmerged agent work: ${f.branch} (${f.ahead} commit${f.ahead === 1 ? '' : 's'}${lines})`
+    })
 }
 
 async function isWindows($: $): Promise<boolean> {
   return (await $.env.get('OS')) === 'Windows_NT'
 }
 
-async function run($: $, argv: string[], cwd?: string, timeoutMs?: number) {
+async function run($: $, argv: string[], cwd?: string, timeoutMs?: number, stdin?: string) {
   try {
-    return await $.process.run(argv, { cwd, timeoutMs })
+    return await $.process.run(argv, stdin === undefined ? { cwd, timeoutMs } : { cwd, timeoutMs, stdin })
   } catch (error) {
     return { exitCode: -1, stdout: '', stderr: String(error), isStdoutTruncated: false, isStderrTruncated: false }
   }
@@ -1326,6 +1368,102 @@ async function mergesToSameTree($: $, cwd: string, into: string, intoTree: strin
   return undefined
 }
 
+// Caps for linesCoveredIn: a bigger diff stays "not merged" rather than costing a long check.
+export const COVER_MAX_FILES = 200
+export const COVER_MAX_LINES = 5000
+export const COVER_MIN_CHARS = 8
+
+// The added lines of a `git diff -U0` patch, one list per `diff --git` section, trimmed, short ones dropped.
+export function addedLines(patch: string): string[][] {
+  const out: string[][] = []
+  let cur: string[] | undefined
+  let inHunk = false
+  for (const line of patch.replace(/\r/g, '').split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      cur = []
+      out.push(cur)
+      inHunk = false
+    } else if (cur === undefined) continue
+    else if (line.startsWith('@@')) inHunk = true
+    else if (inHunk && line.startsWith('+')) {
+      const t = line.slice(1).trim()
+      if (t.length >= COVER_MIN_CHARS) cur.push(t)
+    }
+  }
+  return out
+}
+
+// `git cat-file --batch` output, split into each object's text; undefined for a "missing" object. undefined overall
+// when the output does not parse (a size that does not match, as when decoding replaced bytes).
+export function parseCatFileBatch(text: string, count: number): (string | undefined)[] | undefined {
+  const bytes = new TextEncoder().encode(text)
+  const decoder = new TextDecoder()
+  const out: (string | undefined)[] = []
+  let at = 0
+  while (out.length < count) {
+    const nl = bytes.indexOf(10, at)
+    if (nl < 0) return undefined
+    const header = decoder.decode(bytes.subarray(at, nl))
+    at = nl + 1
+    if (header.endsWith(' missing') || header.endsWith(' ambiguous')) {
+      out.push(undefined)
+      continue
+    }
+    const m = /^[0-9a-f]+ (\w+) (\d+)$/.exec(header)
+    if (!m) return undefined
+    const size = Number(m[2])
+    if (at + size > bytes.length || bytes[at + size] !== 10) return undefined
+    out.push(m[1] === 'blob' ? decoder.decode(bytes.subarray(at, at + size)) : undefined)
+    at += size + 1
+  }
+  return out
+}
+
+// How many of the lines `branch` adds since its merge base with `into` are not a whole line (trimmed) of `into`'s
+// version of the same file. A file `into` lacks at that path counts all its lines missing; binary files are left
+// out. undefined when the diff is over the caps, adds nothing countable, or a git call fails. Four git calls.
+async function linesCoveredIn($: $, cwd: string, into: string, branch: string): Promise<{ missing: number; total: number } | undefined> {
+  const base = await git($, cwd, 'merge-base', into, branch)
+  if (!base.ok || base.out === '') return undefined
+  const stat = await run($, ['git', 'diff', '--no-renames', '--no-ext-diff', '--numstat', '-z', base.out, branch], cwd, 60_000)
+  if (stat.exitCode !== 0 || stat.isStdoutTruncated) return undefined
+  const files = stat.stdout.split('\0').filter(Boolean).map(r => {
+    const [added, , ...path] = r.split('\t')
+    return { added, path: path.join('\t') }
+  })
+  if (files.length > COVER_MAX_FILES) return undefined
+  const text = files.filter(f => f.added !== '-' && f.path !== '')
+  if (text.reduce((n, f) => n + (Number(f.added) || 0), 0) > COVER_MAX_LINES) return undefined
+  const counted = text.filter(f => Number(f.added) > 0)
+  if (counted.length === 0) return undefined
+  // a file name with a newline cannot go through cat-file --batch: give up rather than guess
+  if (counted.some(f => f.path.includes('\n'))) return undefined
+  const patch = await run($, ['git', 'diff', '--no-renames', '--no-ext-diff', '--no-color', '-U0', base.out, branch, '--', ...counted.map(f => `:(literal)${f.path}`)], cwd, 60_000)
+  if (patch.exitCode !== 0 || patch.isStdoutTruncated) return undefined
+  const added = addedLines(patch.stdout)
+  if (added.length !== counted.length) return undefined
+  const blobs = await run($, ['git', 'cat-file', '--batch'], cwd, 60_000, counted.map(f => `${into}:${f.path}`).join('\n') + '\n')
+  if (blobs.exitCode !== 0 || blobs.isStdoutTruncated) return undefined
+  const theirs = parseCatFileBatch(blobs.stdout, counted.length)
+  if (theirs === undefined) return undefined
+  let missing = 0
+  let total = 0
+  added.forEach((lines, i) => {
+    const have = new Set((theirs[i] ?? '').replace(/\r/g, '').split('\n').map(l => l.trim()))
+    total += lines.length
+    missing += lines.filter(l => theirs[i] === undefined || !have.has(l)).length
+  })
+  return total === 0 ? undefined : { missing, total }
+}
+
+// Reflog subjects that mean work was made on a branch here; `branch: Created from`, `reset:` and renames are not.
+export function reflogWorked(subjects: string): boolean {
+  return subjects
+    .replace(/\r/g, '')
+    .split('\n')
+    .some(l => /^(commit|merge|cherry-pick|rebase|am|pull)\b/.test(l.trim()))
+}
+
 // `git worktree remove`, never --force. On Windows an ignored path past MAX_PATH (node_modules) makes a plain remove
 // fail after git has already unregistered the worktree and deleted its tracked files, so core.longpaths is always on,
 // and a failure that leaves the worktree unregistered is finished here: what is left is ignored files git was deleting.
@@ -1613,8 +1751,28 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
     let unpushed = 0
     let inMergedPr: number | undefined
     let contentMerged: boolean | undefined
+    let linesCovered: BranchFacts['linesCovered']
+    let containedIn: string | undefined
+    let worked: boolean | undefined
+    const prMerged = (pr?.numbers.length ?? 0) > 0
     if (branch.startsWith('worktree-') && !isProtected && !gitMerged.has(branch) && mainTree !== undefined) {
       contentMerged = await mergesToSameTree($, repo.top, mergedRef, mainTree, branch)
+      // a conflict or a different tree can still hold nothing new: main edited the same lines after taking them
+      if (contentMerged === false && !prMerged) linesCovered = await linesCoveredIn($, repo.top, mergedRef, branch)
+    }
+    // a relay leg or crew member: its tip is inside another local branch, so deleting it loses nothing
+    if (branch.startsWith('worktree-') && !isProtected && !gitMerged.has(branch) && !prMerged && contentMerged !== true && linesCovered?.missing !== 0) {
+      const holders = await git($, repo.top, 'for-each-ref', '--contains', tip, '--format=%(refname:short) %(objectname)', 'refs/heads')
+      if (holders.ok)
+        containedIn = holders.out
+          .split('\n')
+          .map(l => l.split(' ') as [string, string])
+          .find(([b, t]) => b !== branch && b !== '' && t !== undefined && t !== tip)?.[0]
+    }
+    // a branch in the default branch that is not an agent's: merged only when work was made on it here
+    if (!branch.startsWith('worktree-') && !isProtected && gitMerged.has(branch) && !prMerged) {
+      const log = await git($, repo.top, 'reflog', 'show', '--format=%gs', `refs/heads/${branch}`, '--')
+      worked = log.ok && reflogWorked(log.out)
     }
     if (!isProtected) {
       let inMergedHead = false
@@ -1635,6 +1793,7 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
     if (wt !== undefined) {
       const exists = !wt.prunable && (await $.fs.exists(wt.path))
       const status = exists ? await git($, wt.path, 'status', '--porcelain') : { ok: true, out: '' }
+      const changed = status.ok ? status.out.split('\n').filter(l => l.trim() !== '') : []
       worktree = {
         path: wt.path,
         exists,
@@ -1643,6 +1802,7 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
         isMain: wt === main,
         isSession: normPath(wt.path, windows) === normPath(repo.top, windows),
         isActive: isActive(state, wt.path, now, windows),
+        ...(changed.length > 0 ? { changes: { count: changed.length, first: changed[0]! } } : {}),
       }
     }
     let remote: BranchFacts['remote']
@@ -1652,10 +1812,27 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
       if (pr !== undefined || inMergedPr !== undefined) for (const h of heads) if (h === remoteTip || (await isAncestor(remoteTip, h))) safe = true
       if (!safe) safe = await isAncestor(remoteTip, mergedRef)
       // content already in the default branch: the remote branch is safe when it holds nothing the local one lacks
-      if (!safe && contentMerged === true) safe = await isAncestor(remoteTip, tip)
+      if (!safe && (contentMerged === true || linesCovered?.missing === 0)) safe = await isAncestor(remoteTip, tip)
+      // a contained branch's remote is safe when the branch that contains it holds it too
+      if (!safe && containedIn !== undefined) safe = await isAncestor(remoteTip, `refs/heads/${containedIn}`)
       remote = { safe }
     }
-    facts.push({ branch, isProtected, pr, gitMerged: gitMerged.has(branch), unpushed, ahead, inMergedPr, contentMerged, worktree, remote })
+    facts.push({
+      branch,
+      tip,
+      isProtected,
+      pr,
+      gitMerged: gitMerged.has(branch),
+      unpushed,
+      ahead,
+      inMergedPr,
+      contentMerged,
+      ...(linesCovered !== undefined ? { linesCovered } : {}),
+      ...(containedIn !== undefined ? { containedIn } : {}),
+      ...(worked !== undefined ? { worked } : {}),
+      worktree,
+      remote,
+    })
   }
   return { facts, worktrees, sync, defaultBranch }
 }
@@ -1686,6 +1863,8 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
   const { facts, worktrees, sync, defaultBranch } = gathered
   const plans = facts.map(decideBranch)
   const removed: string[] = []
+  const tips = new Map(facts.map(f => [f.branch, f.tip]))
+  let archived = 0
 
   if (sync.kind === 'none' && sync.reason) lines.push(sync.reason)
   if (sync.kind !== 'none') {
@@ -1711,6 +1890,15 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       continue
     }
     acted = true
+    if (plan.archive) {
+      const tip = tips.get(plan.branch)
+      const kept = tip !== undefined && (await git($, repo.top, 'update-ref', `refs/tidy-archive/${plan.branch}`, tip)).ok
+      if (!kept) {
+        lines.push(`${plan.branch}: could not keep its tip at refs/tidy-archive/${plan.branch}; left the branch`)
+        continue
+      }
+      archived++
+    }
     if (plan.worktreePath) {
       lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false, warn)))
       const removed = await removeWorktree($, repo.top, plan.worktreePath, windows)
@@ -1736,6 +1924,11 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
     lines.push(line)
     removed.push(plan.branch)
   }
+  if (archived > 0)
+    lines.push(
+      `kept the tip of ${archived} deleted branch${archived === 1 ? '' : 'es'} under refs/tidy-archive/: list them with \`git for-each-ref refs/tidy-archive\`, ` +
+        'restore one with `git branch <name> refs/tidy-archive/<name>`, drop one with `git update-ref -d refs/tidy-archive/<name>`',
+    )
   if (acted) await git($, repo.top, 'fetch', '--prune', 'origin')
 
   // orphans: processes naming a worktree folder of this repo that no longer exists, and slots whose folder is gone
