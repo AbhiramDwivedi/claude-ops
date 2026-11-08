@@ -17,8 +17,8 @@ type Answer = { stdout?: string; exitCode?: number }
 
 type Stat = { kind: 'file' | 'dir' | 'other'; isLink: boolean; realPath?: string }
 
-function world(on: On, locals: [string, string][], answer: (args: string, stdin: string, cwd: string) => Answer | undefined, dirs: string[] = [], stats: Record<string, Stat> = {}) {
-  const files = new Map<string, string>([[slashed(SLOTS_PATH), SLOTS_JSON], ...dirs.map(d => [d, ''] as [string, string])])
+function world(on: On, locals: [string, string][], answer: (args: string, stdin: string, cwd: string) => Answer | undefined, dirs: string[] = [], stats: Record<string, Stat> = {}, slots = SLOTS_JSON) {
+  const files = new Map<string, string>([[slashed(SLOTS_PATH), slots], ...dirs.map(d => [d, ''] as [string, string])])
   const ran: string[] = []
   on('fs.stat', async (_, e) => {
     const s = stats[slashed(hostPath((e as { path: string }).path))]
@@ -63,7 +63,7 @@ function world(on: On, locals: [string, string][], answer: (args: string, stdin:
     if (args.startsWith('git rev-list --count')) return out('1\n')
     return out('')
   })
-  return { ran }
+  return { ran, files }
 }
 
 const tidy = async ($: Parameters<Parameters<typeof test>[1]>[0], dryRun = false) =>
@@ -234,4 +234,44 @@ test('a superseded agent branch is archived then deleted; a recent one and one w
   expect(lines).toContain(`skip ${UNIQUE}: not merged: 1 of 2 lines it adds are not in the default branch`)
   expect(w.ran.filter(r => /^git branch -[dD] /.test(r))).toEqual([`git branch -d ${OLD}`])
   expect(lines.filter(l => l.includes('git for-each-ref refs/archive/tidy'))).toHaveLength(1)
+})
+
+// 0.10.0: /tidy looks at worktrees and branches only. It starts no process tool, and pids the setup script recorded
+// for a worktree it removed are reported, never stopped.
+test('/tidy runs no process command, and leaves recorded setup pids alone', async ($, on) => {
+  const LINKED = 'worktree-wf_arch-1'
+  const ARCHIVE = 'refs/truss/archive/run-7/crew-ui'
+  const pL = wtPath('wf_arch-1')
+  const raw = JSON.parse(SLOTS_JSON) as Record<string, unknown>
+  raw.spawned = { [pL.toLowerCase()]: { path: pL, pids: [4242], at: NOW } }
+  const w = world(
+    on,
+    [['main', MAIN_TIP], [LINKED, sha('6')]],
+    args => {
+      if (args === 'git worktree list --porcelain') return { stdout: worktreeList([[pL, sha('6'), LINKED]]) }
+      if (args === 'git branch --merged origin/main --format=%(refname:short)') return { stdout: 'main\n' }
+      if (args.startsWith('git merge-tree --write-tree origin/main')) return { stdout: 'conflicttree\n', exitCode: 1 }
+      if (args.startsWith('git merge-base origin/main')) return { exitCode: 1 }
+      if (args.includes('--contains') && args.endsWith('refs/heads')) return { stdout: '' }
+      if (args === 'git for-each-ref --count=1 --format=%(refname) refs/truss/archive/ refs/archive/') return { stdout: `${ARCHIVE}\n` }
+      if (args.startsWith('git for-each-ref --contains') && args.endsWith('refs/truss/archive/ refs/archive/')) return { stdout: `${ARCHIVE}\n` }
+      return undefined
+    },
+    [pL],
+    {},
+    JSON.stringify(raw),
+  )
+  for (const dry of [true, false]) {
+    w.ran.length = 0
+    const lines = await tidy($, dry)
+    // git, gh, and cmd.exe for the state lock's mkdir/rmdir; never a process lister or a kill
+    expect(w.ran.filter(r => !/^(git|gh) /.test(r) && !/^cmd\.exe \/d \/c (mkdir|rmdir) \S+slots\.lock$/.test(r))).toEqual([])
+    expect(w.ran.filter(r => /taskkill|\bkill\b|powershell|pwsh|Get-CimInstance|\bps\b|netstat/i.test(r))).toEqual([])
+    if (!dry) {
+      expect(w.ran.filter(r => r.includes('worktree remove'))).toEqual([`git -c core.longpaths=true worktree remove ${pL}`])
+      expect(lines.some(l => l.startsWith('removed '))).toBe(true)
+    }
+  }
+  const after = JSON.parse(w.files.get(slashed(SLOTS_PATH))!) as { spawned?: Record<string, { pids: number[] }> }
+  expect(Object.values(after.spawned ?? {}).map(r => r.pids)).toEqual([[4242]])
 })

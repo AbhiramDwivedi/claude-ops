@@ -362,6 +362,34 @@ test('27. unreadable signal keeps every candidate (ADR-0015 amendment 2026-10-28
   expect(removed(w)).toEqual([])
 })
 
+// ---- own spawns only (0.10.0) --------------------------------------------------------------------------------
+
+const withSpawned = (records: Record<string, number[]>) => {
+  const raw = JSON.parse(SLOTS_JSON) as Record<string, unknown>
+  raw.spawned = Object.fromEntries(Object.entries(records).map(([p, pids]) => [slashed(p).toLowerCase(), { path: p, pids, at: NOW - 1000 }]))
+  return JSON.stringify(raw)
+}
+const PROCESS_TOOL = /^(taskkill|kill|ps|lsof|ss|netstat|pkill|killall|powershell(\.exe)?|pwsh|sh|bash)( |$)/i
+
+test('the reaper stops only the pids recorded for the worktree it removes, and runs no process scan', async ($, on) => {
+  const w = world(on, {
+    files: { ...finished(MEMBER), [SLOTS_PATH]: withSpawned({ [MEMBER.path]: [4242, 4243], [LIVE_OTHER.path]: [5151] }) },
+    merged: b => b === MEMBER.branch,
+  })
+  await sweep(w, $, MAIN)
+  expect(removes(w, MEMBER).length).toBeGreaterThan(0)
+  expect(w.ran.filter(r => PROCESS_TOOL.test(r))).toEqual(['taskkill /T /F /PID 4242', 'taskkill /T /F /PID 4243'])
+  const last = JSON.parse(slotsWrites(w).at(-1)!.text) as { spawned?: Record<string, { pids: number[] }> }
+  expect(Object.values(last.spawned ?? {}).map(r => r.pids)).toEqual([[5151]])
+})
+
+test('the reaper stops nothing for a worktree with no recorded pids', async ($, on) => {
+  const w = world(on, { files: finished(MEMBER), merged: b => b === MEMBER.branch })
+  await sweep(w, $, MAIN)
+  expect(removes(w, MEMBER).length).toBeGreaterThan(0)
+  expect(w.ran.filter(r => PROCESS_TOOL.test(r))).toEqual([])
+})
+
 // ---- seam 28 / 29 --------------------------------------------------------------------------------------------
 
 test('28. merged into the crew branch only is kept, then removed once main has it (ADR-0015 amendment 2026-10-28 (d))', async ($, on) => {

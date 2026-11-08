@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import type { BackgroundTask, BranchFacts, SelfCleanFacts, Snapshot, State } from '../hooks/register'
+import type { BackgroundTask, BranchFacts, SelfCleanFacts, State } from '../hooks/register'
 import {
   CHERRY_ALL_MINUS,
   CHERRY_ONE_PLUS,
@@ -51,13 +51,13 @@ import {
   markActive,
   markDone,
   parseState,
+  parsePidFile,
+  recordSpawned,
+  takeSpawned,
   planCreate,
   serializeState,
-  mentions,
   needsWorktree,
-  parseLinuxSnapshot,
   parseSlots,
-  parseWindowsSnapshot,
   parseWorktrees,
   REFUSED_READ_ONLY_TYPES,
   portRange,
@@ -67,10 +67,7 @@ import {
   noIsolateTypes,
   skipForNested,
   releaseSlot,
-  safeGroups,
-  selectVictims,
   withWorktree,
-  worktreeMentions,
   worktreeRootOf,
   agentWorktreeId,
   sessionDirOf,
@@ -196,75 +193,31 @@ test('rewrites only the Agent arguments, adding isolation', async () => {
   expect(input).toEqual({ prompt: 'p', description: 'd', model: 'sonnet', isolation: 'worktree' })
 })
 
-test('matches a worktree path in a command line, and not its longer sibling', async () => {
-  const wt = 'C:\\sw\\app\\.claude\\worktrees\\agent-a1'
-  expect(mentions('"C:\\Program Files\\nodejs\\node.exe" C:\\SW\\App\\.claude\\worktrees\\agent-a1\\node_modules\\.bin\\vite', wt, true)).toBe(true)
-  expect(mentions('node c:/sw/app/.claude/worktrees/agent-a1', wt, true)).toBe(true)
-  expect(mentions('node C:\\sw\\app\\.claude\\worktrees\\agent-a12\\server.js', wt, true)).toBe(false)
-  expect(mentions('node C:\\sw\\app\\server.js', wt, true)).toBe(false)
-  // Linux keeps case
-  expect(mentions('node /home/abd/app/.claude/worktrees/x/server.js', '/home/abd/app/.claude/worktrees/x', false)).toBe(true)
-  expect(mentions('node /home/abd/app/.claude/worktrees/X/server.js', '/home/abd/app/.claude/worktrees/x', false)).toBe(false)
-  expect(mentions('node /mnt/home/abd/app/.claude/worktrees/x/a.js', '/home/abd/app/.claude/worktrees/x', false)).toBe(false)
+test('finds the worktree root a path lies in', async () => {
   expect(worktreeRootOf('C:\\sw\\app\\.claude\\worktrees\\agent-a1\\src')).toBe('C:\\sw\\app\\.claude\\worktrees\\agent-a1')
   expect(worktreeRootOf('C:\\sw\\app\\src')).toBe(undefined)
-  expect(worktreeMentions('node "C:\\sw\\app\\.claude\\worktrees\\gone\\x.js" --cwd c:/sw/app/.claude/worktrees/live', 'c:/sw/app/.claude/worktrees/', true)).toEqual([
-    'c:/sw/app/.claude/worktrees/gone',
-    'c:/sw/app/.claude/worktrees/live',
-  ])
 })
 
-// claude (10) -> probe shell (11); a dev server tree in the worktree; a terminal in the worktree running another claude
-const WT = '/r/.claude/worktrees/w1'
-const SNAP: Snapshot = {
-  self: 11,
-  procs: [
-    { pid: 1, ppid: 0, pgid: 1, cmd: '/sbin/init' },
-    { pid: 10, ppid: 1, pgid: 10, cmd: `/usr/bin/claude --add-dir ${WT}` },
-    { pid: 11, ppid: 10, pgid: 10, cmd: `sh -c echo ${WT}` },
-    { pid: 20, ppid: 1, pgid: 20, cmd: `npm run dev --prefix ${WT}` },
-    { pid: 21, ppid: 20, pgid: 20, cmd: 'node vite' },
-    { pid: 30, ppid: 1, pgid: 30, cmd: `bash --login ${WT}` },
-    { pid: 31, ppid: 30, pgid: 30, cmd: 'claude' },
-    { pid: 40, ppid: 1, pgid: 40, cmd: 'python -m http.server 4012' },
-    { pid: 50, ppid: 1, pgid: 50, cmd: 'node /r/server.js' },
-  ],
-  listeners: [
-    { port: 4012, pid: 40 },
-    { port: 3000, pid: 50 },
-  ],
-}
-
-test('stops the worktree trees and the slot listeners, never Claude or a tree holding it', async () => {
-  const v = selectVictims(SNAP, [WT], [4010, 4011, 4012], false)
-  expect(v.roots).toEqual([20, 40])
-  expect(v.tree).toEqual([20, 21, 40])
-  expect(v.spared).toEqual([30])
-  expect(safeGroups(SNAP, v.roots)).toEqual([20, 40])
-  // a group shared with Claude is never signalled whole
-  const shared: Snapshot = { ...SNAP, procs: SNAP.procs.map(p => (p.pid === 20 ? { ...p, pgid: 10 } : p)) }
-  expect(safeGroups(shared, [20])).toEqual([])
-  // no paths, no ports: nothing
-  expect(selectVictims(SNAP, [], [], false).roots).toEqual([])
+test('reads the pids a setup script declared, one a line, and nothing else', async () => {
+  expect(parsePidFile('123\r\n 456 \n\nnot-a-pid\n12x\n123\n0\n4\n-7\n99999999999\n')).toEqual([123, 456])
+  expect(parsePidFile(undefined)).toEqual([])
+  expect(parsePidFile('')).toEqual([])
 })
 
-test('reads the process probes of both systems', async () => {
-  const win = parseWindowsSnapshot(
-    JSON.stringify({ self: 7, procs: [{ ProcessId: 7, ParentProcessId: 3, CommandLine: null }], listen: { LocalPort: 4010, OwningProcess: 9 } }),
-  )
-  expect(win).toEqual({ self: 7, procs: [{ pid: 7, ppid: 3, cmd: '' }], listeners: [{ port: 4010, pid: 9 }] })
-  const linux = parseLinuxSnapshot(
-    'SELF 11\n   10     1    10 /usr/bin/claude\n   11    10    10 sh -c x\n---\nLISTEN 0 511 0.0.0.0:4010 0.0.0.0:* users:(("node",pid=20,fd=3),("node",pid=21,fd=3))\nLISTEN 0 4096 [::]:22 [::]:*\n',
-  )
-  expect(linux.self).toBe(11)
-  expect(linux.procs).toEqual([
-    { pid: 10, ppid: 1, pgid: 10, cmd: '/usr/bin/claude' },
-    { pid: 11, ppid: 10, pgid: 10, cmd: 'sh -c x' },
-  ])
-  expect(linux.listeners).toEqual([
-    { port: 4010, pid: 20 },
-    { port: 4010, pid: 21 },
-  ])
+test('records spawned pids per worktree, round-trips them, and hands them back once', async () => {
+  const wt = 'C:\\r\\.claude\\worktrees\\w1'
+  let state = recordSpawned(parseState(undefined), wt, [100, 101], 5, true)
+  state = recordSpawned(state, 'c:/r/.claude/worktrees/w1', [101, 102], 6, true)
+  expect(state.spawned['c:/r/.claude/worktrees/w1']?.pids).toEqual([100, 101, 102])
+  expect(recordSpawned(state, '/elsewhere', [], 7, false)).toBe(state)
+  expect(parseState(serializeState(state))).toEqual(state)
+  const taken = takeSpawned(state, wt, true)
+  expect(taken.pids).toEqual([100, 101, 102])
+  expect(taken.state.spawned).toEqual({})
+  expect(takeSpawned(taken.state, wt, true).pids).toEqual([])
+  // a state with no records writes no spawned key, and bad records are dropped on read
+  expect(serializeState(parseState(undefined)).includes('spawned')).toBe(false)
+  expect(parseState('{"spawned":{"a":{"path":"a","pids":[1,"x",300]},"b":{"pids":[5]}}}').spawned).toEqual({ a: { path: 'a', pids: [300], at: 0 } })
 })
 
 test('allocates the lowest free slot from 1, keeps a held one, and frees on release', async () => {

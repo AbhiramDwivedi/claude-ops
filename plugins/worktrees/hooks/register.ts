@@ -121,138 +121,41 @@ export function worktreeRootOf(path: string): string | undefined {
   return m?.[1]
 }
 
-const PATH_CHAR = /[A-Za-z0-9._-]/
+// --- processes this plugin started ---
 
-// True when the command line names this path, or something under it: `.../agent-a1` does not match `.../agent-a12`.
-export function mentions(command: string, path: string, windows: boolean): boolean {
-  const cmd = normPath(command, windows)
-  const target = normPath(path, windows)
-  if (target === '') return false
-  for (let at = cmd.indexOf(target); at !== -1; at = cmd.indexOf(target, at + 1)) {
-    const before = at === 0 ? '' : (cmd[at - 1] ?? '')
-    const after = cmd[at + target.length] ?? ''
-    if ((before === '' || !(PATH_CHAR.test(before) || before === '/')) && (after === '' || !PATH_CHAR.test(after))) return true
-  }
-  return false
-}
+// The pids a worktree's setup script left running, as the script declared them in $WORKTREE_PIDFILE: one pid a line.
+// The plugin stops these and only these; it never lists the host's processes to find more.
+export type Spawned = { path: string; pids: number[]; at: number }
 
-// Every `<prefix><name>` path the command line names, `prefix` already normalised and ending in `/`.
-export function worktreeMentions(command: string, prefix: string, windows: boolean): string[] {
-  const cmd = normPath(command, windows)
-  const found = new Set<string>()
-  for (let at = cmd.indexOf(prefix); at !== -1; at = cmd.indexOf(prefix, at + 1)) {
-    const m = /^[^/"'\s;,]+/.exec(cmd.slice(at + prefix.length))
-    if (m) found.add(prefix + m[0])
-  }
-  return [...found]
-}
+export const validPid = (n: number): boolean => Number.isInteger(n) && n > 4 && n < 2 ** 31
 
-// a Claude Code process, which this plugin never stops
-export function isClaude(command: string): boolean {
-  return /(^|[\\/\s"'])claude(\.exe)?(["'\s]|$)/i.test(command) || /@anthropic-ai[\\/]claude-code/i.test(command)
-}
-
-export type Proc = { pid: number; ppid: number; pgid?: number; cmd: string }
-export type Listener = { port: number; pid: number }
-// the processes and listening sockets, and the pid of the probe that listed them (a child of this Claude process)
-export type Snapshot = { self: number; procs: Proc[]; listeners: Listener[] }
-
-export function ancestors(pid: number, procs: readonly Proc[]): number[] {
-  const parent = new Map(procs.map(p => [p.pid, p.ppid]))
-  const seen: number[] = []
-  for (let at = parent.get(pid); at !== undefined && at > 0 && !seen.includes(at); at = parent.get(at)) seen.push(at)
-  return seen
-}
-
-export function descendants(pid: number, procs: readonly Proc[]): number[] {
+export function parsePidFile(text: string | undefined): number[] {
   const out: number[] = []
-  const queue = [pid]
-  while (queue.length > 0) {
-    const at = queue.shift() as number
-    for (const p of procs) {
-      if (p.ppid === at && p.pid !== pid && !out.includes(p.pid)) {
-        out.push(p.pid)
-        queue.push(p.pid)
-      }
-    }
+  for (const line of (text ?? '').split(/\r?\n/)) {
+    const t = line.trim()
+    if (!/^\d+$/.test(t)) continue
+    const n = Number(t)
+    if (validPid(n) && !out.includes(n)) out.push(n)
   }
   return out
 }
 
-export type Victims = {
-  // the processes to stop with their trees: none is a descendant of another
-  roots: number[]
-  // every process in those trees
-  tree: number[]
-  // matched, and left alive because its tree holds Claude or the probe
-  spared: number[]
+export function recordSpawned(state: State, path: string, pids: readonly number[], at: number, windows: boolean): State {
+  const key = normPath(path, windows)
+  const had = state.spawned[key]?.pids ?? []
+  const all = [...had, ...pids.filter(p => !had.includes(p))]
+  if (all.length === 0) return state
+  return { ...state, spawned: { ...state.spawned, [key]: { path, pids: all, at } } }
 }
 
-// The processes to stop for these worktree paths and ports: those whose command line names a path, or that listen
-// on a port. Never the probe, its ancestors (this Claude), any Claude process, or a process whose tree holds one.
-export function selectVictims(snapshot: Snapshot, paths: readonly string[], ports: readonly number[], windows: boolean): Victims {
-  const { procs } = snapshot
-  const shielded = new Set([snapshot.self, ...ancestors(snapshot.self, procs)])
-  for (const p of procs) if (isClaude(p.cmd)) shielded.add(p.pid)
-  const listening = new Set(snapshot.listeners.filter(l => ports.includes(l.port)).map(l => l.pid))
-  const matched = procs.filter(
-    p => !shielded.has(p.pid) && p.pid > 4 && (listening.has(p.pid) || paths.some(path => mentions(p.cmd, path, windows))),
-  )
-  const spared: number[] = []
-  const safe = new Set<number>()
-  for (const p of matched) {
-    if (descendants(p.pid, procs).some(d => shielded.has(d))) spared.push(p.pid)
-    else safe.add(p.pid)
-  }
-  const roots = [...safe].filter(pid => !ancestors(pid, procs).some(a => safe.has(a)))
-  const tree = new Set<number>()
-  for (const root of roots) for (const pid of [root, ...descendants(root, procs)]) if (!shielded.has(pid)) tree.add(pid)
-  return { roots: roots.sort((a, b) => a - b), tree: [...tree].sort((a, b) => a - b), spared }
-}
-
-// Process groups safe to signal whole: led by a root, and holding no shielded process.
-export function safeGroups(snapshot: Snapshot, roots: readonly number[]): number[] {
-  const shielded = new Set([snapshot.self, ...ancestors(snapshot.self, snapshot.procs)])
-  for (const p of snapshot.procs) if (isClaude(p.cmd)) shielded.add(p.pid)
-  const shieldedGroups = new Set(snapshot.procs.filter(p => shielded.has(p.pid)).map(p => p.pgid))
-  return roots.filter(pid => {
-    const p = snapshot.procs.find(q => q.pid === pid)
-    return p !== undefined && p.pgid === pid && pid > 1 && !shieldedGroups.has(pid)
-  })
-}
-
-// Windows: one JSON object `{ self, procs: [{ ProcessId, ParentProcessId, CommandLine }], listen: [{ LocalPort, OwningProcess }] }`
-export function parseWindowsSnapshot(json: string): Snapshot {
-  const raw = JSON.parse(json) as { self: number; procs?: unknown; listen?: unknown }
-  const list = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v : v ? [v] : []) as Record<string, unknown>[]
-  return {
-    self: Number(raw.self),
-    procs: list(raw.procs).map(p => ({ pid: Number(p.ProcessId), ppid: Number(p.ParentProcessId), cmd: String(p.CommandLine ?? '') })),
-    listeners: list(raw.listen).map(l => ({ port: Number(l.LocalPort), pid: Number(l.OwningProcess) })),
-  }
-}
-
-// Linux: `SELF <pid>`, then `ps -eo pid=,ppid=,pgid=,args=` lines, then `---`, then `ss -ltnpH` lines
-export function parseLinuxSnapshot(text: string): Snapshot {
-  const lines = text.split('\n')
-  let self = 0
-  const procs: Proc[] = []
-  const listeners: Listener[] = []
-  let inSockets = false
-  for (const line of lines) {
-    const t = line.trim()
-    if (t.startsWith('SELF ')) self = Number(t.slice(5))
-    else if (t === '---') inSockets = true
-    else if (!inSockets) {
-      const m = /^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(t)
-      if (m) procs.push({ pid: Number(m[1]), ppid: Number(m[2]), pgid: Number(m[3]), cmd: m[4] ?? '' })
-    } else if (t !== '') {
-      const cols = t.split(/\s+/)
-      const port = Number(cols[3]?.slice(cols[3].lastIndexOf(':') + 1))
-      for (const pm of t.matchAll(/pid=(\d+)/g)) if (Number.isFinite(port)) listeners.push({ port, pid: Number(pm[1]) })
-    }
-  }
-  return { self, procs, listeners }
+// The worktree's recorded pids, and the state without them.
+export function takeSpawned(state: State, path: string, windows: boolean): { state: State; pids: number[] } {
+  const key = normPath(path, windows)
+  const hit = state.spawned[key]
+  if (hit === undefined) return { state, pids: [] }
+  const spawned = { ...state.spawned }
+  delete spawned[key]
+  return { state: { ...state, spawned }, pids: hit.pids }
 }
 
 // --- port slots ---
@@ -264,11 +167,6 @@ export const MAX_SLOT = 99
 
 export function portRange(base: number, slot: number): [number, number] {
   return [base + slot * 10, base + slot * 10 + 9]
-}
-
-export function ports(base: number, slot: number): number[] {
-  const [from] = portRange(base, slot)
-  return Array.from({ length: 10 }, (_, i) => from + i)
 }
 
 export function slotOf(table: SlotTable, path: string, windows: boolean): number | undefined {
@@ -323,24 +221,39 @@ export function planCreate(f: { pathExists: boolean; branchExists: boolean; head
 }
 
 // What slots.json holds: the slots, and the worktrees this plugin created whose agent has not stopped yet.
-export type State = { slots: SlotTable; active: Record<string, { path: string; at: number }> }
+export type State = { slots: SlotTable; active: Record<string, { path: string; at: number }>; spawned: Record<string, Spawned> }
 
 // a worktree created this long ago counts as idle even when no stop was seen (the session died)
 export const ACTIVE_FOR_MS = 24 * 60 * 60_000
 
+function parseSpawned(v: unknown): State['spawned'] {
+  const out: State['spawned'] = {}
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return out
+  for (const [k, e] of Object.entries(v as Record<string, unknown>)) {
+    const r = e as Record<string, unknown> | null
+    if (!r || typeof r.path !== 'string' || !Array.isArray(r.pids)) continue
+    const pids = r.pids.filter((n): n is number => typeof n === 'number' && validPid(n))
+    if (pids.length > 0) out[k] = { path: r.path, pids, at: Number.isFinite(r.at) ? Number(r.at) : 0 }
+  }
+  return out
+}
+
 export function parseState(text: string | undefined): State {
   let active: State['active'] = {}
+  let spawned: State['spawned'] = {}
   try {
-    const raw = JSON.parse(text ?? '') as { active?: State['active'] }
+    const raw = JSON.parse(text ?? '') as { active?: State['active']; spawned?: unknown }
     if (raw && typeof raw.active === 'object' && raw.active !== null) active = raw.active
+    if (raw) spawned = parseSpawned(raw.spawned)
   } catch {
     // an unreadable file starts over
   }
-  return { slots: parseSlots(text), active }
+  return { slots: parseSlots(text), active, spawned }
 }
 
 export function serializeState(state: State): string {
-  return JSON.stringify({ slots: state.slots.slots, active: state.active }, null, 2) + '\n'
+  const spawned = Object.keys(state.spawned).length > 0 ? { spawned: state.spawned } : {}
+  return JSON.stringify({ slots: state.slots.slots, active: state.active, ...spawned }, null, 2) + '\n'
 }
 
 export function markActive(state: State, path: string, at: number, windows: boolean): State {
@@ -420,9 +333,9 @@ function withoutBodies(command: string): string {
   const out: string[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    const ps = /@['"][ \t\r]*$/.exec(line)
-    if (ps) {
-      out.push(line.slice(0, ps.index))
+    const hereStr = /@['"][ \t\r]*$/.exec(line)
+    if (hereStr) {
+      out.push(line.slice(0, hereStr.index))
       let j = i + 1
       while (j < lines.length && !/^['"]@/.test(lines[j])) j++
       if (j >= lines.length) break
@@ -940,18 +853,6 @@ export function decideSelfClean(f: SelfCleanFacts): SelfCleanPlan {
 
 type $ = EngineInterface
 
-// Windows: processes with command lines and, when asked (it is the slow part), the listening sockets
-export function windowsProbe(withPorts: boolean): string {
-  return [
-    '$ErrorActionPreference = "SilentlyContinue"',
-    '$p = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CommandLine)',
-    withPorts ? '$l = @(Get-NetTCPConnection -State Listen | Select-Object LocalPort, OwningProcess)' : '$l = @()',
-    '[pscustomobject]@{ self = $PID; procs = $p; listen = $l } | ConvertTo-Json -Compress -Depth 3',
-  ].join('; ')
-}
-
-export const LINUX_PROBE = 'echo "SELF $$"; ps -eo pid=,ppid=,pgid=,args=; echo ---; ss -ltnpH 2>/dev/null || true'
-
 // --- background work an agent leaves running ---
 
 export type BackgroundTask = { id: string; type: string; status: string; description: string; command?: string }
@@ -1070,39 +971,21 @@ async function idsInTranscript($: $, path: string, ids: readonly string[]): Prom
   }
 }
 
-async function snapshot($: $, windows: boolean, withPorts: boolean): Promise<Snapshot | undefined> {
-  const r = windows
-    ? await run($, ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', windowsProbe(withPorts)], undefined, 60_000)
-    : await run($, ['sh', '-c', LINUX_PROBE], undefined, 30_000)
-  if (r.exitCode !== 0 || r.stdout.trim() === '') return undefined
-  try {
-    return windows ? parseWindowsSnapshot(r.stdout) : parseLinuxSnapshot(r.stdout)
-  } catch {
-    return undefined
-  }
-}
-
-// Stops what runs in these worktrees or listens on these ports. Answers what it stopped, for the report.
-async function stopProcesses($: $, windows: boolean, paths: string[], portList: number[], dryRun = false): Promise<string[]> {
-  if (paths.length === 0 && portList.length === 0) return []
-  const snap = await snapshot($, windows, portList.length > 0)
-  if (snap === undefined) return ['could not list processes; stopped nothing']
-  const victims = selectVictims(snap, paths, portList, windows)
-  const label = (pid: number) => `${pid} ${(snap.procs.find(p => p.pid === pid)?.cmd ?? '').slice(0, 80)}`
-  const notes = victims.spared.map(pid => `spared ${label(pid)}: its tree holds a Claude process`)
-  if (victims.roots.length === 0) return notes
-  if (dryRun) return [...notes, ...victims.roots.map(pid => `would stop ${label(pid)}`)]
+// Stops the processes this plugin recorded for a worktree: the pids its own setup script declared at spawn time.
+// It never lists or scans the host's processes. A process group or tree is stopped only from a recorded pid.
+async function stopRecorded($: $, windows: boolean, recorded: readonly number[]): Promise<string[]> {
+  const pids = recorded.filter(validPid)
+  if (pids.length === 0) return []
   if (windows) {
-    for (const pid of victims.roots) await run($, ['taskkill', '/T', '/F', '/PID', String(pid)])
+    for (const pid of pids) await run($, ['taskkill', '/T', '/F', '/PID', String(pid)])
   } else {
-    const groups = safeGroups(snap, victims.roots)
-    for (const g of groups) await run($, ['kill', '-TERM', '--', `-${g}`])
-    await run($, ['kill', '-TERM', ...victims.tree.map(String)])
+    for (const pid of pids) await run($, ['kill', '-TERM', '--', `-${pid}`])
+    await run($, ['kill', '-TERM', ...pids.map(String)])
     await $.clock.sleep(1500)
-    for (const g of groups) await run($, ['kill', '-KILL', '--', `-${g}`])
-    await run($, ['kill', '-KILL', ...victims.tree.map(String)])
+    for (const pid of pids) await run($, ['kill', '-KILL', '--', `-${pid}`])
+    await run($, ['kill', '-KILL', ...pids.map(String)])
   }
-  return [...notes, ...victims.roots.map(pid => `stopped ${label(pid)}`)]
+  return pids.map(pid => `stopped ${pid} (started by the setup script)`)
 }
 
 type Repo = { top: string; common: string; mainRoot: string }
@@ -1440,26 +1323,26 @@ function portBaseOf(options: Record<string, unknown>): number {
   return Number.isFinite(n) && n >= 1024 && n <= 64_000 ? Math.floor(n) : 4000
 }
 
-// Stops a worktree's processes and the ones on its slot's ports. The slot is released when `release` is set,
-// or when the worktree folder is gone.
-async function cleanWorktree($: $, repo: Repo, path: string, base: number, release: boolean, warn?: Warn): Promise<string[]> {
+// Stops the processes the plugin recorded for a worktree (its setup script's declared pids) and forgets them. The slot is
+// released when `release` is set, or when the worktree folder is gone. No other process is looked at.
+async function cleanWorktree($: $, repo: Repo, path: string, release: boolean, warn?: Warn): Promise<string[]> {
   const windows = await isWindows($)
   const loaded = await loadState($, repo)
   if (loaded === undefined) {
     await $.ui.log('worktrees: slots.json unreadable, left as is', { to: 'debug' })
     await tellUnreadable($, warn, stateFile(repo))
+    return []
   }
-  const state = loaded ?? parseState(undefined)
-  const slot = slotOf(state.slots, path, windows)
-  const notes = await stopProcesses($, windows, [path], slot === undefined ? [] : ports(base, slot))
+  const key = normPath(path, windows)
+  const slot = slotOf(loaded.slots, path, windows)
   const freeSlot = slot !== undefined && (release || !(await $.fs.exists(path)))
-  if (loaded !== undefined && (freeSlot || state.active[normPath(path, windows)] !== undefined)) {
-    await withState($, repo, async s => ({
-      state: markDone(freeSlot ? { ...s, slots: releaseSlot(s.slots, path, windows) } : s, path, windows),
-      value: undefined,
-    }), warn)
-  }
-  return notes
+  if (!freeSlot && loaded.active[key] === undefined && loaded.spawned[key] === undefined) return []
+  const pids = await withState($, repo, async s => {
+    const taken = takeSpawned(s, path, windows)
+    const next = freeSlot ? { ...taken.state, slots: releaseSlot(taken.state.slots, path, windows) } : taken.state
+    return { state: markDone(next, path, windows), value: taken.pids }
+  }, warn)
+  return stopRecorded($, windows, pids ?? [])
 }
 
 // Merging `branch` into `into` would change nothing: `git merge-tree --write-tree` gives `into`'s own tree. undefined
@@ -1659,7 +1542,7 @@ type SweepEvent = { cwd?: string; transcriptPath?: string }
 // in the main checkout's HEAD (repo ADR-0015, amendment 2026-10-28) and that have no member still running; then their branch. A dirty or
 // locked one is kept and reported. One write of slots.json retires finished, gone and stale `active` entries.
 // `tracked` is only a hint: removed paths drop out of it. Answers what it removed and what it kept, for the toasts.
-async function selfClean($: $, tracked: Map<string, string>, base: number, ev: SweepEvent, warn?: Warn): Promise<{ removed: string[]; kept: string[] }> {
+async function selfClean($: $, tracked: Map<string, string>, ev: SweepEvent, warn?: Warn): Promise<{ removed: string[]; kept: string[] }> {
   const windows = await isWindows($)
   const found = await projectRepo($, ev.cwd)
   if (found === undefined) return { removed: [], kept: [] }
@@ -1777,7 +1660,7 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
       if (inMain !== undefined) kept.push(`${wt.path} (${plan.reason})`)
       continue
     }
-    const notes = await cleanWorktree($, repo, wt.path, base, true, warn)
+    const notes = await cleanWorktree($, repo, wt.path, true, warn)
     if (notes.length > 0) await log(notes.join('\n'))
     const done = await removeWorktree($, found.main, wt.path, windows)
     if (!done.ok) {
@@ -1806,10 +1689,10 @@ async function selfClean($: $, tracked: Map<string, string>, base: number, ev: S
 // a session's tracked worktrees (normalised path to path) and its sweeps, which run one at a time
 type Sweeps = { tracked: Map<string, string>; chain: Promise<void>; warn: Warn }
 
-function sweep($: $, s: Sweeps, base: number, ev: SweepEvent): Promise<void> {
+function sweep($: $, s: Sweeps, ev: SweepEvent): Promise<void> {
   s.chain = s.chain
     .then(async () => {
-      const { removed, kept } = await selfClean($, s.tracked, base, ev, s.warn)
+      const { removed, kept } = await selfClean($, s.tracked, ev, s.warn)
       if (removed.length > 0) await $.ui.toast(`worktrees: removed merged ${removed.join(', ')}`)
       if (kept.length > 0) await $.ui.toast(`worktrees: kept merged worktrees that need a look: ${kept.join('; ')}`)
     })
@@ -2076,12 +1959,10 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
   }
 
   if (!dryRun && plans.some(p => p.kind === 'delete' && p.prune)) await git($, repo.top, 'worktree', 'prune')
-  const base = portBaseOf(options)
   for (const plan of plans) {
     if (plan.kind === 'skip') continue
     if (dryRun) {
       lines.push(`would: ${describePlan(plan)}`)
-      if (plan.worktreePath) lines.push(...(await stopProcesses($, windows, [plan.worktreePath], [], true)).map(l => `  ${l}`))
       continue
     }
     acted = true
@@ -2096,7 +1977,6 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       else archived++
     }
     if (plan.worktreePath) {
-      lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false, warn)))
       const wtPath = plan.worktreePath
       const stuck: string[] = []
       for (const rel of plan.unlink ?? []) if (!(await unlinkStray($, wtPath, rel, windows))) stuck.push(rel)
@@ -2141,32 +2021,20 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
   }
   if (acted) await git($, repo.top, 'fetch', '--prune', 'origin')
 
-  // orphans: processes naming a worktree folder of this repo that no longer exists, and slots whose folder is gone
-  const prefix = normPath(`${repo.mainRoot}/.claude/worktrees`, windows) + '/'
-  const live = new Set(worktrees.map(w => normPath(w.path, windows)))
-  const snap = await snapshot($, windows, false)
-  const dead = new Set<string>()
-  for (const p of snap?.procs ?? []) {
-    for (const path of worktreeMentions(p.cmd, prefix, windows)) {
-      if (!live.has(path) && !dead.has(path) && !(await $.fs.exists(path))) dead.add(path)
-    }
+  // slots whose worktree folder is gone are released. /tidy stops no process: pids the setup script recorded for a
+  // removed worktree are reported, and stay recorded for the reaper.
+  const after = (await loadState($, repo)) ?? parseState(undefined)
+  for (const rec of Object.values(after.spawned)) {
+    if (!(await $.fs.exists(rec.path))) lines.push(`left running: ${rec.pids.join(', ')}, started by the setup script of ${rec.path} (tidy stops no process)`)
   }
-  const table = ((await loadState($, repo)) ?? parseState(undefined)).slots
   const deadSlots: [number, Slot][] = []
-  for (const [n, s] of Object.entries(table.slots)) if (!(await $.fs.exists(s.path))) deadSlots.push([Number(n), s])
-  const orphanPorts = deadSlots.flatMap(([n]) => ports(base, n))
-  const orphanPaths = [...dead, ...deadSlots.map(([, s]) => s.path)]
-  if (orphanPaths.length > 0) {
-    const stopped = await stopProcesses($, windows, orphanPaths, orphanPorts, dryRun)
-    lines.push(...stopped.map(l => `orphan: ${l}`))
-    if (!dryRun && stopped.some(l => l.startsWith('stopped'))) acted = true
-    if (!dryRun && deadSlots.length > 0) {
-      await withState($, repo, async t => ({
-        state: deadSlots.reduce((acc, [, s]) => markDone({ ...acc, slots: releaseSlot(acc.slots, s.path, windows) }, s.path, windows), t),
-        value: undefined,
-      }), warn)
-      lines.push(`released slot${deadSlots.length === 1 ? '' : 's'} ${deadSlots.map(([n]) => n).join(', ')} (worktree gone)`)
-    }
+  for (const [n, sl] of Object.entries(after.slots.slots)) if (!(await $.fs.exists(sl.path))) deadSlots.push([Number(n), sl])
+  if (!dryRun && deadSlots.length > 0) {
+    await withState($, repo, async t => ({
+      state: deadSlots.reduce((acc, [, sl]) => markDone({ ...acc, slots: releaseSlot(acc.slots, sl.path, windows) }, sl.path, windows), t),
+      value: undefined,
+    }), warn)
+    lines.push(`released slot${deadSlots.length === 1 ? '' : 's'} ${deadSlots.map(([n]) => n).join(', ')} (worktree gone)`)
   }
   // agent branches never merged: reported, never deleted
   const unmerged = unmergedAgentWork(facts)
@@ -2322,7 +2190,15 @@ export const register: Register = (on, options) => {
     // slots.json could not be read: no slot is drawn, so the setup script does not run; the worktree is there without it
     if (slot === undefined) return { worktreePath: path }
     const [from, to] = portRange(base, slot)
-    const env = { WORKTREE_PATH: path, WORKTREE_NAME: e.name, WORKTREE_SLOT: String(slot), PORT_BASE: String(from), REPO_ROOT: repo.mainRoot }
+    // the script names in WORKTREE_PIDFILE each process it leaves running, one pid a line: those are the only
+    // processes this plugin ever stops, when the worktree's agent ends or the worktree is removed
+    const pidFile = `${repo.common}/claude-worktrees/setup-${slot}.pids`
+    try {
+      await $.fs.write(pidFile, '')
+    } catch {
+      // the file is only read back; a script that cannot write it leaves nothing recorded
+    }
+    const env = { WORKTREE_PATH: path, WORKTREE_NAME: e.name, WORKTREE_SLOT: String(slot), PORT_BASE: String(from), REPO_ROOT: repo.mainRoot, WORKTREE_PIDFILE: pidFile }
     const argvs = windows
       ? [
           ['pwsh', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script],
@@ -2338,6 +2214,17 @@ export const register: Register = (on, options) => {
         ran = { exitCode: -1, stderr: String(error) }
       }
     }
+    let declared: number[] = []
+    try {
+      if (await $.fs.exists(pidFile)) declared = parsePidFile((await $.fs.read(pidFile)) as string)
+      if (declared.length > 0) await $.fs.write(pidFile, '')
+    } catch {
+      declared = []
+    }
+    if (declared.length > 0) {
+      await withState($, repo, async st => ({ state: recordSpawned(st, path, declared, now, windows), value: undefined }), warn)
+      await $.ui.log(`worktrees: ${e.name} setup left running ${declared.join(', ')} (recorded)`, { to: 'debug' })
+    }
     if (ran.exitCode !== 0) {
       await $.ui.toast(`worktrees: setup script failed in ${e.name} (exit ${ran.exitCode}); the worktree is there without it`)
       await $.ui.log(`worktrees: ${script} in ${path}: ${ran.stderr.slice(-2000)}`, { to: 'debug' })
@@ -2347,11 +2234,11 @@ export const register: Register = (on, options) => {
     return { worktreePath: path }
   }).catch(passThrough)
 
-  // 3. Removing a worktree first stops what runs in it, then releases its slot.
+  // 3. Removing a worktree first stops what its setup script left running (the recorded pids), then releases its slot.
   on('classic.WorktreeRemove', async ($, e, next) => {
     const repo = await repoAt($, e.cwd)
     if (repo !== undefined && worktreeRootOf(e.worktree_path) !== undefined) {
-      const notes = await cleanWorktree($, repo, e.worktree_path, base, true, warn)
+      const notes = await cleanWorktree($, repo, e.worktree_path, true, warn)
       if (notes.length > 0) await $.ui.log(`worktrees: ${notes.join('\n')}`, { to: 'debug' })
     }
     return next(e)
@@ -2391,12 +2278,12 @@ export const register: Register = (on, options) => {
       if (own !== undefined && normPath(own, windows) === normPath(path, windows)) continue
       const table = ((await loadState($, repo)) ?? parseState(undefined)).slots
       if (!(await $.fs.exists(path)) && slotOf(table, path, windows) === undefined) continue
-      // the process probe takes seconds on Windows: run it after the agent's stop, not inside it
+      // stopping what the setup script left running waits on the processes: do it after the agent's stop, not inside it
       $.clock.after(0, () => {
         void (async () => {
-          const notes = await cleanWorktree($, repo, path, base, false, warn)
+          const notes = await cleanWorktree($, repo, path, false, warn)
           const stopped = notes.filter(n => n.startsWith('stopped')).length
-          if (stopped > 0) await $.ui.toast(`worktrees: stopped ${stopped} process${stopped === 1 ? '' : 'es'} left by ${e.agent_type}`)
+          if (stopped > 0) await $.ui.toast(`worktrees: stopped ${stopped} setup process${stopped === 1 ? '' : 'es'} of ${e.agent_type}'s worktree`)
           if (notes.length > 0) await $.ui.log(`worktrees: ${notes.join('\n')}`, { to: 'debug' })
         })().catch(error => $.ui.log(`worktrees: cleanup failed: ${String(error)}`, { to: 'debug' }))
       })
@@ -2423,14 +2310,14 @@ export const register: Register = (on, options) => {
   }).catch(passThrough)
 
   // 5. After the session runs a merge, its own agents' worktrees whose branch is now merged are removed, in the
-  // background: the process probe takes seconds on Windows. Everything else is /tidy's, on demand.
+  // background: git work across worktrees takes a while. Everything else is /tidy's, on demand.
   on('classic.PostToolUse', async ($, e, next) => {
     const result = await next(e)
     if ((e.tool_name !== 'Bash' && e.tool_name !== 'PowerShell')) return result
     const command = (e.tool_input as { command?: unknown } | null)?.command
     if (typeof command !== 'string' || !isGitMerge(command)) return result
     const ev = e as unknown as { cwd?: string; transcript_path?: string }
-    $.clock.after(0, () => void sweep($, own, base, { cwd: ev.cwd, transcriptPath: ev.transcript_path }))
+    $.clock.after(0, () => void sweep($, own, { cwd: ev.cwd, transcriptPath: ev.transcript_path }))
     return result
   }).catch(passThrough)
 

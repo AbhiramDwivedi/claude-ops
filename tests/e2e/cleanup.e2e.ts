@@ -320,3 +320,13 @@ test('control: a member the lead never merged survives, and only that one', { sk
   assert.ok(seen.slots === 'absent' || seen.slots === 'empty active', `slots.json active entries left: ${JSON.stringify(seen.slots)}`)
   assert.deepEqual(f.leftovers, { branches: [b], folders: [`.claude/worktrees/agent-${MEMBER_B}`], count: 1 })
 })
+
+// worktrees 0.10.0, the client's ruling: the plugin never finds processes by looking, on any platform. A scan can
+// hit another Claude session's children, so no process lister, socket lister or port lookup is left in the module.
+test('register.ts holds no process scan: no ps, lsof, /proc, netstat, ss or port lookup', () => {
+  const src = fs.readFileSync(path.join(HERE, REGISTER), 'utf8')
+  assert.ok(src.includes('export const register'))
+  for (const banned of [/\bps\b/, /\blsof\b/, /\/proc\b/, /\bnetstat\b/, /\bss -/, /Get-NetTCPConnection/, /Win32_Process/, /Get-Process/, /\bpgrep\b/, /\bpkill\b/, /selectVictims/, /listeners?\b/i]) {
+    assert.equal(banned.test(src), false, `register.ts matches ${banned}`)
+  }
+})

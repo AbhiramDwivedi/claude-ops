@@ -780,6 +780,29 @@ test('two creates claim slots 1 and 2 and keep both active entries', async ($, o
   expect(Object.keys(st.active).filter(k => /agent-b[12]new$/.test(k))).toHaveLength(2)
 })
 
+// 0.10.0: the setup script names what it leaves running in WORKTREE_PIDFILE; those pids, and only those, are stopped
+test('records the pids a setup script declares, and stops exactly those when the worktree is removed', async ($, on) => {
+  const PIDS = 'C:/r/.git/claude-worktrees/setup-1.pids'
+  const w = cleanupWorld(on, {
+    files: { 'C:/r/.claude/worktree-setup.ps1': 'x' },
+    hook: args => {
+      if (args.startsWith('pwsh ')) w.files.set(slashed(PIDS), '777\n888\nnot a pid\n')
+      return undefined
+    },
+  })
+  on('classic.WorktreeRemove', async () => ({}))
+  await $.classic.WorktreeCreate({ name: 'agent-b1new', cwd: MAIN } as never)
+  const st = JSON.parse(w.files.get(slashed(SLOTS_PATH)) as string) as { spawned?: Record<string, { pids: number[] }> }
+  expect(Object.values(st.spawned ?? {}).map(r => r.pids)).toEqual([[777, 888]])
+  expect(w.ran.filter(r => /taskkill|\bkill\b/.test(r))).toEqual([])
+  w.ran.length = 0
+  await $.classic.WorktreeRemove({ worktree_path: 'C:/r/.claude/worktrees/agent-b1new', cwd: MAIN } as never)
+  expect(w.ran.filter(r => /taskkill|\bkill\b|powershell|Get-CimInstance/i.test(r))).toEqual(['taskkill /T /F /PID 777', 'taskkill /T /F /PID 888'])
+  const after = JSON.parse(w.files.get(slashed(SLOTS_PATH)) as string) as { spawned?: object; slots: object }
+  expect(after.spawned).toBe(undefined)
+  expect(after.slots).toEqual({})
+})
+
 // ---------------- third red team: /tidy with an unreadable slots.json, and telling the user once ----------------
 const TIP = '4bada1f0123456789abcdef0123456789abcdef0'
 // git's answers for /tidy: the new agent branch sits on the default branch, so it counts as merged
