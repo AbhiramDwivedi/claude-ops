@@ -37,6 +37,13 @@ import {
   addedLines,
   parseCatFileBatch,
   reflogWorked,
+  DAY_MS,
+  describePlan,
+  isSuperseded,
+  linksIntoMain,
+  parseNameStatus,
+  tidySettings,
+  untrackedFiles,
   WIP_MESSAGE,
   includedFiles,
   isActive,
@@ -525,7 +532,7 @@ test('counts a branch of your own in the default branch merged once its reflog s
     allowForce: true,
     deleteRemote: true,
     remoteNote: undefined,
-    archive: true,
+    archive: 'refs/tidy-archive/feature',
   })
   // a bookmark: no reflog entry but its creation (or a reset or rename)
   expect(decideBranch({ ...MERGED, pr: { numbers: [] }, gitMerged: true, worked: false })).toEqual({
@@ -547,7 +554,7 @@ test('counts a branch of your own in the default branch merged once its reflog s
 
 test('counts an agent branch merged when every line it adds is in the default branch, and says how many are not', async () => {
   const covered = decideBranch({ ...AGENT, contentMerged: false, linesCovered: { missing: 0, total: 41 } })
-  expect(covered.kind === 'delete' && [covered.via, covered.archive]).toEqual(['content in the default branch (later edited there)', true])
+  expect(covered.kind === 'delete' && [covered.via, covered.archive]).toEqual(['content in the default branch (later edited there)', 'refs/tidy-archive/worktree-agent-a1'])
   expect(unmergedAgentWork([{ ...AGENT, contentMerged: false, linesCovered: { missing: 0, total: 41 } }])).toEqual([])
   const facts = { ...AGENT, contentMerged: false, linesCovered: { missing: 73, total: 143 } }
   expect(decideBranch(facts)).toEqual({ kind: 'skip', branch: 'worktree-agent-a1', reason: 'not merged: 73 of 143 lines it adds are not in the default branch' })
@@ -583,7 +590,7 @@ test('reads the added lines of a -U0 patch per file and a cat-file --batch strea
 
 test('counts a relay leg merged when another local branch strictly contains its tip', async () => {
   const leg = decideBranch({ ...AGENT, containedIn: 'worktree-wf_r-78', remote: { safe: false } })
-  expect(leg.kind === 'delete' && [leg.via, leg.archive, leg.deleteRemote]).toEqual(['contained in worktree-wf_r-78', true, false])
+  expect(leg.kind === 'delete' && [leg.via, leg.archive, leg.deleteRemote]).toEqual(['contained in worktree-wf_r-78', 'refs/tidy-archive/worktree-agent-a1', false])
   expect(unmergedAgentWork([{ ...AGENT, containedIn: 'worktree-wf_r-78' }])).toEqual([])
   // the same gates: locked, running or dirty legs stay
   expect(decideBranch({ ...AGENT, containedIn: 'x', worktree: { ...AGENT.worktree!, locked: 'l' } })).toEqual({
@@ -596,6 +603,82 @@ test('counts a relay leg merged when another local branch strictly contains its 
   expect(decideBranch({ ...AGENT, branch: 'feature', containedIn: 'x' }).kind).toBe('skip')
   // equal tips are not containment: gatherFacts leaves containedIn unset, and two such branches both stay
   expect(decideBranch({ ...AGENT }).kind).toBe('skip')
+})
+
+// --- archived and superseded agent branches (0.9.0) ---
+
+test('deletes an agent branch whose tip an archive ref holds, past the unpushed gate, and keeps the other gates', async () => {
+  const facts = { ...AGENT, contentMerged: false, archivedAt: 'refs/truss/archive/run-1/crew-a' }
+  const plan = decideBranch(facts)
+  expect(plan.kind === 'delete' && [plan.via, plan.style, plan.archive]).toEqual(['tip archived at refs/truss/archive/run-1/crew-a', 'archived', undefined])
+  expect(describePlan(plan)).toBe('worktree-agent-a1: tip archived at refs/truss/archive/run-1/crew-a; remove worktree C:/r/.claude/worktrees/agent-a1')
+  expect(unmergedAgentWork([facts])).toEqual([])
+  expect(decideBranch({ ...facts, worktree: { ...AGENT.worktree!, dirty: true } }).kind).toBe('skip')
+  expect(decideBranch({ ...facts, worktree: { ...AGENT.worktree!, locked: 'l' } }).kind).toBe('skip')
+  expect(decideBranch({ ...facts, worktree: { ...AGENT.worktree!, isActive: true } }).kind).toBe('skip')
+  expect(decideBranch({ ...facts, isProtected: true }).kind).toBe('skip')
+  // a branch of your own is never deleted for an archive ref
+  expect(decideBranch({ ...facts, branch: 'feature' }).kind).toBe('skip')
+})
+
+test('archives then deletes a superseded agent branch, naming its line count and last commit', async () => {
+  const facts = { ...AGENT, contentMerged: false, linesCovered: { missing: 73, total: 143 }, superseded: { lastCommit: '2026-11-01', ref: 'refs/archive/tidy/2026-11-08/worktree-agent-a1', lines: { missing: 73, total: 143 } } }
+  const plan = decideBranch(facts)
+  expect(plan.kind === 'delete' && [plan.via, plan.style, plan.archive]).toEqual([
+    'superseded (73/143 lines, last commit 2026-11-01)',
+    'superseded',
+    'refs/archive/tidy/2026-11-08/worktree-agent-a1',
+  ])
+  expect(unmergedAgentWork([facts])).toEqual([])
+  // without a line count
+  const bare = decideBranch({ ...facts, linesCovered: undefined, superseded: { ...facts.superseded, lines: undefined } })
+  expect(bare.kind === 'delete' && bare.via).toBe('superseded (lines not counted, last commit 2026-11-01)')
+  // only when merging it would change files; the worktree gates hold
+  expect(decideBranch({ ...facts, contentMerged: undefined, linesCovered: undefined }).kind).toBe('skip')
+  expect(decideBranch({ ...facts, worktree: { ...AGENT.worktree!, dirty: true } }).kind).toBe('skip')
+})
+
+test('calls a branch superseded only when old, every file it touches changed on main since, and no added file is gone', async () => {
+  const now = NOW
+  const old = now - 4 * DAY_MS
+  const touched = [
+    { status: 'M', path: 'ui/app.tsx' },
+    { status: 'A', path: 'ui/new.tsx' },
+  ]
+  const base = { lastCommitMs: old, nowMs: now, days: 3, touched, changedOnDefault: new Set(['ui/app.tsx', 'ui/new.tsx']), presentOnDefault: new Set(['ui/new.tsx']) }
+  expect(isSuperseded(base)).toBe(true)
+  expect(isSuperseded({ ...base, lastCommitMs: now - 2 * DAY_MS })).toBe(false)
+  expect(isSuperseded({ ...base, changedOnDefault: new Set(['ui/app.tsx']) })).toBe(false)
+  expect(isSuperseded({ ...base, presentOnDefault: new Set() })).toBe(false)
+  expect(isSuperseded({ ...base, touched: [] })).toBe(false)
+  expect(parseNameStatus('M\0ui/app.tsx\0A\0ui/new file.tsx\0')).toEqual([
+    { status: 'M', path: 'ui/app.tsx' },
+    { status: 'A', path: 'ui/new file.tsx' },
+  ])
+  expect(parseNameStatus('M\0')).toBe(undefined)
+})
+
+test('reads the tidy settings, superseded on by default after 3 days', async () => {
+  expect(tidySettings({})).toEqual({ archiveRefs: ['refs/truss/archive/', 'refs/archive/'], superseded: true, supersededDays: 3 })
+  expect(tidySettings({ tidySuperseded: false, tidySupersededDays: 7, tidyArchiveRefs: 'refs/keep, bad..ref,notref' })).toEqual({
+    archiveRefs: ['refs/keep/'],
+    superseded: false,
+    supersededDays: 7,
+  })
+  expect(tidySettings({ tidySuperseded: 'false', tidySupersededDays: -1 }).superseded).toBe(false)
+  expect(tidySettings({ tidySupersededDays: -1 }).supersededDays).toBe(3)
+})
+
+test('counts an untracked symlink into the main checkout, not into the worktree, as no dirt', async () => {
+  expect(untrackedFiles(['?? ui/node_modules', '?? build/', ' M src/a.ts', '?? "odd name"'])).toEqual(['ui/node_modules'])
+  const wt = '/r/.claude/worktrees/agent-a1'
+  expect(linksIntoMain('/r/ui/node_modules', '/r', wt, false)).toBe(true)
+  expect(linksIntoMain(`${wt}/ui/real`, '/r', wt, false)).toBe(false)
+  expect(linksIntoMain('/elsewhere/node_modules', '/r', wt, false)).toBe(false)
+  expect(linksIntoMain('/rr/x', '/r', wt, false)).toBe(false)
+  expect(linksIntoMain('C:\\R\\ui\\node_modules', 'c:/r', 'c:/r/.claude/worktrees/agent-a1', true)).toBe(true)
+  const plan = decideBranch({ ...AGENT, contentMerged: true, worktree: { ...AGENT.worktree!, strayLinks: ['ui/node_modules'] } })
+  expect(plan.kind === 'delete' && plan.unlink).toEqual(['ui/node_modules'])
 })
 
 test('names the count and first path of a dirty worktree', async () => {

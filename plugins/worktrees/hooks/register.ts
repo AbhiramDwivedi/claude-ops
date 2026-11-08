@@ -654,13 +654,29 @@ export type BranchFacts = {
   // worktree-* branches only: another local branch whose tip strictly contains its tip, as a relay leg merged into
   // the next leg or a crew branch
   containedIn?: string
+  // worktree-* branches only, when nothing above held: a ref under an archive namespace (tidyArchiveRefs, by default
+  // refs/truss/archive/ and refs/archive/) whose history holds its tip, so the work is kept there
+  archivedAt?: string
+  // worktree-* branches only, when nothing above held: an old version of files the default branch has since rewritten
+  // (isSuperseded). `ref` is where tidy keeps its tip before deleting it; `lastCommit` is YYYY-MM-DD
+  superseded?: { lastCommit: string; ref: string; lines?: { missing: number; total: number } }
   // other branches in origin/<default> only: its reflog shows work made on it here (commit, merge, cherry-pick,
   // rebase, am, pull), not only `branch: Created from`; a bookmark made with `git branch foo` has none
   worked?: boolean
   tip?: string
   // isActive: this plugin created it for an agent that has not stopped yet. changes: `git status --porcelain`'s count
-  // and first line when dirty
-  worktree?: { path: string; exists: boolean; dirty: boolean; locked?: string; isMain: boolean; isSession: boolean; isActive?: boolean; changes?: { count: number; first: string } }
+  // and first line when dirty. strayLinks: untracked symlinks into the main checkout, not counted as dirt
+  worktree?: {
+    path: string
+    exists: boolean
+    dirty: boolean
+    locked?: string
+    isMain: boolean
+    isSession: boolean
+    isActive?: boolean
+    changes?: { count: number; first: string }
+    strayLinks?: string[]
+  }
   // origin's branch of the same name; safe when every commit on it is in a merged PR's head or in origin/<default>
   remote?: { safe: boolean }
 }
@@ -678,8 +694,13 @@ export type BranchPlan =
       allowForce: boolean
       deleteRemote: boolean
       remoteNote?: string
-      // judged merged by reflog work, covered lines or containment: its tip is kept at refs/tidy-archive/<branch>
-      archive?: true
+      // the ref its tip is kept at before the delete: refs/tidy-archive/<branch> when judged merged by reflog work,
+      // covered lines or containment; refs/archive/tidy/<date>/<branch> when superseded
+      archive?: string
+      // how the report names it: `<branch>: <via>` for an archived or superseded branch
+      style?: 'archived' | 'superseded'
+      // untracked symlinks into the main checkout, unlinked before the worktree is removed
+      unlink?: string[]
     }
 
 export function decideBranch(f: BranchFacts): BranchPlan {
@@ -701,7 +722,10 @@ export function decideBranch(f: BranchFacts): BranchPlan {
   const byLines = open && !byContent && f.contentMerged === false && f.linesCovered !== undefined && f.linesCovered.missing === 0
   const bySquash = open && f.contentMerged === undefined && f.inMergedPr !== undefined
   const byContained = open && !byContent && !byLines && !bySquash && f.containedIn !== undefined
-  if (!prMerged && !byAncestry && !byWork && !byContent && !byLines && !bySquash && !byContained) {
+  // then: its tip is held by an archive ref; or it is superseded, and tidy archives its tip before deleting it
+  const byArchived = open && !byContent && !byLines && !bySquash && !byContained && f.archivedAt !== undefined
+  const bySuperseded = open && f.contentMerged === false && !byLines && !byContained && !byArchived && f.superseded !== undefined
+  if (!prMerged && !byAncestry && !byWork && !byContent && !byLines && !bySquash && !byContained && !byArchived && !bySuperseded) {
     if (agent && f.contentMerged === false) {
       const l = f.linesCovered
       return skip(l !== undefined ? `not merged: ${l.missing} of ${l.total} lines it adds are not in the default branch` : 'not merged: merging it into the default branch would change files')
@@ -722,9 +746,13 @@ export function decideBranch(f: BranchFacts): BranchPlan {
             ? 'content in the default branch (later edited there)'
             : bySquash
               ? `in merged PR #${f.inMergedPr}`
-              : `contained in ${f.containedIn}`
-  const archive = byWork || byLines || byContained
-  const also = byContent || bySquash || archive ? ` (${via})` : ''
+              : byContained
+                ? `contained in ${f.containedIn}`
+                : byArchived
+                  ? `tip archived at ${f.archivedAt}`
+                  : supersededVia(f.superseded!)
+  const archive = byWork || byLines || byContained ? `refs/tidy-archive/${f.branch}` : bySuperseded ? f.superseded!.ref : undefined
+  const also = byContent || bySquash || byArchived || archive ? ` (${via})` : ''
   if (f.worktree?.locked !== undefined) return skip(`worktree is locked (${f.worktree.locked})${also}`)
   if (f.worktree?.isActive) return skip(`its agent has not stopped yet${also}`)
   if (f.worktree?.dirty) {
@@ -733,7 +761,7 @@ export function decideBranch(f: BranchFacts): BranchPlan {
   }
   // a squash leaves the branch's own commits on no remote; its content check already proved nothing would be lost,
   // and a contained branch's commits are all in the branch that contains it
-  if (f.unpushed > 0 && !byContent && !byLines && !byContained) return skip(`${f.unpushed} commit${f.unpushed === 1 ? '' : 's'} on no remote and in no merged PR`)
+  if (f.unpushed > 0 && !byContent && !byLines && !byContained && !byArchived && !bySuperseded) return skip(`${f.unpushed} commit${f.unpushed === 1 ? '' : 's'} on no remote and in no merged PR`)
   return {
     kind: 'delete',
     branch: f.branch,
@@ -743,8 +771,79 @@ export function decideBranch(f: BranchFacts): BranchPlan {
     allowForce: true,
     deleteRemote: f.remote?.safe === true,
     remoteNote: f.remote !== undefined && !f.remote.safe ? 'remote branch has commits outside the merge; left it' : undefined,
-    ...(archive ? { archive: true as const } : {}),
+    ...(archive !== undefined ? { archive } : {}),
+    ...(byArchived ? { style: 'archived' as const } : bySuperseded ? { style: 'superseded' as const } : {}),
+    ...(f.worktree?.exists && (f.worktree.strayLinks?.length ?? 0) > 0 ? { unlink: f.worktree.strayLinks } : {}),
   }
+}
+
+function supersededVia(s: NonNullable<BranchFacts['superseded']>): string {
+  const lines = s.lines !== undefined ? `${s.lines.missing}/${s.lines.total} lines` : 'lines not counted'
+  return `superseded (${lines}, last commit ${s.lastCommit})`
+}
+
+export const DAY_MS = 24 * 60 * 60_000
+
+// An unmerged agent branch is superseded, an old version of files the default branch has since rewritten, when its
+// last commit is at least `days` old, it touches at least one file, every file it touches (`touched`, from
+// `git diff --name-status <merge base> <branch>`) has commits on the default branch after the merge base, and every
+// file it added is in the default branch.
+export function isSuperseded(f: {
+  lastCommitMs: number
+  nowMs: number
+  days: number
+  touched: readonly { status: string; path: string }[]
+  changedOnDefault: ReadonlySet<string>
+  presentOnDefault: ReadonlySet<string>
+}): boolean {
+  if (f.touched.length === 0 || !Number.isFinite(f.lastCommitMs) || f.nowMs - f.lastCommitMs < f.days * DAY_MS) return false
+  return f.touched.every(t => f.changedOnDefault.has(t.path) && (!t.status.startsWith('A') || f.presentOnDefault.has(t.path)))
+}
+
+// `git diff --name-status -z` output (no renames): status and path pairs. undefined when it does not parse.
+export function parseNameStatus(out: string): { status: string; path: string }[] | undefined {
+  const parts = out.split('\0')
+  if (parts[parts.length - 1] === '') parts.pop()
+  if (parts.length % 2 !== 0) return undefined
+  const res: { status: string; path: string }[] = []
+  for (let i = 0; i < parts.length; i += 2) {
+    const status = parts[i]!.trim()
+    if (!/^[A-Z]/.test(status) || parts[i + 1] === '') return undefined
+    res.push({ status, path: parts[i + 1]! })
+  }
+  return res
+}
+
+// /tidy's settings for archive refs and superseded branches; on by default, 3 days.
+export type TidySettings = { archiveRefs: string[]; superseded: boolean; supersededDays: number }
+export function tidySettings(options: Record<string, unknown>): TidySettings {
+  const raw = typeof options.tidyArchiveRefs === 'string' && options.tidyArchiveRefs.trim() !== '' ? options.tidyArchiveRefs : 'refs/truss/archive/,refs/archive/'
+  const archiveRefs = raw
+    .split(',')
+    .map(r => r.trim())
+    .filter(r => /^refs\/[A-Za-z0-9._/-]+$/.test(r) && !r.includes('..'))
+    .map(r => (r.endsWith('/') ? r : `${r}/`))
+  const days = Number(options.tidySupersededDays ?? 3)
+  return {
+    archiveRefs,
+    superseded: options.tidySuperseded !== false && options.tidySuperseded !== 'false',
+    supersededDays: Number.isFinite(days) && days >= 0 ? days : 3,
+  }
+}
+
+// `git status --porcelain` lines that are an untracked file (`?? path`), not a folder and not a quoted path.
+export function untrackedFiles(lines: readonly string[]): string[] {
+  return lines.filter(l => l.startsWith('?? ') && !l.endsWith('/') && !l.startsWith('?? "')).map(l => l.slice(3))
+}
+
+// A symlink whose resolved target is inside the main checkout but not inside the worktree it sits in: a link an
+// agent or a setup script made to share the main checkout's folder (`ui/node_modules`), not work.
+export function linksIntoMain(realTarget: string, mainRoot: string, worktree: string, windows: boolean): boolean {
+  const t = normPath(realTarget, windows)
+  const m = normPath(mainRoot, windows)
+  const w = normPath(worktree, windows)
+  const inside = (p: string, root: string) => p === root || p.startsWith(root.endsWith('/') ? root : `${root}/`)
+  return inside(t, m) && !inside(t, w)
 }
 
 // The merged PR whose head commit is, or contains, `tip`. `present`: the heads that exist locally; `contains`: those
@@ -779,11 +878,15 @@ export function describePlan(plan: BranchPlan): string {
   if (plan.kind === 'skip') return `skip ${plan.branch}: ${plan.reason}`
   const parts = [
     plan.worktreePath ? `remove worktree ${plan.worktreePath}` : plan.prune ? 'prune its missing worktree' : '',
-    plan.archive ? `delete branch (tip kept at refs/tidy-archive/${plan.branch})` : 'delete branch',
+    plan.style !== undefined ? '' : plan.archive ? `delete branch (tip kept at ${plan.archive})` : 'delete branch',
   ]
+  if (plan.style === 'superseded' && plan.archive) parts.push(`tip kept at ${plan.archive}`)
+  if (plan.unlink?.length) parts.push(`unlink ${plan.unlink.join(', ')}`)
   if (plan.deleteRemote) parts.push('delete origin/' + plan.branch)
   if (plan.remoteNote) parts.push(plan.remoteNote)
-  return `${plan.branch} (${plan.via}): ${parts.filter(Boolean).join('; ')}`
+  const rest = parts.filter(Boolean).join('; ')
+  if (plan.style !== undefined) return `${plan.branch}: ${plan.via}${rest !== '' ? `; ${rest}` : ''}`
+  return `${plan.branch} (${plan.via}): ${rest}`
 }
 
 // --- self-cleanup after a merge ---
@@ -923,7 +1026,7 @@ export function unmergedAgentWork(facts: readonly BranchFacts[]): string[] {
   return facts
     .filter(f => f.branch.startsWith('worktree-') && !f.isProtected && !f.gitMerged && (f.pr?.numbers.length ?? 0) === 0)
     .filter(f => f.contentMerged === false || (f.contentMerged === undefined && f.inMergedPr === undefined))
-    .filter(f => f.containedIn === undefined && f.linesCovered?.missing !== 0)
+    .filter(f => f.containedIn === undefined && f.archivedAt === undefined && f.superseded === undefined && f.linesCovered?.missing !== 0)
     .filter(f => !f.worktree?.isMain && !f.worktree?.isSession && !f.worktree?.isActive && (f.ahead ?? 0) > 0)
     .map(f => {
       const lines = f.linesCovered !== undefined ? `; ${f.linesCovered.missing} of ${f.linesCovered.total} lines it adds are not in the default branch` : ''
@@ -1422,7 +1525,7 @@ export function parseCatFileBatch(text: string, count: number): (string | undefi
 // How many of the lines `branch` adds since its merge base with `into` are not a whole line (trimmed) of `into`'s
 // version of the same file. A file `into` lacks at that path counts all its lines missing; binary files are left
 // out. undefined when the diff is over the caps, adds nothing countable, or a git call fails. Four git calls.
-async function linesCoveredIn($: $, cwd: string, into: string, branch: string): Promise<{ missing: number; total: number } | undefined> {
+async function linesCoveredIn($: $, cwd: string, into: string, branch: string, maxFiles = COVER_MAX_FILES, maxLines = COVER_MAX_LINES): Promise<{ missing: number; total: number } | undefined> {
   const base = await git($, cwd, 'merge-base', into, branch)
   if (!base.ok || base.out === '') return undefined
   const stat = await run($, ['git', 'diff', '--no-renames', '--no-ext-diff', '--numstat', '-z', base.out, branch], cwd, 60_000)
@@ -1431,9 +1534,9 @@ async function linesCoveredIn($: $, cwd: string, into: string, branch: string): 
     const [added, , ...path] = r.split('\t')
     return { added, path: path.join('\t') }
   })
-  if (files.length > COVER_MAX_FILES) return undefined
+  if (files.length > maxFiles) return undefined
   const text = files.filter(f => f.added !== '-' && f.path !== '')
-  if (text.reduce((n, f) => n + (Number(f.added) || 0), 0) > COVER_MAX_LINES) return undefined
+  if (text.reduce((n, f) => n + (Number(f.added) || 0), 0) > maxLines) return undefined
   const counted = text.filter(f => Number(f.added) > 0)
   if (counted.length === 0) return undefined
   // a file name with a newline cannot go through cat-file --batch: give up rather than guess
@@ -1454,6 +1557,67 @@ async function linesCoveredIn($: $, cwd: string, into: string, branch: string): 
     missing += lines.filter(l => theirs[i] === undefined || !have.has(l)).length
   })
   return total === 0 ? undefined : { missing, total }
+}
+
+export const SUPERSEDED_MAX_FILES = 2000
+
+// Whether `branch` is superseded by `into` (isSuperseded), with its last commit's date (YYYY-MM-DD, UTC). Its age is
+// checked first, from one git call; the rest takes four more. undefined when it is not, or a git call fails.
+async function supersededIn($: $, cwd: string, into: string, branch: string, nowMs: number, days: number): Promise<{ lastCommit: string } | undefined> {
+  const when = await git($, cwd, 'log', '-1', '--format=%ct', branch)
+  const lastCommitMs = Number(when.out) * 1000
+  if (!when.ok || when.out === '' || !Number.isFinite(lastCommitMs) || nowMs - lastCommitMs < days * DAY_MS) return undefined
+  const base = await git($, cwd, 'merge-base', into, branch)
+  if (!base.ok || base.out === '') return undefined
+  const diff = await run($, ['git', 'diff', '--no-renames', '--no-ext-diff', '--name-status', '-z', base.out, branch], cwd, 60_000)
+  if (diff.exitCode !== 0 || diff.isStdoutTruncated) return undefined
+  const touched = parseNameStatus(diff.stdout)
+  if (touched === undefined || touched.length === 0 || touched.length > SUPERSEDED_MAX_FILES || touched.some(t => t.path.includes('\n'))) return undefined
+  const spec = touched.map(t => `:(literal)${t.path}`)
+  const log = await run($, ['git', 'log', '--no-renames', '--format=', '--name-only', '-z', `${base.out}..${into}`, '--', ...spec], cwd, 120_000)
+  if (log.exitCode !== 0 || log.isStdoutTruncated) return undefined
+  const changedOnDefault = new Set(log.stdout.split(/[\0\n]/).filter(p => p !== ''))
+  const added = touched.filter(t => t.status.startsWith('A'))
+  const presentOnDefault = new Set<string>()
+  if (added.length > 0) {
+    const check = await run($, ['git', 'cat-file', '--batch-check'], cwd, 60_000, added.map(t => `${into}:${t.path}`).join('\n') + '\n')
+    if (check.exitCode !== 0 || check.isStdoutTruncated) return undefined
+    const rows = check.stdout.replace(/\r/g, '').split('\n')
+    added.forEach((t, i) => {
+      const row = rows[i] ?? ''
+      if (row !== '' && !row.endsWith(' missing') && !row.endsWith(' ambiguous')) presentOnDefault.add(t.path)
+    })
+  }
+  if (!isSuperseded({ lastCommitMs, nowMs, days, touched, changedOnDefault, presentOnDefault })) return undefined
+  return { lastCommit: new Date(lastCommitMs).toISOString().slice(0, 10) }
+}
+
+// Untracked symlinks among a worktree's `git status --porcelain` lines that lead into the main checkout but not into
+// the worktree itself (linksIntoMain). A link that leads nowhere, or a stat that fails, is not one.
+async function strayLinksOf($: $, wtPath: string, mainRoot: string, changed: readonly string[], windows: boolean): Promise<string[]> {
+  const candidates = untrackedFiles(changed)
+  if (candidates.length === 0) return []
+  const real = async (p: string) => (await $.fs.stat(p, { resolve: true }).catch(() => undefined))?.realPath
+  const mainReal = (await real(mainRoot)) ?? mainRoot
+  const wtReal = (await real(wtPath)) ?? wtPath
+  const out: string[] = []
+  for (const rel of candidates) {
+    const st = await $.fs.stat(`${wtPath}/${rel}`, { resolve: true }).catch(() => undefined)
+    if (st?.isLink && st.realPath !== undefined && linksIntoMain(st.realPath, mainReal, wtReal, windows)) out.push(rel)
+  }
+  return out
+}
+
+// Removes the symlink itself, never what it leads to: `rm -f` elsewhere, and on Windows `rmdir` for a link to a
+// folder (`del` would empty the folder it leads to) and `del` for a link to a file.
+async function unlinkStray($: $, wtPath: string, rel: string, windows: boolean): Promise<boolean> {
+  const path = `${wtPath}/${rel}`
+  if (!windows) return (await run($, ['rm', '-f', '--', path])).exitCode === 0 && !(await $.fs.exists(path))
+  const st = await $.fs.stat(path).catch(() => undefined)
+  if (!st?.isLink) return false
+  const win = path.replace(/\//g, '\\')
+  const r = await run($, ['cmd.exe', '/d', '/c', st.kind === 'dir' ? 'rmdir' : 'del', win])
+  return r.exitCode === 0
 }
 
 // Reflog subjects that mean work was made on a branch here; `branch: Created from`, `reset:` and renames are not.
@@ -1659,12 +1823,16 @@ type TidyReport = { plans: BranchPlan[]; lines: string[]; acted: boolean; remove
 
 type Facts = { facts: BranchFacts[]; worktrees: Worktree[]; sync: MainSync; defaultBranch: string }
 
-async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | undefined> {
+async function gatherFacts($: $, repo: Repo, windows: boolean, settings: TidySettings): Promise<Facts | undefined> {
   const head = await git($, repo.top, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
   const defaultBranch = head.ok ? head.out.replace(/^origin\//, '') : 'main'
   const state = await loadState($, repo)
   if (state === undefined) return undefined
   const now = await $.clock.now()
+  const today = new Date(now).toISOString().slice(0, 10)
+  // one listing first, so a repo with no archive refs pays no per-branch call
+  const hasArchiveRefs =
+    settings.archiveRefs.length > 0 && (await run($, ['git', 'for-each-ref', '--count=1', '--format=%(refname)', ...settings.archiveRefs], repo.top, 120_000)).stdout.trim() !== ''
   const current = (await git($, repo.top, 'branch', '--show-current')).out
   const worktrees = parseWorktrees((await git($, repo.top, 'worktree', 'list', '--porcelain')).out)
   const main = worktrees[0]
@@ -1753,6 +1921,8 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
     let contentMerged: boolean | undefined
     let linesCovered: BranchFacts['linesCovered']
     let containedIn: string | undefined
+    let archivedAt: string | undefined
+    let superseded: BranchFacts['superseded']
     let worked: boolean | undefined
     const prMerged = (pr?.numbers.length ?? 0) > 0
     if (branch.startsWith('worktree-') && !isProtected && !gitMerged.has(branch) && mainTree !== undefined) {
@@ -1768,6 +1938,20 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
           .split('\n')
           .map(l => l.split(' ') as [string, string])
           .find(([b, t]) => b !== branch && b !== '' && t !== undefined && t !== tip)?.[0]
+    }
+    const stillOpen = branch.startsWith('worktree-') && !isProtected && !gitMerged.has(branch) && !prMerged && contentMerged !== true && linesCovered?.missing !== 0 && containedIn === undefined
+    // its tip is in an archive ref's history: the work is kept there
+    if (stillOpen && hasArchiveRefs) {
+      const held = await run($, ['git', 'for-each-ref', '--contains', tip, '--format=%(refname)', ...settings.archiveRefs], repo.top, 120_000)
+      if (held.exitCode === 0) archivedAt = held.stdout.replace(/\r/g, '').split('\n').find(r => r.trim() !== '')?.trim()
+    }
+    // an old version of files the default branch rewrote since: kept under refs/archive/tidy/<today>/ and deleted
+    if (stillOpen && archivedAt === undefined && settings.superseded && contentMerged === false) {
+      const s = await supersededIn($, repo.top, mergedRef, branch, now, settings.supersededDays)
+      if (s !== undefined) {
+        const lines = linesCovered ?? (await linesCoveredIn($, repo.top, mergedRef, branch, SUPERSEDED_MAX_FILES, 50 * COVER_MAX_LINES))
+        superseded = { lastCommit: s.lastCommit, ref: `refs/archive/tidy/${today}/${branch}`, ...(lines !== undefined ? { lines } : {}) }
+      }
     }
     // a branch in the default branch that is not an agent's: merged only when work was made on it here
     if (!branch.startsWith('worktree-') && !isProtected && gitMerged.has(branch) && !prMerged) {
@@ -1793,11 +1977,15 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
     if (wt !== undefined) {
       const exists = !wt.prunable && (await $.fs.exists(wt.path))
       const status = exists ? await git($, wt.path, 'status', '--porcelain') : { ok: true, out: '' }
-      const changed = status.ok ? status.out.split('\n').filter(l => l.trim() !== '') : []
+      const all = status.ok ? status.out.split('\n').filter(l => l.trim() !== '') : []
+      // an untracked symlink into the main checkout (a shared node_modules) is not work
+      const strayLinks = exists && status.ok && main !== undefined && wt !== main ? await strayLinksOf($, wt.path, main.path, all, windows) : []
+      const changed = all.filter(l => !strayLinks.some(p => l === `?? ${p}`))
       worktree = {
         path: wt.path,
         exists,
-        dirty: !status.ok || status.out !== '',
+        dirty: !status.ok || changed.length > 0,
+        ...(strayLinks.length > 0 ? { strayLinks } : {}),
         locked: wt.locked,
         isMain: wt === main,
         isSession: normPath(wt.path, windows) === normPath(repo.top, windows),
@@ -1815,6 +2003,10 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
       if (!safe && (contentMerged === true || linesCovered?.missing === 0)) safe = await isAncestor(remoteTip, tip)
       // a contained branch's remote is safe when the branch that contains it holds it too
       if (!safe && containedIn !== undefined) safe = await isAncestor(remoteTip, `refs/heads/${containedIn}`)
+      // an archived branch's remote is safe when the archive ref holds it; a superseded one's when its tip, which
+      // tidy archives first, does
+      if (!safe && archivedAt !== undefined) safe = await isAncestor(remoteTip, archivedAt)
+      if (!safe && superseded !== undefined) safe = await isAncestor(remoteTip, tip)
       remote = { safe }
     }
     facts.push({
@@ -1829,6 +2021,8 @@ async function gatherFacts($: $, repo: Repo, windows: boolean): Promise<Facts | 
       contentMerged,
       ...(linesCovered !== undefined ? { linesCovered } : {}),
       ...(containedIn !== undefined ? { containedIn } : {}),
+      ...(archivedAt !== undefined ? { archivedAt } : {}),
+      ...(superseded !== undefined ? { superseded } : {}),
       ...(worked !== undefined ? { worked } : {}),
       worktree,
       remote,
@@ -1858,13 +2052,14 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
   const lines: string[] = []
   let acted = false
   if (!(await git($, repo.top, 'fetch', '--prune', 'origin')).ok) lines.push('git fetch failed; using the remote branches as last fetched')
-  const gathered = await gatherFacts($, repo, windows)
+  const gathered = await gatherFacts($, repo, windows, tidySettings(options))
   if (gathered === undefined) return unreadable()
   const { facts, worktrees, sync, defaultBranch } = gathered
   const plans = facts.map(decideBranch)
   const removed: string[] = []
   const tips = new Map(facts.map(f => [f.branch, f.tip]))
   let archived = 0
+  const supersededRefs: string[] = []
 
   if (sync.kind === 'none' && sync.reason) lines.push(sync.reason)
   if (sync.kind !== 'none') {
@@ -1892,15 +2087,23 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
     acted = true
     if (plan.archive) {
       const tip = tips.get(plan.branch)
-      const kept = tip !== undefined && (await git($, repo.top, 'update-ref', `refs/tidy-archive/${plan.branch}`, tip)).ok
+      const kept = tip !== undefined && (await git($, repo.top, 'update-ref', plan.archive, tip)).ok
       if (!kept) {
-        lines.push(`${plan.branch}: could not keep its tip at refs/tidy-archive/${plan.branch}; left the branch`)
+        lines.push(`${plan.branch}: could not keep its tip at ${plan.archive}; left the branch`)
         continue
       }
-      archived++
+      if (plan.style === 'superseded') supersededRefs.push(plan.archive)
+      else archived++
     }
     if (plan.worktreePath) {
       lines.push(...(await cleanWorktree($, repo, plan.worktreePath, base, false, warn)))
+      const wtPath = plan.worktreePath
+      const stuck: string[] = []
+      for (const rel of plan.unlink ?? []) if (!(await unlinkStray($, wtPath, rel, windows))) stuck.push(rel)
+      if (stuck.length > 0) {
+        lines.push(`${plan.branch}: could not unlink ${stuck.join(', ')}; left the worktree and the branch`)
+        continue
+      }
       const removed = await removeWorktree($, repo.top, plan.worktreePath, windows)
       if (!removed.ok) {
         lines.push(`${plan.branch}: worktree remove failed, left the branch: ${removed.err}`)
@@ -1916,7 +2119,7 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       lines.push(`${plan.branch}: branch delete failed: ${deleted.err.split('\n')[0]}`)
       continue
     }
-    let line = `removed ${describePlan(plan)}`
+    let line = `${plan.style === 'superseded' ? 'archived+removed' : 'removed'} ${describePlan(plan)}`
     if (plan.deleteRemote) {
       const pushed = await git($, repo.top, 'push', 'origin', '--delete', plan.branch)
       if (!pushed.ok) line += ` (remote delete failed: ${pushed.err.split('\n')[0]})`
@@ -1929,6 +2132,13 @@ export async function tidy($: $, options: Record<string, unknown>, dryRun: boole
       `kept the tip of ${archived} deleted branch${archived === 1 ? '' : 'es'} under refs/tidy-archive/: list them with \`git for-each-ref refs/tidy-archive\`, ` +
         'restore one with `git branch <name> refs/tidy-archive/<name>`, drop one with `git update-ref -d refs/tidy-archive/<name>`',
     )
+  if (supersededRefs.length > 0) {
+    const n = supersededRefs.length
+    lines.push(
+      `kept the tip of ${n} superseded branch${n === 1 ? '' : 'es'} under refs/archive/tidy/: list them with \`git for-each-ref refs/archive/tidy\`, ` +
+        'restore one with `git branch <name> refs/archive/tidy/<date>/<name>`, drop one with `git update-ref -d refs/archive/tidy/<date>/<name>`',
+    )
+  }
   if (acted) await git($, repo.top, 'fetch', '--prune', 'origin')
 
   // orphans: processes naming a worktree folder of this repo that no longer exists, and slots whose folder is gone

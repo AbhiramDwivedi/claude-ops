@@ -15,9 +15,16 @@ const BASE = sha('b')
 
 type Answer = { stdout?: string; exitCode?: number }
 
-function world(on: On, locals: [string, string][], answer: (args: string, stdin: string) => Answer | undefined) {
-  const files = new Map<string, string>([[slashed(SLOTS_PATH), SLOTS_JSON]])
+type Stat = { kind: 'file' | 'dir' | 'other'; isLink: boolean; realPath?: string }
+
+function world(on: On, locals: [string, string][], answer: (args: string, stdin: string, cwd: string) => Answer | undefined, dirs: string[] = [], stats: Record<string, Stat> = {}) {
+  const files = new Map<string, string>([[slashed(SLOTS_PATH), SLOTS_JSON], ...dirs.map(d => [d, ''] as [string, string])])
   const ran: string[] = []
+  on('fs.stat', async (_, e) => {
+    const s = stats[slashed(hostPath((e as { path: string }).path))]
+    if (s === undefined) throw new Error(`ENOENT: ${(e as { path: string }).path}`)
+    return { value: { size: 0, mtimeMs: 0, ...s } } as never
+  })
   mock.clock(on, { now: NOW })
   on('env.get', async (_, e) => ({ value: { OS: 'Windows_NT' }[(e as { name?: string }).name ?? ''] }))
   on('session.cwd', async () => ({ value: MAIN }))
@@ -41,7 +48,7 @@ function world(on: On, locals: [string, string][], answer: (args: string, stdin:
     const out = (stdout: string, exitCode = 0) => ({
       value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'fatal: error', isStdoutTruncated: false, isStderrTruncated: false },
     })
-    const custom = answer(args, stdin)
+    const custom = answer(args, stdin, slashed(hostPath(((e as { init?: { cwd?: string } }).init?.cwd ?? '') as string)))
     if (custom !== undefined) return out(custom.stdout ?? '', custom.exitCode ?? 0)
     if (args.includes('--show-toplevel')) return out(`${MAIN}\n`)
     if (args.includes('--git-common-dir')) return out(`${COMMON}\n`)
@@ -140,4 +147,91 @@ test('a relay leg inside a later leg is deleted; legs with equal tips and the co
   expect(w.ran).toContain(`git update-ref refs/tidy-archive/${LEG} ${sha('1')}`)
   expect(w.ran).toContain(`git update-ref refs/tidy-archive/${CREW} ${sha('4')}`)
   expect(w.ran.filter(r => /branch -[dD] /.test(r))).toEqual([`git branch -d ${LEG}`, `git branch -d ${CREW}`])
+})
+
+// worktrees 0.9.0: archive refs, superseded branches, and symlink-only dirt
+
+const wtPath = (name: string) => `${MAIN}/.claude/worktrees/${name}`
+const worktreeList = (wts: [string, string, string][]) =>
+  [`worktree ${MAIN}\nHEAD ${MAIN_TIP}\nbranch refs/heads/main\n`, ...wts.map(([path, tip, branch]) => `worktree ${path}\nHEAD ${tip}\nbranch refs/heads/${branch}\n`)].join('\n')
+
+test('an agent branch whose tip an archive ref holds goes with its worktree; symlink-only dirt is clean, real dirt is kept', async ($, on) => {
+  const LINKED = 'worktree-wf_arch-1'
+  const DIRTY = 'worktree-wf_arch-2'
+  const ARCHIVE = 'refs/truss/archive/run-7/crew-ui'
+  const [pL, pD] = [wtPath('wf_arch-1'), wtPath('wf_arch-2')]
+  const w = world(
+    on,
+    [['main', MAIN_TIP], [LINKED, sha('6')], [DIRTY, sha('7')]],
+    (args, _stdin, cwd) => {
+      if (args === 'git worktree list --porcelain') return { stdout: worktreeList([[pL, sha('6'), LINKED], [pD, sha('7'), DIRTY]]) }
+      if (args === 'git branch --merged origin/main --format=%(refname:short)') return { stdout: 'main\n' }
+      if (args.startsWith('git merge-tree --write-tree origin/main')) return { stdout: 'conflicttree\n', exitCode: 1 }
+      if (args.startsWith('git merge-base origin/main')) return { exitCode: 1 }
+      if (args.includes('--contains') && args.endsWith('refs/heads')) return { stdout: '' }
+      if (args === 'git for-each-ref --count=1 --format=%(refname) refs/truss/archive/ refs/archive/') return { stdout: `${ARCHIVE}\n` }
+      if (args.startsWith('git for-each-ref --contains') && args.endsWith('refs/truss/archive/ refs/archive/')) return { stdout: `${ARCHIVE}\n` }
+      if (args === 'git status --porcelain' && cwd === pL) return { stdout: '?? ui/node_modules\n' }
+      if (args === 'git status --porcelain' && cwd === pD) return { stdout: '?? ui/node_modules\n?? notes.txt\n' }
+      return undefined
+    },
+    [pL, pD],
+    {
+      [`${pL}/ui/node_modules`]: { kind: 'dir', isLink: true, realPath: `${MAIN}/ui/node_modules` },
+      [`${pD}/ui/node_modules`]: { kind: 'dir', isLink: true, realPath: `${MAIN}/ui/node_modules` },
+      [`${pD}/notes.txt`]: { kind: 'file', isLink: false, realPath: `${pD}/notes.txt` },
+    },
+  )
+  const lines = await tidy($)
+  expect(lines.filter(l => l.startsWith('removed '))).toEqual([`removed ${LINKED}: tip archived at ${ARCHIVE}; remove worktree ${pL}; unlink ui/node_modules`])
+  const unlink = w.ran.findIndex(r => r.includes('rmdir') && r.includes('wf_arch-1'))
+  const remove = w.ran.findIndex(r => r.includes('worktree remove') && r.includes('wf_arch-1'))
+  expect(unlink).toBeGreaterThan(-1)
+  expect(remove).toBeGreaterThan(unlink)
+  expect(w.ran.filter(r => r.includes('worktree remove'))).toEqual([`git -c core.longpaths=true worktree remove ${pL}`])
+  expect(w.ran.filter(r => r.includes('update-ref'))).toEqual([])
+  expect(w.ran.filter(r => /^git branch -[dD] /.test(r))).toEqual([`git branch -d ${LINKED}`])
+  expect(lines).toContain(`skip ${DIRTY}: worktree has uncommitted changes (1: ?? notes.txt) (tip archived at ${ARCHIVE})`)
+  expect(lines.filter(l => l.startsWith('unmerged'))).toEqual([])
+})
+
+test('a superseded agent branch is archived then deleted; a recent one and one with a file main never touched stay', async ($, on) => {
+  const OLD = 'worktree-wf_old-1'
+  const RECENT = 'worktree-wf_new-1'
+  const UNIQUE = 'worktree-wf_uniq-1'
+  const today = new Date(NOW).toISOString().slice(0, 10)
+  const oldSecs = Math.floor((NOW - 5 * 86_400_000) / 1000)
+  const oldDate = new Date(oldSecs * 1000).toISOString().slice(0, 10)
+  const tips: Record<string, string> = { [OLD]: sha('8'), [RECENT]: sha('9'), [UNIQUE]: sha('f') }
+  const w = world(on, [['main', MAIN_TIP], [OLD, tips[OLD]!], [RECENT, tips[RECENT]!], [UNIQUE, tips[UNIQUE]!]], (args, stdin) => {
+    if (args === 'git branch --merged origin/main --format=%(refname:short)') return { stdout: 'main\n' }
+    if (args.startsWith('git merge-tree --write-tree origin/main')) return { stdout: 'conflicttree\n', exitCode: 1 }
+    if (args.startsWith('git merge-base origin/main')) return { stdout: `${BASE}\n` }
+    if (args.includes('--contains')) return { stdout: '' }
+    if (args.startsWith('git log -1 --format=%ct ')) return { stdout: `${args.endsWith(RECENT) ? Math.floor((NOW - 86_400_000) / 1000) : oldSecs}\n` }
+    if (args.includes('--name-status') && args.endsWith(OLD)) return { stdout: 'M\0src/a.ts\0A\0src/b.ts\0' }
+    if (args.includes('--name-status') && args.endsWith(UNIQUE)) return { stdout: 'M\0src/a.ts\0A\0src/only.ts\0' }
+    // main rewrote both of OLD's files, and only src/a.ts of UNIQUE's
+    if (args.startsWith('git log --no-renames --format= --name-only -z')) return { stdout: args.includes('src/b.ts') ? 'src/a.ts\0src/b.ts\0' : 'src/a.ts\0' }
+    if (args === 'git cat-file --batch-check') return { stdout: stdin.split('\n').filter(Boolean).map(l => (l.endsWith('only.ts') ? `${l} missing` : `${sha('c')} blob 5`)).join('\n') + '\n' }
+    if (args.includes('--numstat')) return { stdout: `2\t0\tsrc/a.ts\0` }
+    if (args.includes('-U0')) return { stdout: patch('src/a.ts', [LINE_A, 'an old line main rewrote']) }
+    if (args === 'git cat-file --batch') return { stdout: blob(`${LINE_A}\n`) }
+    return undefined
+  })
+  const dry = await tidy($, true)
+  expect(w.ran.filter(r => r.includes('update-ref') || /branch -[dD] /.test(r))).toEqual([])
+  expect(dry.filter(l => l.startsWith('would: '))).toEqual([`would: ${OLD}: superseded (1/2 lines, last commit ${oldDate}); tip kept at refs/archive/tidy/${today}/${OLD}`])
+
+  const lines = await tidy($)
+  const archive = w.ran.indexOf(`git update-ref refs/archive/tidy/${today}/${OLD} ${tips[OLD]}`)
+  expect(archive).toBeGreaterThan(-1)
+  expect(w.ran.indexOf(`git branch -d ${OLD}`)).toBeGreaterThan(archive)
+  expect(lines.filter(l => l.startsWith('archived+removed ') || l.startsWith('removed '))).toEqual([
+    `archived+removed ${OLD}: superseded (1/2 lines, last commit ${oldDate}); tip kept at refs/archive/tidy/${today}/${OLD}`,
+  ])
+  expect(lines).toContain(`skip ${RECENT}: not merged: 1 of 2 lines it adds are not in the default branch`)
+  expect(lines).toContain(`skip ${UNIQUE}: not merged: 1 of 2 lines it adds are not in the default branch`)
+  expect(w.ran.filter(r => /^git branch -[dD] /.test(r))).toEqual([`git branch -d ${OLD}`])
+  expect(lines.filter(l => l.includes('git for-each-ref refs/archive/tidy'))).toHaveLength(1)
 })

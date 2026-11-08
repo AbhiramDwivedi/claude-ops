@@ -1,6 +1,6 @@
 {
   "name": "worktrees",
-  "version": "0.8.5",
+  "version": "0.9.0",
   "description": "Gives every agent that can edit a git worktree of its own, runs a project's setup script with its own port range, kills what an agent left running, removes an agent's worktree and branch once the session merges it, and tidies other merged branches on demand with /tidy",
   "author": {
     "name": "Abhiram Dwivedi",
@@ -32,6 +32,24 @@
       "title": "Port base",
       "description": "Worktree slot N owns ports portBase + N*10 through portBase + N*10 + 9. Slots start at 1, so portBase..portBase+9 stay free for the main checkout.",
       "default": 4000
+    },
+    "tidySuperseded": {
+      "type": "boolean",
+      "title": "Tidy superseded agent branches",
+      "description": "Let /tidy delete an unmerged agent branch that is an old version of files the default branch has since rewritten, after keeping its tip at refs/archive/tidy/<date>/<branch>.",
+      "default": true
+    },
+    "tidySupersededDays": {
+      "type": "number",
+      "title": "Days before a branch can be superseded",
+      "description": "How many days since its last commit before /tidy may call an agent branch superseded.",
+      "default": 3
+    },
+    "tidyArchiveRefs": {
+      "type": "string",
+      "title": "Archive ref namespaces",
+      "description": "Comma-separated ref prefixes. An agent branch whose tip is in the history of a ref under one of them counts as kept, and /tidy may delete it.",
+      "default": "refs/truss/archive/,refs/archive/"
     }
   }
 }
