@@ -192,7 +192,7 @@ scripts/tag-releases.sh --dry-run   # lists the `<plugin>--v<version>` tags it w
 scripts/tag-releases.sh --push      # creates the missing ones at the commit that set each version, and pushes them
 ```
 
-Other plugins can depend on ours with a version range, such as truss's `{ "name": "kit", "marketplace": "claude-ops", "version": "^0.3.1" }`. Claude Code resolves that range against these tags ([plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies.md)). Our plugins are relative-path entries in this marketplace, so the tags live in this repo. Without a tag in range, Claude Code installs whatever main has, and the dependent plugin stays disabled if that version is outside its range. The script is idempotent, so run it after every version bump.
+Other plugins can depend on ours with a version range, such as truss's `{ "name": "kit", "marketplace": "claude-ops", "version": "^0.4.0" }`. Claude Code resolves that range against these tags ([plugin dependencies](https://code.claude.com/docs/en/plugins/dependencies.md)). Our plugins are relative-path entries in this marketplace, so the tags live in this repo. Without a tag in range, Claude Code installs whatever main has, and the dependent plugin stays disabled if that version is outside its range. The script is idempotent, so run it after every version bump.
 
 When a mod loads, Claude Code writes its API types into the mod's `.claude-plugin/types/` folder, along with a list of the MCP tools on your machine. Git ignores that folder. After the first load, `tsc -p plugins/<mod>` type-checks the mod.
 
