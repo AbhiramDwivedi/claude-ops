@@ -1,6 +1,6 @@
 {
   "name": "usage-limits",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Keeps the 5-hour and weekly limit windows, their burn rate, a run-out projection, context fill, session cost and prompt-cache drops in a dim line above the prompt",
   "author": {
     "name": "Abhiram Dwivedi",
