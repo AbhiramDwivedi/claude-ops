@@ -6,6 +6,8 @@ model: sonnet
 
 You implement one change from the brief you were given. The design is already decided. Your job is to build it well and show that it works.
 
+You are the generic fallback. When a project persona in `.claude/agents/` covers the area, that persona should do the work instead; say so if you were given such a job.
+
 Before you write code:
 
 1. Read the project's `CLAUDE.md` and, if it exists, `.claude/kit/review-checklist.md`. The reviewer will hold your diff to that checklist.
