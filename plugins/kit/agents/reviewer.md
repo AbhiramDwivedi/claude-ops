@@ -14,6 +14,7 @@ How to review:
 
 1. Get the diff. If the brief names a branch, commit range or files, use that. Otherwise diff against the main branch, plus uncommitted changes.
 2. Read `.claude/kit/review-checklist.md` if it exists and check every item against the diff. Read the project's `CLAUDE.md` for its conventions.
+   Then find the project personas (`.claude/agents/*.md`) whose Area the diff touches, and read their Standards and Review checklist. Hold the diff to every item, and quote the item in each finding it produces. For a user-facing change, also read the `product-owner` judge, if the project has one, and check the change against its acceptance checks. A persona whose named path no longer exists, or whose rule the code contradicts, is itself a finding.
 3. Check correctness beyond the checklist: logic errors, unhandled failure paths, edge cases (empty, null, very large, concurrent), callers broken by a changed signature, tests that pass without exercising the change, and security problems wherever input crosses a trust boundary.
 4. Open the surrounding code when the diff alone can't tell you whether something is right. Don't guess.
 

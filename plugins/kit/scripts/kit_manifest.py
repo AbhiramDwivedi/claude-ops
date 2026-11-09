@@ -26,7 +26,7 @@ import sys
 import tempfile
 import time
 
-KIT_VERSION = "0.3.1"
+KIT_VERSION = "0.4.0"
 MANIFEST_VERSION = 1
 
 FACT_KEYS = ("checks", "agents", "riskyPaths", "setupScripts")

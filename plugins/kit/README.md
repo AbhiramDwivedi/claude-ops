@@ -13,7 +13,11 @@ Each agent's model is fixed in its file, so picking the agent picks the model. `
 | `kit:test-writer` | Sonnet | Writes tests from the spec before reading the implementation, so the tests don't encode its bugs. |
 | `kit:scout` | Haiku | Searches and summarises code. Read-only. |
 
-There is no architect or product-owner agent. A persona with the same context, model and tools as the main session adds cost, not quality. For a large change, use plan mode or the built-in Plan agent.
+These four are generic. The quality bar lives in **personas**: project agents in `.claude/agents/`, one per stack and area (`spring-webflux-backend`, `nextjs-frontend`, `postgres-migrations`). Each carries numbered Standards a reviewer can rule on from a diff, in the stack's own idiom (pinned versions in a Maven build, caret ranges and a committed lockfile in an npm project), plus pointers to the scripts and docs that own the commands. It holds no counts, versions or commands, so it doesn't rot. `kit:builder` is the fallback for areas no persona covers.
+
+**Judges** are read-only personas, with no write tools. Every project gets a `product-owner`: who the users are, the domain rules a generic engineer would get wrong, what done means to a user. It advises and never decides scope. An architect reviewer is optional, and is mostly the editing personas' Standards restated as anti-patterns. `kit:reviewer` holds a diff to the Standards of every persona whose area it touches.
+
+The `kit:persona` skill says how to write and amend one. `/kit:init` proposes them on day 0; `/kit:revise` amends them from evidence.
 
 ## `/kit:init`
 
@@ -22,14 +26,15 @@ Scans the repo (languages, frameworks, scripts, CI, lint/typecheck/test commands
 - a conventions section for `CLAUDE.md`, drawn from the code with file references;
 - quality-gate hooks in `.claude/settings.json`: lint or typecheck after each edit, tests before an agent stops;
 - `.claude/kit/review-checklist.md`, specific to the repo;
-- project agents, skills or commands, only where the repo clearly needs one;
+- one persona per stack and area, plus a `product-owner` judge; on a repo with no code it asks you for the stack first;
+- project skills or commands, only where the repo clearly needs one;
 - `.claude/worktree-setup.sh`/`.ps1`, only when a fresh worktree can't run the tests without setup, or the repo runs services that need separate ports (used by the `worktrees` plugin).
 
-If the repo has no linter or typechecker, it says so first: adding one is worth more than any agent. Nothing is written until you approve the proposal.
+If the repo has no linter or typechecker, it says so first: adding one is worth more than any persona. Nothing is written until you approve the proposal.
 
 ## `/kit:revise`
 
-Reads the last 30 days of this project's transcripts and proposes changes: repeated command sequences or prompts become skills, repeated subagent briefs become agent types, recurring review findings become lint rules or checklist items, and unused items get deleted. Writes only what you approve.
+Reads the last 30 days of this project's transcripts and proposes changes: repeated command sequences or prompts become skills, repeated subagent briefs become agent types, recurring review findings become lint rules or checklist items, personas are amended when a path they name is gone or the code contradicts a rule, and unused items get deleted. Writes only what you approve.
 
 A Python script (`scripts/kit_mine.py`) does the reading and prints a summary of a few KB, so the model never loads the raw transcripts. Its parser is copied from `workflow-audit`.
 
@@ -52,6 +57,8 @@ The script has two subcommands:
 - `declare --repo <dir> --by <plugin> --read-only <names>` marks agent types read-only in an existing manifest. The names are comma-separated. Each is `<plugin>:<name>` with the prefix equal to `--by`, or, with `--by project`, a bare name for one of the project's own agents. Foundry uses it to mark its own agent types.
 
 Both subcommands refuse to mark an editing type read-only: a `readOnly: true` entry (or a `declare --read-only` name) that case-folds to `general-purpose`, `kit:builder`, `kit:test-writer`, `foundry:architect`, `foundry:devops`, `foundry:lead`, `foundry:writer`, `truss:foreman`, `truss:design-engineer`, `truss:commissioning-engineer`, `truss:planning-engineer` or `truss:writer` exits 2 with `READ_ONLY_EDITING_TYPE`, after every other bad-input check. The same name at `readOnly: false` is fine. Reading stays tolerant: an old manifest holding such an entry still loads, and the stop gate never skips those names. When `write` or `declare` would carry such an entry over from the old file, it drops it and prints `kit_manifest: warning: dropped <name> (declaredBy <plugin>): READ_ONLY_EDITING_TYPE` to stderr, one line per entry.
+
+Personas need no manifest change: an editing persona is listed as `{name, readOnly: false, declaredBy: "project"}`, a judge with no write tools as `readOnly: true`.
 
 This is kit 0.3.0: input that 0.2.0 accepted (a refused type at `readOnly: true`) now exits 2.
 
