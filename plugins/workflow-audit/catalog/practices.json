@@ -970,7 +970,7 @@
    "superseded_by": null,
    "metric": null,
    "check": "No metric. A sample reader can check whether a session added a package without discussing it; nothing counts dependency changes.",
-   "notes": "Gist section VIII (Dependencies): 'every dependency is code you don't control'. Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
+   "notes": "Gist section VIII (Dependencies): 'Every dependency is permanent code you do not control.'. Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
   }
  ]
 }
