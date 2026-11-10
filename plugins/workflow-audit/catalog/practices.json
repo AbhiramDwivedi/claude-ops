@@ -1,5 +1,5 @@
 {
- "updated": "2026-10-08",
+ "updated": "2026-11-10",
  "practices": [
   {
    "id": "provide-runnable-check",
@@ -20,7 +20,7 @@
    "superseded_by": null,
    "metric": "verification.check_after_last_edit",
    "check": "Read the share of editing sessions that ran a test/build/lint/typecheck after the last edit. A low share is a gap only for sessions where a check existed; do not call doc-only or config edits a miss.",
-   "notes": "Docs: 'the difference between a session you watch and one you walk away from' (date shown is the fetch date; docs are undated). Anthropic's June 2026 expertise study links expertise to 'verified success', but the link is correlational and partly circular."
+   "notes": "Docs: 'the difference between a session you watch and one you walk away from' (date shown is the fetch date; docs are undated). Anthropic's June 2026 expertise study links expertise to 'verified success', but the link is correlational and partly circular. Corroborated by Karpathy's field notes (section VI: a success criterion defined before coding; https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307; opinion, not measured)."
   },
   {
    "id": "show-evidence-not-assertion",
@@ -199,7 +199,7 @@
    "superseded_by": null,
    "metric": "rework.correction_rate",
    "check": "A high correction rate may reflect vague prompts, but it also reflects hard tasks and model changes; use samples to judge, never the rate alone.",
-   "notes": "Costs doc: vague requests 'trigger broad scanning'. Economic Index (2026-01-15) shows prompt and response sophistication correlate; no causal claim."
+   "notes": "Costs doc: vague requests 'trigger broad scanning'. Economic Index (2026-01-15) shows prompt and response sophistication correlate; no causal claim. Corroborated by Karpathy's field notes (section VI Goal-Driven Execution: define a verifiable success criterion before coding and state the plan for multi-step work so a wrong approach is caught early; https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307; opinion, not measured)."
   },
   {
    "id": "respect-task-scope",
@@ -220,7 +220,7 @@
    "superseded_by": null,
    "metric": null,
    "check": "No metric. Read it only from the sample readers' out_of_scope cause, never from the number of changed files. A gap only when samples show the person rejecting or reverting work they did not ask for.",
-   "notes": "Opus 5 page: the model 'can also expand the scope of a task, adding steps that weren't requested or applying its own judgment about what the task should be.' Sonnet 5.5 page (https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5): it 'tends to add tests, documentation, and small supporting files' unasked, more at higher effort, and 'Most teams will welcome this.' Both pages give a prompt that limits scope. Date is the fetch date; docs are undated."
+   "notes": "Opus 5 page: the model 'can also expand the scope of a task, adding steps that weren't requested or applying its own judgment about what the task should be.' Sonnet 5.5 page (https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5): it 'tends to add tests, documentation, and small supporting files' unasked, more at higher effort, and 'Most teams will welcome this.' Both pages give a prompt that limits scope. Date is the fetch date; docs are undated. Corroborated by Karpathy's field notes (https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307, section X 'Kitchen Sink' and 'Runaway Refactor'; opinion, not measured)."
   },
   {
    "id": "keep-claude-md-short",
@@ -847,6 +847,130 @@
    "metric": null,
    "check": "A count of emphasis words in CLAUDE.md is a hint only. A gap only when transcripts show Claude over-applying an emphasized rule.",
    "notes": "Prompting docs: dial back aggressive language on these models; it 'may now overtrigger'. The one-line advice is on best-practices (https://code.claude.com/docs/en/best-practices): 'add emphasis such as \"IMPORTANT\" to that line alone. If you emphasize many lines, none of them stands out.'"
+  },
+  {
+   "id": "read-before-write",
+   "claim": "Have Claude read the files it will touch, copy existing patterns and check which imports the project already uses before writing code; if no pattern exists, it should ask.",
+   "improves": [
+    "quality",
+    "rework"
+   ],
+   "source": {
+    "url": "https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307",
+    "author": "Andrej Karpathy",
+    "kind": "blog",
+    "date": "2026-11-10"
+   },
+   "grade": "opinion",
+   "models": "any",
+   "status": "current",
+   "superseded_by": null,
+   "metric": null,
+   "check": "No metric. A sample reader can check whether edits to a file were preceded by a read of it or of a neighbour; a gap only where samples show the person correcting style or conventions.",
+   "notes": "Gist section I (Read Before You Write). Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
+  },
+  {
+   "id": "surface-assumptions-ask-when-unclear",
+   "claim": "Have Claude state its assumptions and tradeoffs before coding, and ask when the request is unclear instead of filling the gap with plausible-looking code.",
+   "improves": [
+    "rework"
+   ],
+   "source": {
+    "url": "https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307",
+    "author": "Andrej Karpathy",
+    "kind": "blog",
+    "date": "2026-11-10"
+   },
+   "grade": "opinion",
+   "models": "any",
+   "status": "current",
+   "superseded_by": null,
+   "metric": null,
+   "check": "No metric. Read it from sample readers: corrections where Claude guessed an unclear requirement. Overlaps course-correct-early, which is about the person's timing.",
+   "notes": "Gist section II (Think Before You Code). Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
+  },
+  {
+   "id": "minimal-code-no-speculation",
+   "claim": "Ask for the minimum code that solves the problem: no premature abstraction, unneeded error handling or configuration nobody asked for.",
+   "improves": [
+    "quality",
+    "rework"
+   ],
+   "source": {
+    "url": "https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307",
+    "author": "Andrej Karpathy",
+    "kind": "blog",
+    "date": "2026-11-10"
+   },
+   "grade": "opinion",
+   "models": "any",
+   "status": "current",
+   "superseded_by": null,
+   "metric": null,
+   "check": "No metric. A sample reader can look for corrections that reject over-engineering. Not measurable from diff size.",
+   "notes": "Gist section III (Simplicity) and the 'Wrong Abstraction' failure mode in section X. Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
+  },
+  {
+   "id": "surgical-diffs",
+   "claim": "Keep diffs minimal: every changed line traces to the request, match the existing style, and do no drive-by reformatting or restructuring of unrelated code.",
+   "improves": [
+    "rework",
+    "quality"
+   ],
+   "source": {
+    "url": "https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307",
+    "author": "Andrej Karpathy",
+    "kind": "blog",
+    "date": "2026-11-10"
+   },
+   "grade": "opinion",
+   "models": "any",
+   "status": "current",
+   "superseded_by": null,
+   "metric": null,
+   "check": "No metric. Read it only from sample readers, never from the number of changed files; a gap only when samples show the person rejecting or reverting unrelated edits. Related to respect-task-scope, which covers added work on newer models.",
+   "notes": "Gist section IV (Surgical Changes) and the 'Kitchen Sink' and 'Runaway Refactor' failure modes in section X. Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
+  },
+  {
+   "id": "failing-test-first-fix-cause",
+   "claim": "For a bug, reproduce it with a failing test first, watch it fail, then fix the cause rather than the symptom (find out why a value is null instead of adding a null check); change one thing at a time.",
+   "improves": [
+    "quality",
+    "rework"
+   ],
+   "source": {
+    "url": "https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307",
+    "author": "Andrej Karpathy",
+    "kind": "blog",
+    "date": "2026-11-10"
+   },
+   "grade": "opinion",
+   "models": "any",
+   "status": "current",
+   "superseded_by": null,
+   "metric": null,
+   "check": "No metric: verification.check_after_last_edit shows a check ran after the last edit, not that a test failed first. A sample reader can look at whether bug-fix sessions reproduced before editing.",
+   "notes": "Gist sections V (Verification) and VII (Debugging). Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
+  },
+  {
+   "id": "justify-new-dependencies",
+   "claim": "Prefer the standard library or a dependency the project already has; require a stated reason for each new dependency.",
+   "improves": [
+    "quality"
+   ],
+   "source": {
+    "url": "https://gist.github.com/DiTo97/e734f688f6f63fc45211142c0e43d307",
+    "author": "Andrej Karpathy",
+    "kind": "blog",
+    "date": "2026-11-10"
+   },
+   "grade": "opinion",
+   "models": "any",
+   "status": "current",
+   "superseded_by": null,
+   "metric": null,
+   "check": "No metric. A sample reader can check whether a session added a package without discussing it; nothing counts dependency changes.",
+   "notes": "Gist section VIII (Dependencies): 'every dependency is code you don't control'. Opinion of a respected practitioner (gist 'CLAUDE.md: Field Notes on Getting a Language Model to Write Code You Will Not Rewrite', posted under DiTo97; original post https://x.com/karpathy/status/2015883857489522876), not Anthropic advice and not measured. Date is the fetch date."
   }
  ]
 }
