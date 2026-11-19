@@ -11,7 +11,8 @@ Standards section):
 - every numbered Standard cites at least one path that exists in the repo (a Standard marked "ecosystem
   idiom" may cite none), and none cites a path that does not exist;
 - no Standard's text, normalised and without its code spans, appears in a Standard of another persona;
-- every Standard names something specific to the persona's stack, from the idiom table below.
+- every Standard names something specific to the persona's stack, from the idiom table below; a stack outside
+  the table skips only this idiom check, and the path and duplicate checks still run.
 For a `product-owner`:
 - a read-only `tools` line, and the six parts as headings: users and buyers, regulations and compliance,
   domain invariants, vocabulary, failures users care about, acceptance checks;
@@ -142,7 +143,8 @@ def stack_of(text):
     fm = frontmatter(text)
     head = (fm.get("name", "") + " " + fm.get("description", "")).lower()
     stack_body = section(text.split("\n"), r"^(?:#+\s*|\*\*)Stack\b", STOP_HEADING) or []
-    for source in (head, " ".join(stack_body).lower()):
+    # the Stack section names the stack; name and description only decide when it names none
+    for source in (" ".join(stack_body).lower(), head):
         scores = {s: sum(1 for w in ws if re.search(r"(?<![a-z0-9])" + re.escape(w), source))
                   for s, ws in STACK_WORDS.items()}
         best = max(scores.values())
@@ -220,9 +222,7 @@ def check(repo, files):
         if not standards:
             errors.append("ERROR: %s: the Standards section has no numbered items" % label)
         stack = stack_of(text)
-        if stack is None:
-            errors.append("ERROR: %s: cannot tell the stack from the persona's name, description or Stack section"
-                          % label)
+        # a stack outside STACK_WORDS skips only the idiom check below
         for n, std in standards:
             cites = cited_paths(std)
             missing = [c for c in cites if not path_exists(repo, c)]

@@ -167,6 +167,45 @@ class BadPersonas(TempFiles):
         self.assertTrue(any("read-only" in e for e in errors), errors)
 
 
+class UnknownAndMixedStacks(TempFiles):
+    def persona(self, name, description, stack, standards):
+        body = "\n".join("%d. %s" % (i + 1, s) for i, s in enumerate(standards))
+        return ("---\nname: %s\ndescription: %s\nmodel: sonnet\n---\n\n## Area\n\nx\n\n## Stack\n\n%s\n\n"
+                "## Standards\n\n%s\n\n## Proving it works\n\nx\n" % (name, description, stack, body))
+
+    def go(self, name="go-api", std="Handlers use net/http and queries come from sqlc, see `README.md`."):
+        return self.write(name + ".md", self.persona(name, "Go API service", "Go with net/http and sqlc.", [std]))
+
+    def test_go_persona_passes_without_a_stack_error(self):
+        self.assertEqual(pc.check(repo("clinic-api"), [self.go()]), [])
+
+    def test_postgres_migrations_persona_passes(self):
+        p = self.write("pg.md", self.persona("postgres-migrations", "Writes PostgreSQL migrations",
+                                             "PostgreSQL SQL migrations.",
+                                             ["Every migration is reversible, as `README.md` describes."]))
+        self.assertEqual(pc.check(repo("clinic-api"), [p]), [])
+
+    def test_unknown_stack_still_checks_missing_paths(self):
+        p = self.go(std="Handlers use net/http, as `cmd/missing.go` does.")
+        errors = pc.check(repo("clinic-api"), [p])
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("cites a path that does not exist: cmd/missing.go", errors[0])
+
+    def test_unknown_stack_still_checks_duplicates(self):
+        std = "Wrap errors with context, see `README.md`."
+        a = self.go("go-a", std)
+        b = self.go("go-b", std)
+        errors = pc.check(repo("clinic-api"), [a, b])
+        self.assertTrue(any("go-b.md" in e and "duplicates a Standard of" in e for e in errors), errors)
+
+    def test_stack_section_beats_a_frontend_mention_in_the_description(self):
+        std = "Money is a `Decimal` field on a Pydantic `BaseModel`, as `app/models.py` does; never a float."
+        p = self.write("ledger.md", self.persona(
+            "fastapi-ledger-service", "Edits the FastAPI ledger backend that the React frontend calls.",
+            "Python FastAPI with Pydantic.", [std]))
+        self.assertEqual(pc.check(repo("ledger-service"), [p]), [])
+
+
 class Cli(TempFiles):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, os.path.join(SCRIPTS, "kit_persona_check.py"), *args],
