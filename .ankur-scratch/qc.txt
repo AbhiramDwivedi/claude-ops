@@ -1,0 +1,15 @@
+...........................................................................................ss..EE....................................................
+======================================================================
+ERROR: test_unreadable_gate_is_one_line_and_changes_nothing (test_kit_manifest.KitManifest.test_unreadable_gate_is_one_line_and_changes_nothing)
+----------------------------------------------------------------------
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/kit-manifest-_p611qf0/repo/.claude/kit/stop-gate.ps1'
+
+======================================================================
+ERROR: test_unreadable_manifest_is_an_io_error_not_corrupt (test_kit_manifest.KitManifest.test_unreadable_manifest_is_an_io_error_not_corrupt)
+----------------------------------------------------------------------
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/kit-manifest-ospxk3wt/repo/.claude/kit/manifest.json'
+
+----------------------------------------------------------------------
+Ran 149 tests in 25.926s
+
+FAILED (errors=2, skipped=2)

@@ -82,6 +82,8 @@ A judge is a read-only persona: tools `Read, Grep, Glob, Bash`, no write tools. 
   - **Acceptance checks in the user's terms** ("a patient can ... and sees ..."), not the code's, covering those failures.
   - Pointers to the requirements doc and the README. It is used for user-facing changes. Model `opus`.
 
+  Write the six parts as `##` headings named `Users and buyers`, `Regulations and compliance`, `Domain invariants`, `Vocabulary`, `Failures users care about` and `Acceptance checks`, so the checker finds them. Put each regulation as one list item that ends with a repo path in backticks or the word "inference".
+
   Forbidden: generic product-owner text ("understands user needs", "prioritises value", "ensures quality"), and any regulation, invariant or term the repo gives no sign of and that is not marked as an inference. If a sentence would fit a product owner in any industry, cut it.
 
   Example (healthcare, an outpatient appointment API): "Users: front-desk staff and clinicians; patients book through a portal; the clinic is the buyer. HIPAA binds this service: it stores patient identifiers (`Appointment.patientId`), so access is audit-logged (README) and no diagnosis is stored on an appointment. Invariants: a clinician has at most one `BOOKED` appointment per slot; a cancelled slot is bookable again; times are the clinic's local time. Failures that matter: a double-booked clinician, a patient seeing another patient's visit, a lost cancellation. Acceptance: a patient who cancels sees the slot free in the clinician's schedule at once; a front-desk user cannot read a diagnosis."
@@ -100,6 +102,8 @@ A persona earns its place by short, concrete, checkable stack rules. Before you 
 - The product owner states the industry, and each regulation or invariant in it has evidence or is marked as an inference.
 - Nothing the repo cannot follow: no unit tests with a library the repo has no setup for, no tool it does not use.
 - Read-only personas have a `tools` line without write tools.
+
+Then run the checker on the draft, after the items above: `<python> <checker> --repo <project root> <draft> [<other persona drafts>]`, where the checker is `scripts/kit_persona_check.py` in this plugin (from this skill's base directory, `../../scripts/kit_persona_check.py`). Pass every persona you drafted in one run, so it can see a Standard copied between stacks. It prints `OK:` or one `ERROR: <file>: <reason>` per problem. Fix each one and run it again before you show or save the persona. It checks what a script can: that each Standard cites a path that exists, is not copied into another persona, and names an idiom of its stack, and that a product-owner has its six parts. The items above still apply.
 
 If an item fails, cut or fix it. A short persona that is all true beats a long one that is half stale.
 

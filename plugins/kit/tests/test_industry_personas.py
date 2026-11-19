@@ -41,6 +41,21 @@ class InitStatesIndustry(unittest.TestCase):
         self.assertIn("one persona per stack-area", self.text)
         self.assertIn("every area the code has gets a persona", self.text)
 
+    # The three tests below pin required sentences. They are not proof of behaviour; the proof is
+    # test_stack_scan.py and test_persona_check.py.
+    def test_init_reads_evidence_and_names_the_industry_itself(self):
+        self.assertIn("It names no industry; that is your job.", self.text)
+        self.assertIn("A dev tool, a library or a template has no industry", self.text)
+
+    def test_init_runs_the_persona_checker_before_showing_personas(self):
+        self.assertIn("scripts/kit_persona_check.py", self.text)
+        self.assertIn("Fix every error and run it again before you show anything", self.text)
+
+    def test_persona_skill_runs_the_checker_and_names_the_po_headings(self):
+        text = read("skills", "persona", "SKILL.md")
+        self.assertIn("scripts/kit_persona_check.py", text)
+        self.assertIn("`Regulations and compliance`", text)
+
     def test_persona_proposals_cite_repo_files_and_are_not_generic(self):
         self.assertIn("cite repo files", self.text)
         self.assertIn("generic", self.text)
