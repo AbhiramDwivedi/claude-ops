@@ -142,7 +142,7 @@ class ReadmeAndVersion(unittest.TestCase):
 
     def test_version_bumped(self):
         with open(os.path.join(PLUGIN, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["version"], "0.4.0")
+            self.assertEqual(json.load(f)["version"], "0.5.0")
 
     def test_manifest_schema_unchanged_by_personas(self):
         # personas fit the existing agents shape: bare name, declaredBy project

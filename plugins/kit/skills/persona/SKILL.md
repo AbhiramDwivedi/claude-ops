@@ -56,6 +56,9 @@ Use the ecosystem's real practice. These show the range; they are illustrations,
 | npm / pnpm / yarn | Caret ranges in `package.json`; the lockfile is committed and changes with it; one package manager. |
 | Python | Dependencies added through the project's tool (`uv`, `poetry`, `pip-tools`) so the lockfile changes with the manifest; all I/O in async code is awaited. |
 | Go | `go.mod` and `go.sum` tidy after a dependency change; errors wrapped with context, not dropped. |
+| Spring Boot (JVM) | Controllers depend on the repository or service through constructor injection, not field `@Autowired`; entities are never returned from a controller, a DTO is; schema changes go through the project's migration tool. |
+| TypeScript | `strict` stays on in `tsconfig.json`; no `any` or `as` casts at an API boundary, the response type comes from the shared types module; props and API results are typed, not inferred from `{}`. |
+| FastAPI (Python) | Request and response bodies are Pydantic models, not dicts; route handlers are `async` and await every I/O call; one `HTTPException` shape for errors; money is `Decimal`, never `float`. |
 | Reactive (WebFlux, Reactor, RxJS) | Handlers return the reactive type; nothing blocks inside the pipeline. |
 | Data access | One access layer (R2DBC, not JPA, if that is the repo's choice); an applied migration is never edited, a new one is added. |
 | Frontend | All API calls go through the one client module; no direct `fetch`; styling through the design system's tokens, not ad-hoc values. |
@@ -64,11 +67,24 @@ Use the ecosystem's real practice. These show the range; they are illustrations,
 
 Each Standard should cite what the repo does: the file where the pattern lives, in the Stack or in the item. Where the repo has no habit yet, the ecosystem idiom is fine; say so in the item ("repo has no lockfile yet; the ecosystem commits one").
 
+A persona is specific to its stack and its area. A Standard that fits any stack is generic ("handle errors", "write tests", "keep functions small"): cut it. A JVM backend persona and a TypeScript frontend persona in the same repo must share almost no Standards, because each holds what is true only for its stack and the directories it owns. At least most Standards cite a repo file, and each persona's Stack section names its manifest and the files `kit_scan.py` listed for its area.
+
 ## 4. Judges
 
 A judge is a read-only persona: tools `Read, Grep, Glob, Bash`, no write tools. It advises; it never decides scope, which is for the human or the orchestrator.
 
-- **`product-owner`.** Propose one for every project. Its body holds: who the users are; the domain rules a generic engineer would get wrong; what "done" means for a user; acceptance checks in the user's terms ("a user can ... and sees ..."), not the code's; and pointers to the requirements doc and the README. It is used for user-facing changes. Model `opus`.
+- **`product-owner`.** Propose one for every project. It is an industry-specific judge: it thinks as a product owner in the industry kit:init stated for this project, never a generic product owner. Its body holds:
+  - **Industry and domain**, one sentence, as kit:init stated it, with the files that show it.
+  - **Users and buyers.** Who uses the product, who pays for it, and where they differ (a clinician uses it, a hospital buys it).
+  - **Regulations and compliance rules that bind this product**, each tied to evidence in the repo (a file, a field, a README line) or marked as an inference. Name only rules that apply to what this product does; do not list every law of the industry.
+  - **Domain invariants and vocabulary.** The rules a generic engineer would get wrong, and the industry's own words, used the way its people use them.
+  - **The failures users in that industry care most about**, in their terms (a double-booked patient, a charge posted twice), so the judge knows what to catch first.
+  - **Acceptance checks in the user's terms** ("a patient can ... and sees ..."), not the code's, covering those failures.
+  - Pointers to the requirements doc and the README. It is used for user-facing changes. Model `opus`.
+
+  Forbidden: generic product-owner text ("understands user needs", "prioritises value", "ensures quality"), and any regulation, invariant or term the repo gives no sign of and that is not marked as an inference. If a sentence would fit a product owner in any industry, cut it.
+
+  Example (healthcare, an outpatient appointment API): "Users: front-desk staff and clinicians; patients book through a portal; the clinic is the buyer. HIPAA binds this service: it stores patient identifiers (`Appointment.patientId`), so access is audit-logged (README) and no diagnosis is stored on an appointment. Invariants: a clinician has at most one `BOOKED` appointment per slot; a cancelled slot is bookable again; times are the clinic's local time. Failures that matter: a double-booked clinician, a patient seeing another patient's visit, a lost cancellation. Acceptance: a patient who cancels sees the slot free in the clinician's schedule at once; a front-desk user cannot read a diagnosis."
 - **An architect reviewer.** Optional. Make it mostly the editing personas' Standards restated as anti-patterns per area, so each slip is caught twice. Do not fill it with generic architecture talk (SOLID, layers, "keep it simple").
 
 ## 5. Self-check before saving
@@ -80,6 +96,8 @@ A persona earns its place by short, concrete, checkable stack rules. Before you 
 - No boilerplate a model already knows: SOLID, DRY, "comprehensive tests", accessibility or performance platitudes, "consider Redux or Zustand".
 - No deliverables list of documents nobody reads.
 - Every Standard is checkable from a diff.
+- Swap the stack: would a Standard read the same in a persona for another language? Then it is generic; cut it or make it specific.
+- The product owner states the industry, and each regulation or invariant in it has evidence or is marked as an inference.
 - Nothing the repo cannot follow: no unit tests with a library the repo has no setup for, no tool it does not use.
 - Read-only personas have a `tools` line without write tools.
 
