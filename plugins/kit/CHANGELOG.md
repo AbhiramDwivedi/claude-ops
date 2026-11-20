@@ -2,7 +2,7 @@
 
 Before 0.5.0 the "From x.y" lines in the root README were kit's log.
 
-## Unreleased
+## 0.6.0 (2026-11-20)
 
 - `kit:persona` and `/kit:init` add a required docs step: read each framework's major version from the lockfile, fetch the official docs or upgrade guide for it with the session's web tool, and write two to five Standards from them, marked `ecosystem idiom` with the source URL. With no web tool the proposal says so and marks them from memory, unverified.
 - A repo habit that the official docs advise against, or that is a defect pattern (swallowed errors, copy-pasted logic, untyped escape hatches, tests that assert nothing), is no longer written down as a Standard: the persona states the right practice and the proposal lists the habit as existing debt. `kit:builder` writes new code to the Standard and names the divergence, without refactoring old code outside the task.
