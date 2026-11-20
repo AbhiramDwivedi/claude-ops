@@ -9,6 +9,12 @@ Before 0.5.0 the "From x.y" lines in the root README were kit's log.
 - `kit:persona` adds an engineering baseline every editing persona states in its stack's terms (one responsibility per unit, no second copy, dependency direction, errors, input validation, test design), and a size limit of eight to fifteen Standards.
 - `/kit:init` proposes the stack's standard static-analysis set (formatter check, type check, linter with complexity limits, duplication check, dependency audit, secret scan), one standard tool per job, each its own item with its cost.
 - `kit:test-writer` gets test-quality rules (behaviour through public entry points, mocks only at edges, every test can fail, named by behaviour, not ticket or release), and `kit:reviewer` checks them.
+- `scripts/kit_scan.py` detects Go, Rust, .NET, Ruby and PHP stacks, and the persona idiom check covers those stacks and React and Next.js.
+- The miner treats `ankur:qc-engineer` Findings and Notes as review findings.
+- `hooks-reference.md` adds `edit-gate.ps1`, and both bash gates (`edit-gate.sh`, `stop-gate.sh`) honour the hook input's `cwd`; the template test now runs `edit-gate.sh` from another directory.
+- Manifest check kinds gain `duplication`, `audit` and `secrets` (schema and `kit_manifest.py`), and `/kit:init` records the duplication check, dependency audit and secret scan under them instead of `lint`.
+- `kit_manifest.py` refuses the `ankur:` editing agent types (`project-manager`, `design-engineer`, `commissioning-engineer`, `stress-engineer`, `writer`) as read-only, like `worktrees`; a test reads both lists and fails if they differ.
+- Test fix: the manifest-permission tests no longer error; the temp repo is removed after their permission-restoring cleanups, not before.
 
 ## 0.5.0
 

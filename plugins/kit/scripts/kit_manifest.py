@@ -36,7 +36,7 @@ AGENT_KEYS = ("name", "readOnly", "declaredBy")
 RISKY_KEYS = ("path", "why")
 
 CHECK_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
-CHECK_KINDS = ("test", "lint", "typecheck", "format", "build")
+CHECK_KINDS = ("test", "lint", "typecheck", "format", "duplication", "audit", "secrets", "build")
 GATES = ("edit", "stop", "none")
 ONE_LINE = re.compile(r"[^\r\n]+")
 AGENT_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}(:[A-Za-z0-9_-]{1,64})?")
@@ -49,7 +49,8 @@ OWN_DECLARERS = ("kit", "project")
 # Editing types that may not be declared read-only (repo ADR-0013 amendment); worktrees holds its own copy.
 REFUSED_READ_ONLY_TYPES = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect",
                            "foundry:devops", "foundry:lead", "foundry:writer",
-                           "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer")
+                           "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer",
+                           "ankur:project-manager", "ankur:design-engineer", "ankur:commissioning-engineer", "ankur:stress-engineer", "ankur:writer")
 REFUSED_FOLDED = tuple(n.casefold() for n in REFUSED_READ_ONLY_TYPES)
 
 # Claude Code's built-in read-only agent types, always first in the gates' skip list.

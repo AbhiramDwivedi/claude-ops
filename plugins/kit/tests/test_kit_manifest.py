@@ -33,13 +33,12 @@ def fixture_facts():
 class KitManifest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="kit-manifest-")
+        # a cleanup, not tearDown: it must run after the tests' permission-restoring cleanups (LIFO)
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.repo = os.path.join(self.tmp, "repo")
         self.kitdir = os.path.join(self.repo, ".claude", "kit")
         os.makedirs(self.repo)
         self.manifest = os.path.join(self.kitdir, "manifest.json")
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_script(self, *args, stdin=None):
         return subprocess.run([sys.executable, SCRIPT] + list(args), input=stdin, capture_output=True,
@@ -142,6 +141,30 @@ class KitManifest(unittest.TestCase):
             self.err(r, "IO_ERROR", 1)
             self.assertIn("can't read %s: " % self.manifest, r.stderr)
             self.assertEqual(self.snapshot(), before)
+
+    def test_new_static_analysis_kinds_are_accepted(self):
+        for kind in ("duplication", "audit", "secrets"):
+            facts = fixture_facts()
+            facts["checks"] = [{"name": kind, "kind": kind, "command": "c", "gate": "none"}]
+            self.ok(self.write(facts))
+            self.assertEqual(json.loads(self.raw(self.manifest))["checks"][0]["kind"], kind)
+
+    def test_schema_and_script_list_the_same_check_kinds(self):
+        with open(os.path.join(HERE, "..", "docs", "manifest.schema.json"), encoding="utf-8") as f:
+            enum = json.load(f)["properties"]["checks"]["items"]["properties"]["kind"]["enum"]
+        with open(SCRIPT, encoding="utf-8") as f:
+            kinds = re.findall(r'"(\w+)"', re.search(r"CHECK_KINDS = \((.*?)\)", f.read()).group(1))
+        self.assertEqual(sorted(enum), sorted(kinds))
+
+    def test_refused_read_only_types_match_the_worktrees_hook(self):
+        with open(os.path.join(HERE, "..", "..", "worktrees", "hooks", "register.ts"), encoding="utf-8") as f:
+            m = re.search(r"REFUSED_READ_ONLY_TYPES\s*=\s*\[(.*?)\]", f.read(), re.S)
+        self.assertIsNotNone(m, "REFUSED_READ_ONLY_TYPES not found in register.ts")
+        theirs = re.findall(r"'([^']+)'", m.group(1))
+        with open(SCRIPT, encoding="utf-8") as f:
+            m = re.search(r"REFUSED_READ_ONLY_TYPES\s*=\s*\((.*?)\)", f.read(), re.S)
+        ours = re.findall(r'"([^"]+)"', m.group(1))
+        self.assertEqual(sorted(ours), sorted(theirs), "kit's and worktrees' refused lists have drifted")
 
     def test_deeply_nested_json_is_one_line_not_a_traceback(self):
         deep = "[" * 200000 + "]" * 200000
@@ -581,7 +604,8 @@ class KitManifest(unittest.TestCase):
 
     REFUSED = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect", "foundry:devops",
                "foundry:lead", "foundry:writer",
-               "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer")
+               "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer",
+               "ankur:project-manager", "ankur:design-engineer", "ankur:commissioning-engineer", "ankur:stress-engineer", "ankur:writer")
 
     def guard_facts(self, name, read_only=True, declared_by=None):
         facts = fixture_facts()

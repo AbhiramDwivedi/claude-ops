@@ -25,7 +25,7 @@
         "required": ["name", "kind", "command", "gate"],
         "properties": {
           "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
-          "kind": { "enum": ["test", "lint", "typecheck", "format", "build"] },
+          "kind": { "enum": ["test", "lint", "typecheck", "format", "duplication", "audit", "secrets", "build"] },
           "command": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$" },
           "gate": {
             "description": "The kit gate that runs it: edit (after each edit), stop (before an agent stops) or none.",
