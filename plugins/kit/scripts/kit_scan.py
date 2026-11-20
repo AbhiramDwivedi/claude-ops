@@ -13,7 +13,7 @@ The script names no industry. It returns evidence only; /kit:init reads it, read
 the industry and domain itself, or asks the person.
 
 A stack-area is one manifest (pom.xml, build.gradle[.kts], package.json, pyproject.toml,
-requirements.txt) and the directory it sits in. "cite" holds repo-relative files, with "/" separators,
+requirements.txt, go.mod, Cargo.toml, Gemfile, composer.json, *.csproj, *.sln) and the directory it sits in. "cite" holds repo-relative files, with "/" separators,
 that a persona for the area can point at.
 
 Entities are names read from declarations: JPA-annotated classes, exported TypeScript interfaces, types
@@ -30,8 +30,10 @@ from collections import Counter, defaultdict
 
 SKIP_DIRS = {".git", ".claude", "node_modules", "venv", ".venv", "__pycache__", "build", "target", "dist",
              ".gradle", ".idea", ".next", "out"}
-MANIFESTS = ("pom.xml", "build.gradle", "build.gradle.kts", "package.json", "pyproject.toml", "requirements.txt")
-SOURCE_EXT = {".java", ".kt", ".ts", ".tsx", ".js", ".jsx", ".py"}
+MANIFESTS = ("pom.xml", "build.gradle", "build.gradle.kts", "package.json", "pyproject.toml", "requirements.txt",
+             "go.mod", "Cargo.toml", "Gemfile", "composer.json")
+MANIFEST_SUFFIXES = (".csproj", ".sln")  # .NET: the file name varies, so match the suffix
+SOURCE_EXT = {".java", ".kt", ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".cs", ".rb", ".php"}
 MAX_BYTES = 200_000
 MAX_CITE = 12
 MAX_NOUNS = 20
@@ -124,6 +126,21 @@ def classify(manifest, text, has_tsconfig):
         else:
             fw = "node"
         return stack, fw
+    if manifest == "go.mod":
+        return "go", "go"
+    if manifest == "Cargo.toml":
+        return "rust", "rust"
+    if manifest.endswith(MANIFEST_SUFFIXES):
+        return "dotnet", "aspnet" if "microsoft.net.sdk.web" in low else "dotnet"
+    if manifest == "Gemfile":
+        return "ruby", "rails" if re.search(r"""gem\s+['"]rails['"]""", low) else "ruby"
+    if manifest == "composer.json":
+        fw = "php"
+        for name in ("laravel", "symfony"):
+            if name + "/" in low:
+                fw = name
+                break
+        return "php", fw
     fw = "python"
     for name in ("fastapi", "django", "flask"):
         if re.search(r"\b" + name + r"\b", low):
@@ -146,15 +163,23 @@ def is_cite(rel_in_area):
     return any(w in low for w in LAYER_WORDS) or "/components/" in padded or "/api/" in padded
 
 
+def manifest_rank(name):
+    if name in MANIFESTS:
+        return MANIFESTS.index(name)
+    if name.endswith(MANIFEST_SUFFIXES):
+        return len(MANIFESTS) + MANIFEST_SUFFIXES.index(os.path.splitext(name)[1])
+    return None
+
+
 def find_stacks(paths, repo):
     pathset = set(paths)
     seen = {}  # area -> (rank, manifest path); the first manifest in MANIFESTS order wins
     for rel in paths:
         name = rel.rsplit("/", 1)[-1]
-        if name not in MANIFESTS:
+        rank = manifest_rank(name)
+        if rank is None:
             continue
         area = rel.rsplit("/", 1)[0] if "/" in rel else "."
-        rank = MANIFESTS.index(name)
         if area not in seen or rank < seen[area][0]:
             seen[area] = (rank, rel)
     found = []
