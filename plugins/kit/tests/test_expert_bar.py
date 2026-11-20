@@ -3,6 +3,7 @@ static-analysis set and the test-quality rules.
 
 Run: python -m unittest discover -s plugins/kit/tests
 """
+import json
 import os
 import unittest
 
@@ -83,9 +84,12 @@ class AgentsHoldTheBar(unittest.TestCase):
 
 
 class Changelog(unittest.TestCase):
-    def test_unreleased_entry_on_top(self):
-        text = read("CHANGELOG.md")
-        self.assertLess(text.index("## Unreleased"), text.index("## 0.5.0"))
+    def test_top_entry_is_unreleased_or_current_version(self):
+        with open(os.path.join(PLUGIN, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            version = json.load(f)["version"]
+        headings = [l for l in read("CHANGELOG.md").splitlines() if l.startswith("## ")]
+        top = headings[0]
+        self.assertTrue(top == "## Unreleased" or top == "## " + version or top.startswith("## %s " % version), top)
 
 
 if __name__ == "__main__":

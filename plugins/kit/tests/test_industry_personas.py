@@ -125,8 +125,8 @@ class FallbackReport(unittest.TestCase):
 class VersionAndDocs(unittest.TestCase):
     def test_plugin_and_manifest_script_version(self):
         with open(os.path.join(PLUGIN, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["version"], "0.5.0")
-        self.assertIn('KIT_VERSION = "0.5.0"', read("scripts", "kit_manifest.py"))
+            version = json.load(f)["version"]
+        self.assertIn('KIT_VERSION = "%s"' % version, read("scripts", "kit_manifest.py"))
 
     def test_changelog_has_the_entry(self):
         text = read("CHANGELOG.md")
