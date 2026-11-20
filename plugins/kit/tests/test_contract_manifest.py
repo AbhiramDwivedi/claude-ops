@@ -274,6 +274,36 @@ class ManifestContract(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 2, "the gate tests the input's cwd (TEST_COMMAND is false): " + r.stderr)
 
+    def test_edit_gate_runs_in_the_hook_inputs_cwd_not_the_process_cwd(self):
+        bash = find_bash()
+        if bash is None or shutil.which("python3") is None:
+            self.skipTest("the edit-gate.sh template needs bash and python3 on PATH")
+        subprocess.run(["git", "init", "-q", self.repo], check=True, capture_output=True)
+        with open(HOOKS_REF, encoding="utf-8") as f:
+            text = f.read().replace("\r\n", "\n")
+        at = text.find("## `.claude/kit/edit-gate.sh`")
+        self.assertNotEqual(at, -1, "hooks-reference.md has no edit-gate.sh section")
+        m = re.search(r"```sh\n(.*?)\n```", text[at:], re.S)
+        self.assertIsNotNone(m, "no sh block under the edit-gate.sh heading")
+        lines = [ln for ln in m.group(1).split("\n") if "node -e" not in ln]  # the python line is the one kept
+        template = "\n".join(lines).replace("<*.ts|*.tsx>", "*.ts").replace("<LINT_COMMAND>", "false") + "\n"
+        elsewhere = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        gate = os.path.join(elsewhere, "edit-gate.sh")
+        with open(gate, "w", encoding="utf-8", newline="\n") as f:
+            f.write(template)
+
+        def run(payload):
+            return subprocess.run([bash, gate], cwd=elsewhere, input=json.dumps(payload),
+                                  capture_output=True, text=True, timeout=60)
+
+        r = run({"tool_input": {"file_path": "a.ts"}, "cwd": self.repo})
+        self.assertEqual(r.returncode, 2, "lints in the input's cwd (LINT_COMMAND is false): " + r.stderr)
+        self.assertEqual(run({"tool_input": {"file_path": "a.ts"}, "cwd": os.path.join(self.repo, "gone")}).returncode, 0,
+                         "an unreachable cwd is skipped")
+        self.assertEqual(run({"tool_input": {"file_path": "a.md"}, "cwd": self.repo}).returncode, 0,
+                         "a file type the linter does not cover is skipped")
+
     def test_edit_gate_has_a_powershell_twin_with_the_documented_exit_codes(self):
         with open(HOOKS_REF, encoding="utf-8") as f:
             text = f.read().replace("\r\n", "\n")
@@ -289,7 +319,8 @@ class ManifestContract(unittest.TestCase):
 
     REFUSED = ("general-purpose", "kit:builder", "kit:test-writer", "foundry:architect",
                "foundry:devops", "foundry:lead", "foundry:writer",
-               "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer")
+               "truss:foreman", "truss:design-engineer", "truss:commissioning-engineer", "truss:planning-engineer", "truss:writer",
+               "ankur:project-manager", "ankur:design-engineer", "ankur:commissioning-engineer", "ankur:stress-engineer", "ankur:writer")
     CODE = "READ_ONLY_EDITING_TYPE"
 
     @staticmethod

@@ -39,6 +39,8 @@ case "$file" in
   <*.ts|*.tsx>) ;;          # only the file types the linter covers
   *) exit 0 ;;
 esac
+cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd" *: *"\([^"]*\)".*/\1/p' | sed 's/\\\\/\\/g')
+[ -n "$cwd" ] && { cd "$cwd" 2>/dev/null || exit 0; }         # the hook input's cwd, as in the .ps1
 cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0   # the agent's checkout: a worktree agent's own
 if ! out=$(<LINT_COMMAND> "$file" 2>&1); then
   printf 'Lint/typecheck failed after editing %s. Fix it:\n%s\n' "$file" "$(printf '%s\n' "$out" | tail -n 30)" >&2
