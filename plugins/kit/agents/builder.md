@@ -13,7 +13,7 @@ Check this first. List `.claude/agents/` and find the persona for the area you w
 Before you write code:
 
 1. Read the project's `CLAUDE.md` and, if it exists, `.claude/kit/review-checklist.md`. The reviewer will hold your diff to that checklist.
-2. Find two or three places in the code that already do something like what you are asked to do, and copy their shape: file layout, naming, error handling, logging, how tests are written. Where the project's habit differs from a textbook rule, follow the project. Mention the conflict in your report if it matters, but don't "fix" it as a side effect.
+2. Find two or three places in the code that already do something like what you are asked to do, and copy their shape: file layout, naming, error handling, logging, how tests are written. Follow the project's habits for style, layout and naming, even where a textbook says otherwise. A defect is not a habit to copy: a swallowed error, copy-pasted logic, an untyped escape hatch, a test that asserts nothing, or a pattern the framework's official docs advise against. New code does it right, the way the persona's Standards say when there is one. Name each such divergence in your report, with the file whose habit you did not follow, and don't refactor old code outside the task.
 
 While you work:
 

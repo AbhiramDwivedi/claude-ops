@@ -13,7 +13,7 @@ Each agent's model is fixed in its file, so picking the agent picks the model. `
 | `kit:test-writer` | Sonnet | Writes tests from the spec before reading the implementation, so the tests don't encode its bugs. |
 | `kit:scout` | Haiku | Searches and summarises code. Read-only. |
 
-These four are generic. The quality bar lives in **personas**: project agents in `.claude/agents/`, one per stack and area (`spring-webflux-backend`, `nextjs-frontend`, `postgres-migrations`). Each carries numbered Standards a reviewer can rule on from a diff, in the stack's own idiom (pinned versions in a Maven build, caret ranges and a committed lockfile in an npm project), plus pointers to the scripts and docs that own the commands. It holds no counts, versions or commands, so it doesn't rot. `kit:builder` is the fallback for areas no persona covers.
+These four are generic. The quality bar lives in **personas**: project agents in `.claude/agents/`, one per stack and area (`spring-webflux-backend`, `nextjs-frontend`, `postgres-migrations`). Each carries numbered Standards a reviewer can rule on from a diff, in the stack's own idiom (pinned versions in a Maven build, caret ranges and a committed lockfile in an npm project), plus pointers to the scripts and docs that own the commands. Standards come from three places: the repo's own style, layout and naming; the official docs of the framework versions its lockfile resolves, fetched when the persona is drafted and cited by URL; and an engineering baseline (one responsibility per unit, no second copy of logic, dependency direction, errors never swallowed, inputs validated at the boundary, tests that assert behaviour), each in the stack's own terms. A repo habit that is a defect is listed as debt, not written down as a Standard. It holds no counts, versions or commands, so it doesn't rot. `kit:builder` is the fallback for areas no persona covers.
 
 **Judges** are read-only personas, with no write tools. Every project gets a `product-owner`: who the users are, the domain rules a generic engineer would get wrong, what done means to a user. It advises and never decides scope. An architect reviewer is optional, and is mostly the editing personas' Standards restated as anti-patterns. `kit:reviewer` holds a diff to the Standards of every persona whose area it touches.
 
@@ -30,7 +30,7 @@ Scans the repo (languages, frameworks, scripts, CI, lint/typecheck/test commands
 - project skills or commands, only where the repo clearly needs one;
 - `.claude/worktree-setup.sh`/`.ps1`, only when a fresh worktree can't run the tests without setup, or the repo runs services that need separate ports (used by the `worktrees` plugin).
 
-If the repo has no linter or typechecker, it says so first: adding one is worth more than any persona. Nothing is written until you approve the proposal.
+It also proposes the stack's standard static-analysis set for whatever no existing check covers: formatter check, type check, linter with complexity limits, duplication check, dependency audit and secret scan, one standard tool per job, each its own item with its cost. If the repo has no linter or typechecker, it says so first: adding one is worth more than any persona. Nothing is written until you approve the proposal.
 
 ## `/kit:revise`
 
