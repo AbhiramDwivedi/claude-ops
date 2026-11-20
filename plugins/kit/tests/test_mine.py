@@ -159,6 +159,20 @@ class Helpers(unittest.TestCase):
         self.assertEqual(kit_mine.finding_lines("Intro\n- short\n- a real finding about naming\n2) another real finding here"),
                          ["a real finding about naming", "another real finding here"])
 
+    def test_qc_engineer_notes_are_mined_as_review_findings(self):
+        qc = ("VERDICT: PASS\n\n## Proof checked\n- Head and patch lines re-run by the checker here\n\n"
+              "## Findings\nNone.\n\n## Notes\n- Docs drift: the feature map is stale after this change\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            projects = os.path.join(tmp, "projects")
+            proj = os.path.join(projects, kit_mine.slugify(CWD))
+            write(os.path.join(proj, "s1.jsonl"), [human("hello there")])
+            subagent(proj, "s1", "q1", "ankur:qc-engineer", "rule on crew", "Brief.", qc)
+            subagent(proj, "s1", "q2", "ankur:qc-engineer", "rule on crew", "Brief.", qc)
+            out = kit_mine.mine(CWD, projects, 30, claude_dir=os.path.join(tmp, "none"))
+        self.assertEqual(out["window"]["reviews"], 2)
+        self.assertEqual(len(out["findings"]), 1)
+        self.assertIn("Docs drift", out["findings"][0]["sample"])
+
     def test_vendored_parser_matches_workflow_audit(self):
         src = os.path.join(HERE, "..", "..", "workflow-audit", "scripts")
         if not os.path.isdir(src):
