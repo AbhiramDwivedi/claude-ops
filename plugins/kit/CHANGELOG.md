@@ -2,6 +2,14 @@
 
 Before 0.5.0 the "From x.y" lines in the root README were kit's log.
 
+## Unreleased
+
+- `kit:persona` and `/kit:init` add a required docs step: read each framework's major version from the lockfile, fetch the official docs or upgrade guide for it with the session's web tool, and write two to five Standards from them, marked `ecosystem idiom` with the source URL. With no web tool the proposal says so and marks them from memory, unverified.
+- A repo habit that the official docs advise against, or that is a defect pattern (swallowed errors, copy-pasted logic, untyped escape hatches, tests that assert nothing), is no longer written down as a Standard: the persona states the right practice and the proposal lists the habit as existing debt. `kit:builder` writes new code to the Standard and names the divergence, without refactoring old code outside the task.
+- `kit:persona` adds an engineering baseline every editing persona states in its stack's terms (one responsibility per unit, no second copy, dependency direction, errors, input validation, test design), and a size limit of eight to fifteen Standards.
+- `/kit:init` proposes the stack's standard static-analysis set (formatter check, type check, linter with complexity limits, duplication check, dependency audit, secret scan), one standard tool per job, each its own item with its cost.
+- `kit:test-writer` gets test-quality rules (behaviour through public entry points, mocks only at edges, every test can fail, named by behaviour, not ticket or release), and `kit:reviewer` checks them.
+
 ## 0.5.0
 
 - `/kit:init` identifies the industry and domain the project serves, from the README, docs, code names and data models. It states them, with the files it read, at the top of its proposal, and asks the person only when the repo can't tell.

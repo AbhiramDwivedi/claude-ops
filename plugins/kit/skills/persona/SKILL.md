@@ -48,7 +48,7 @@ Define severities once if you use one (blocker: breaks at runtime; major: breaks
 
 Each Standard names something a reviewer can see in a diff and answer yes or no. "Controllers return `Mono`/`Flux`; never `.block()`" is a Standard. "Write clean, maintainable code" is not.
 
-Use the ecosystem's real practice. These show the range; they are illustrations, not a list to paste. Take only what this repo does, or what it has no habit on yet and the ecosystem settles.
+Use the ecosystem's real practice. These show the range; they are illustrations, not a list to paste.
 
 | Ecosystem | Idiomatic, checkable items |
 |---|---|
@@ -65,7 +65,32 @@ Use the ecosystem's real practice. These show the range; they are illustrations,
 | Contracts | An API change updates the contract artifact (OpenAPI, Postman collection) in the same commit. |
 | AI / prompts | Prompts live in the prompts directory, never inline in code. |
 
-Each Standard should cite what the repo does: the file where the pattern lives, in the Stack or in the item. Where the repo has no habit yet, the ecosystem idiom is fine; say so in the item ("repo has no lockfile yet; the ecosystem commits one").
+### Where Standards come from
+
+- **The repo, for style, layout and naming.** Follow what the code does and cite the file where the pattern lives, in the Stack or in the item.
+- **The official docs of the version the repo uses.** This step is required for every editing persona. Read each framework's major version from the lockfile (the manifest when there is none). Fetch the official docs or the upgrade guide for that major version with whatever web tool the session has (a fetch or search tool, or a docs server). From them write a few Standards, two to five, on what that version recommends or deprecates. Mark each `ecosystem idiom` and end it with its source URL. With no web tool, say so in the proposal and mark each such Standard `ecosystem idiom, from memory, unverified`. Where the repo has no habit yet, the same marking applies ("repo has no lockfile yet; the ecosystem commits one").
+- **The engineering baseline** below, in this stack's terms.
+
+The lookup uses the real version, but the Standard names none: a version in a Standard goes stale on the next upgrade. The source URL may name it, since it records where the rule came from.
+
+**A habit is not a Standard when it is a defect.** When the official docs advise against a habit, or it is a defect pattern (a swallowed error, copy-pasted logic, an untyped escape hatch such as `any` or a blanket ignore comment, a test that asserts nothing), don't write it down. Write the right practice as the Standard, and list the habit in the proposal as existing debt, with a file that shows it, so the person sees it. New code follows the Standard; old code is changed only by a task that asks for it.
+
+### Engineering baseline
+
+Every editing persona states each of these as a Standard in its stack's own terms: the concrete form in this stack and repo, with a path where the repo already does it right. Never the slogan (SOLID, DRY, "clean code"); what a reviewer sees in a diff. If one cannot apply to the area (a migrations directory has no layers), leave it out and say why in the proposal.
+
+| Principle | Written as, for example |
+|---|---|
+| One responsibility per unit | In the stack's natural unit: "a route handler parses the request, calls one service function and maps the result; business rules live in the service layer." |
+| No second copy of existing logic | "Date formatting goes through the shared format module; new code that repeats logic already in the repo extracts it there and reuses it." |
+| Dependency direction | "The domain package imports nothing from the web or persistence packages." |
+| Errors typed or named, never swallowed | "Errors are subclasses of the app's base error; an `except` re-raises, or translates to the one error response at the route; never `except: pass`." |
+| Inputs validated at the boundary | "Request bodies are parsed into a schema model at the route; code below it never re-checks raw input." |
+| Tests assert behaviour | "Tests call the public endpoint or exported function and assert on its result; mocks only at process or network edges (HTTP, the database server, the clock)." |
+
+### How many
+
+Eight to fifteen Standards is right; past about twenty an agent skims and drops some. Merge or cut the weakest first, starting with anything a linter already enforces.
 
 A persona is specific to its stack and its area. A Standard that fits any stack is generic ("handle errors", "write tests", "keep functions small"): cut it. A JVM backend persona and a TypeScript frontend persona in the same repo must share almost no Standards, because each holds what is true only for its stack and the directories it owns. At least most Standards cite a repo file, and each persona's Stack section names its manifest and the files `kit_scan.py` listed for its area.
 
@@ -87,7 +112,7 @@ A judge is a read-only persona: tools `Read, Grep, Glob, Bash`, no write tools. 
   Forbidden: generic product-owner text ("understands user needs", "prioritises value", "ensures quality"), and any regulation, invariant or term the repo gives no sign of and that is not marked as an inference. If a sentence would fit a product owner in any industry, cut it.
 
   Example (healthcare, an outpatient appointment API): "Users: front-desk staff and clinicians; patients book through a portal; the clinic is the buyer. HIPAA binds this service: it stores patient identifiers (`Appointment.patientId`), so access is audit-logged (README) and no diagnosis is stored on an appointment. Invariants: a clinician has at most one `BOOKED` appointment per slot; a cancelled slot is bookable again; times are the clinic's local time. Failures that matter: a double-booked clinician, a patient seeing another patient's visit, a lost cancellation. Acceptance: a patient who cancels sees the slot free in the clinician's schedule at once; a front-desk user cannot read a diagnosis."
-- **An architect reviewer.** Optional. Make it mostly the editing personas' Standards restated as anti-patterns per area, so each slip is caught twice. Do not fill it with generic architecture talk (SOLID, layers, "keep it simple").
+- **An architect reviewer.** Optional. Make it mostly the editing personas' Standards restated as anti-patterns per area, so each slip is caught twice. Do not fill it with generic architecture talk (SOLID, layers, "keep it simple"): those ideas enter as the engineering baseline, in checkable form.
 
 ## 5. Self-check before saving
 
@@ -95,7 +120,11 @@ A persona earns its place by short, concrete, checkable stack rules. Before you 
 
 - Every path it names exists now. Open each.
 - No counts, versions or line numbers ("27 tables", "~2650 lines", "v10"), and no command that a script or doc owns. Point at the script instead.
-- No boilerplate a model already knows: SOLID, DRY, "comprehensive tests", accessibility or performance platitudes, "consider Redux or Zustand".
+- No boilerplate a model already knows: SOLID, DRY, "comprehensive tests", accessibility or performance platitudes, "consider Redux or Zustand". The engineering baseline appears only in its checkable, stack-specific form.
+- Each baseline principle is a Standard, or the proposal says why it does not apply.
+- Each docs Standard is marked `ecosystem idiom` with its source URL, or as from memory, unverified.
+- No Standard writes down a defect habit; the proposal lists it as debt.
+- Fifteen Standards or fewer, twenty at most.
 - No deliverables list of documents nobody reads.
 - Every Standard is checkable from a diff.
 - Swap the stack: would a Standard read the same in a persona for another language? Then it is generic; cut it or make it specific.
@@ -109,4 +138,4 @@ If an item fails, cut or fix it. A short persona that is all true beats a long o
 
 ## 6. Amend
 
-When a path a persona names is gone, or the code contradicts a Standard, amend the persona in the same change that caused it, and cite the evidence (the commit, file or finding). A recurring review finding that a linter cannot catch becomes a Standard and a Review checklist line. Remove a Standard the team has dropped; do not leave it to be ignored.
+When a path a persona names is gone, or the code contradicts a Standard, amend the persona in the same change that caused it, and cite the evidence (the commit, file or finding). A recurring review finding that a linter cannot catch becomes a Standard and a Review checklist line. Remove a Standard the team has dropped; do not leave it to be ignored. When the repo moves a framework to a new major version, repeat the docs step for that persona's docs Standards.
