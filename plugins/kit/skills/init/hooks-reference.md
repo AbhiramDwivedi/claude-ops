@@ -23,7 +23,7 @@ How hooks report back: a hook that exits 2 has its stderr shown to the agent. Af
 }
 ```
 
-Leave out `SubagentStop` when the tests take more than about a minute. The stop gate skips read-only agent types (from the hook input's `agent_type`). The list between the `kit:read-only-agents` markers is rendered by `kit_manifest.py` from the manifest's read-only agents, so put the project's own read-only agents in the manifest facts, not in the gate by hand; the list in the template is what the gate uses until a manifest is written. On Windows without Git Bash, use the PowerShell versions below with `powershell -NoProfile -File "$CLAUDE_PROJECT_DIR/.claude/kit/stop-gate.ps1"`.
+Leave out `SubagentStop` when the tests take more than about a minute. The stop gate skips read-only agent types (from the hook input's `agent_type`). The list between the `kit:read-only-agents` markers is rendered by `kit_manifest.py` from the manifest's read-only agents, so put the project's own read-only agents in the manifest facts, not in the gate by hand; the list in the template is what the gate uses until a manifest is written. On Windows without Git Bash, use the PowerShell versions below with `powershell -NoProfile -File "$CLAUDE_PROJECT_DIR/.claude/kit/edit-gate.ps1"` (PostToolUse) and `powershell -NoProfile -File "$CLAUDE_PROJECT_DIR/.claude/kit/stop-gate.ps1"` (Stop, SubagentStop).
 
 ## `.claude/kit/edit-gate.sh`
 
@@ -59,6 +59,8 @@ agent=$(printf '%s' "$input" | sed -n 's/.*"agent_type" *: *"\([^"]*\)".*/\1/p')
 case "$agent" in Explore|Plan|claude-code-guide|kit:reviewer|kit:scout) exit 0 ;; esac
 # kit:read-only-agents:end
 # Test the agent's checkout: a worktree agent's own, not $CLAUDE_PROJECT_DIR (always the main checkout).
+cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd" *: *"\([^"]*\)".*/\1/p' | sed 's/\\\\/\\/g')
+[ -n "$cwd" ] && { cd "$cwd" 2>/dev/null || exit 0; }   # the hook input's cwd, as in the .ps1
 cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 # Skip only a state that already passed: a clean tree at the last tested commit. Commits don't hide changes.
 stamp=$(git rev-parse --git-path kit-tested)   # per worktree
@@ -70,6 +72,27 @@ if ! out=$(<TEST_COMMAND> 2>&1); then
   exit 2
 fi
 [ -n "$clean" ] && [ -n "$head" ] && echo "$head" > "$stamp"
+exit 0
+```
+
+## `.claude/kit/edit-gate.ps1` (Windows without bash)
+
+```powershell
+$in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$file = $in.tool_input.file_path
+if (-not $file) { exit 0 }
+if ($file -notmatch '<\.tsx?$>') { exit 0 }   # only the file types the linter covers
+# The agent's checkout: a worktree agent's own, not $env:CLAUDE_PROJECT_DIR (always the main checkout).
+if ($in.cwd) { Set-Location $in.cwd }
+$top = git rev-parse --show-toplevel
+if (-not $top) { exit 0 }
+Set-Location $top
+$out = & <LINT_COMMAND> $file 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+  $tail = ($out -split "`n" | Select-Object -Last 30) -join "`n"
+  [Console]::Error.WriteLine("Lint/typecheck failed after editing $file. Fix it:`n$tail")
+  exit 2
+}
 exit 0
 ```
 
