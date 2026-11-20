@@ -260,6 +260,30 @@ class ManifestContract(unittest.TestCase):
         self.assertEqual(gate_exit("kit:builder"), 2, "an editing agent is still tested (TEST_COMMAND is false)")
 
 
+    def test_stop_gate_tests_the_hook_inputs_cwd_not_the_process_cwd(self):
+        bash = find_bash()
+        if bash is None:
+            self.skipTest("no bash on PATH: the stop-gate.sh template needs bash")
+        subprocess.run(["git", "init", "-q", self.repo], check=True, capture_output=True)
+        elsewhere = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        gate = os.path.join(elsewhere, "stop-gate.sh")
+        with open(gate, "w", encoding="utf-8", newline="\n") as f:
+            f.write(self.gate_template())
+        r = subprocess.run([bash, gate], cwd=elsewhere, input=json.dumps({"cwd": self.repo}),
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, "the gate tests the input's cwd (TEST_COMMAND is false): " + r.stderr)
+
+    def test_edit_gate_has_a_powershell_twin_with_the_documented_exit_codes(self):
+        with open(HOOKS_REF, encoding="utf-8") as f:
+            text = f.read().replace("\r\n", "\n")
+        at = text.find("## `.claude/kit/edit-gate.ps1`")
+        self.assertNotEqual(at, -1, "hooks-reference.md has no edit-gate.ps1 section")
+        m = re.search(r"```powershell\n(.*?)\n```", text[at:], re.S)
+        self.assertIsNotNone(m, "no powershell block under the edit-gate.ps1 heading")
+        for needle in ("$in.tool_input.file_path", "$in.cwd", "exit 2", "exit 0"):
+            self.assertIn(needle, m.group(1))
+
     # ---------- 3. ADR-0013 amendment: refused read-only types ----------
     # Names are listed literally (ADR-0013 "Seams added"). Error code: READ_ONLY_EDITING_TYPE.
 

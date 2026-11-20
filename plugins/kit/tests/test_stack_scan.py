@@ -167,6 +167,25 @@ class StackDetail(unittest.TestCase):
             self.mk(d, {"package.json": '{"dependencies": {"next": "14", "react": "18"}}'})
             self.assertEqual(kit_scan.scan(d)["stacks"][0]["framework"], "nextjs")
 
+    def test_go_rust_ruby_php_dotnet_manifests_are_detected(self):
+        cases = [("go.mod", "module x\n", "go", "go"),
+                 ("Cargo.toml", "[package]\nname='x'\n", "rust", "rust"),
+                 ("Gemfile", "gem 'rails'\n", "ruby", "rails"),
+                 ("composer.json", '{"require": {"laravel/framework": "^11"}}', "php", "laravel"),
+                 ("App.csproj", '<Project Sdk="Microsoft.NET.Sdk.Web"/>', "dotnet", "aspnet"),
+                 ("App.sln", "Microsoft Visual Studio Solution File", "dotnet", "dotnet")]
+        for name, text, stack, fw in cases:
+            with tempfile.TemporaryDirectory() as d:
+                self.mk(d, {name: text})
+                r = kit_scan.scan(d)["stacks"]
+            self.assertEqual([(s["stack"], s["framework"], s["manifest"]) for s in r], [(stack, fw, name)], name)
+
+    def test_csproj_beats_sln_in_one_directory(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.mk(d, {"App.sln": "", "App.csproj": "<Project/>"})
+            r = kit_scan.scan(d)["stacks"]
+        self.assertEqual([s["manifest"] for s in r], ["App.csproj"])
+
 
 class MonorepoAndEmpty(unittest.TestCase):
     def test_monorepo_gives_one_area_per_manifest_directory(self):

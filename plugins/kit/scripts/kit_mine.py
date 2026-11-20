@@ -123,10 +123,18 @@ def sub_texts(path):
     return brief.strip(), report
 
 
-def finding_lines(report):
-    """Bullet or numbered lines of a review report, which is where findings live."""
+def finding_lines(report, sections=None):
+    """Bullet or numbered lines of a review report, which is where findings live.
+
+    With `sections` (lowercase heading names), only lines under those `## ` headings count."""
     out = []
+    keep = sections is None
     for line in report.splitlines():
+        if sections is not None and line.startswith("#"):
+            keep = line.lstrip("#").strip().lower() in sections
+            continue
+        if not keep:
+            continue
         m = re.match(r"\s*(?:[-*]|\d+[.)])\s+(.{15,})", line)
         if m:
             out.append(m.group(1).strip())
@@ -229,7 +237,9 @@ def mine(cwd, projects_dir, days, now=None, claude_dir=None):
         session = os.path.basename(os.path.dirname(os.path.dirname(f)))
         runs.append({"type": atype, "model": meta.get("model"), "desc": meta.get("description") or "",
                      "brief": brief, "session": session})
-        if agent_name(atype) == "reviewer" or "review" in (meta.get("description") or "").lower():
+        if agent_name(atype) == "qc-engineer":  # ankur's reviewer: its report is `## Findings` and `## Notes`
+            reviews.append({"session": session, "lines": finding_lines(report, ("findings", "notes"))})
+        elif agent_name(atype) == "reviewer" or "review" in (meta.get("description") or "").lower():
             reviews.append({"session": session, "lines": finding_lines(report)})
 
     bgroups = cluster(runs, lambda r: words(r["desc"] + " " + r["brief"][:600]), 0.35)
