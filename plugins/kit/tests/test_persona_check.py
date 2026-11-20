@@ -131,6 +131,27 @@ class BadPersonas(TempFiles):
         errors = pc.check(repo("clinic-api"), [p])
         self.assertTrue(any("Standard 1 names nothing specific to the jvm stack" in e for e in errors), errors)
 
+    def test_new_stacks_flag_a_standard_with_no_idiom_and_pass_one_with_an_idiom(self):
+        cases = [("go", "golang-api", "Go golang service", "Return errors wrapped with `errors.Is` checks"),
+                 ("rust", "rust-cli", "Rust cargo tool", "Run `cargo clippy` and deny warnings"),
+                 ("dotnet", "dotnet-api", "ASP.NET dotnet API", "Register services through DI with `ILogger`"),
+                 ("ruby", "rails-app", "Ruby on Rails app", "Scope queries with `ActiveRecord` scopes"),
+                 ("php", "laravel-app", "PHP Laravel app", "Validate input with a Laravel form request")]
+        for stack, name, desc, good in cases:
+            bad = self.write(name + "-bad.md", stack_persona(name, desc,
+                             ["Write clean, well tested code, as `README.md` shows."]))
+            ok = self.write(name + "-ok.md", stack_persona(name, desc, [good + ", as `README.md` shows."]))
+            errors = pc.check(repo("clinic-api"), [bad])
+            self.assertTrue(any("names nothing specific to the %s stack" % stack in e for e in errors),
+                            (stack, errors))
+            self.assertEqual(pc.check(repo("clinic-api"), [ok]), [], stack)
+
+    def test_react_and_next_terms_count_as_typescript_idioms(self):
+        for std in ("Mark a file `use client` only when it needs browser APIs, as `README.md` shows.",
+                    "Read data in a page under the App Router, as `README.md` shows."):
+            p = self.write("next.md", stack_persona("nextjs-frontend", "Next.js TypeScript frontend", [std]))
+            self.assertEqual(pc.check(repo("clinic-api"), [p]), [], std)
+
     def test_product_owner_without_regulations_is_flagged(self):
         with open(golden("clinic-api", "product-owner.md"), encoding="utf-8") as f:
             text = f.read()
